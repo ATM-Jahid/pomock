@@ -1,4 +1,4 @@
-# Pomock
+# pomock
 
 Pomodoro on the terminal
 
