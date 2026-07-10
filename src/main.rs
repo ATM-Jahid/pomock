@@ -3,21 +3,21 @@ use std::io::{self, Stdout};
 use crossterm::{
     event::{self, Event, KeyCode},
     execute,
-    terminal::{disable_raw_mode, enable_raw_mode, EnterAlternateScreen, LeaveAlternateScreen},
+    terminal::{EnterAlternateScreen, LeaveAlternateScreen, disable_raw_mode, enable_raw_mode},
 };
 
 use ratatui::{
+    Frame, Terminal,
     backend::CrosstermBackend,
     layout::{Alignment, Constraint, Direction, Layout},
     style::{Modifier, Style},
     widgets::{Block, Borders, Paragraph},
-    Frame, Terminal,
 };
 
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
-use display::{format_duration, format_state};
-use timer::PomodoroTimer;
+use display::{format_big_duration, format_state};
+use timer::{PomodoroTimer, TimerState};
 
 mod display;
 mod timer;
@@ -40,19 +40,39 @@ fn setup_terminal() -> std::io::Result<Terminal<CrosstermBackend<Stdout>>> {
 }
 
 fn run_app(terminal: &mut Terminal<CrosstermBackend<Stdout>>) -> std::io::Result<()> {
-    let timer = PomodoroTimer::new(
-        Duration::from_secs(25 * 60),
-        Duration::from_secs(5 * 60),
-    );
+    let mut timer = PomodoroTimer::new(Duration::from_secs(25 * 60), Duration::from_secs(5 * 60));
+
+    let mut last_tick = Instant::now();
 
     loop {
+        let now = Instant::now();
+        let elapsed = now.duration_since(last_tick);
+        last_tick = now;
+
+        if matches!(timer.state(), TimerState::Focus | TimerState::Break) {
+            timer.tick(elapsed);
+        }
+
         terminal.draw(|frame| {
             draw(frame, &timer);
         })?;
 
-        if let Event::Key(key) = event::read()? {
-            if key.code == KeyCode::Char('q') {
-                break;
+        if event::poll(Duration::from_millis(100))? {
+            if let Event::Key(key) = event::read()? {
+                match key.code {
+                    KeyCode::Char('q') => break,
+                    KeyCode::Char('f') => timer.start_focus(),
+                    KeyCode::Char('b') => timer.start_break(),
+                    KeyCode::Char('p') => timer.pause(),
+                    KeyCode::Char('r') => timer.resume(),
+                    KeyCode::Char(' ') => match timer.state() {
+                        TimerState::Focus | TimerState::Break => timer.pause(),
+                        TimerState::Paused => timer.resume(),
+                        TimerState::Idle | TimerState::Completed => {}
+                    },
+                    KeyCode::Char('x') => timer.reset(),
+                    _ => {}
+                }
             }
         }
     }
@@ -74,23 +94,20 @@ fn draw(frame: &mut Frame, timer: &PomodoroTimer) {
     let chunks = Layout::default()
         .direction(Direction::Vertical)
         .constraints([
-            Constraint::Percentage(35),
+            Constraint::Percentage(30),
             Constraint::Length(3),
-            Constraint::Length(3),
-            Constraint::Percentage(35),
+            Constraint::Length(7),
+            Constraint::Percentage(30),
         ])
         .split(area);
 
-    let block = Block::default()
-        .title("pomock")
-        .borders(Borders::ALL);
+    let block = Block::default().title("pomock").borders(Borders::ALL);
 
     frame.render_widget(block, area);
 
-    let state = Paragraph::new(format_state(timer.state()))
-        .alignment(Alignment::Center);
+    let state = Paragraph::new(format_state(timer.state())).alignment(Alignment::Center);
 
-    let remaining = Paragraph::new(format_duration(timer.remaining()))
+    let remaining = Paragraph::new(format_big_duration(timer.remaining()))
         .alignment(Alignment::Center)
         .style(Style::default().add_modifier(Modifier::BOLD));
 
