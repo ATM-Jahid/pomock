@@ -2,6 +2,14 @@
 
 Pomodoro on the terminal
 
+## Controls
+
+- `f` — start a focus timer
+- `b` — start a break timer
+- `Space` — pause or resume the active timer
+- `x` — reset to the focus duration
+- `q` — quit
+
 ## License
 
 Copyright (C) 2026 ATM Jahid Hasan<br>

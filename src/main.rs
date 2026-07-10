@@ -63,8 +63,6 @@ fn run_app(terminal: &mut Terminal<CrosstermBackend<Stdout>>) -> std::io::Result
                     KeyCode::Char('q') => break,
                     KeyCode::Char('f') => timer.start_focus(),
                     KeyCode::Char('b') => timer.start_break(),
-                    KeyCode::Char('p') => timer.pause(),
-                    KeyCode::Char('r') => timer.resume(),
                     KeyCode::Char(' ') => match timer.state() {
                         TimerState::Focus | TimerState::Break => timer.pause(),
                         TimerState::Paused => timer.resume(),
