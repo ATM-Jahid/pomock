@@ -94,10 +94,11 @@ fn draw(frame: &mut Frame, timer: &PomodoroTimer) {
     let chunks = Layout::default()
         .direction(Direction::Vertical)
         .constraints([
-            Constraint::Percentage(30),
+            Constraint::Percentage(25),
             Constraint::Length(3),
             Constraint::Length(7),
-            Constraint::Percentage(30),
+            Constraint::Length(3),
+            Constraint::Percentage(25),
         ])
         .split(area);
 
@@ -111,6 +112,10 @@ fn draw(frame: &mut Frame, timer: &PomodoroTimer) {
         .alignment(Alignment::Center)
         .style(Style::default().add_modifier(Modifier::BOLD));
 
+    let controls = Paragraph::new("[f] focus [b] break [space] pause/resume [x] reset [q] quit")
+        .alignment(Alignment::Center);
+
     frame.render_widget(state, chunks[1]);
     frame.render_widget(remaining, chunks[2]);
+    frame.render_widget(controls, chunks[3]);
 }
