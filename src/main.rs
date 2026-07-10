@@ -130,7 +130,11 @@ fn draw(frame: &mut Frame, timer: &PomodoroTimer, ui_focus: UiFocus) {
 
     let clock_chunks = Layout::default()
         .direction(Direction::Vertical)
-        .constraints([Constraint::Length(1), Constraint::Min(1)])
+        .constraints([
+            Constraint::Length(1),
+            Constraint::Min(1),
+            Constraint::Length(1),
+        ])
         .split(clock_area);
 
     let state = Paragraph::new(format_state(timer.state())).alignment(Alignment::Center);
@@ -138,6 +142,13 @@ fn draw(frame: &mut Frame, timer: &PomodoroTimer, ui_focus: UiFocus) {
     let remaining = Paragraph::new(format_big_duration(timer.remaining()))
         .alignment(Alignment::Center)
         .style(Style::default().add_modifier(Modifier::BOLD));
+
+    let completed_sessions = Paragraph::new(format!(
+        "Focus sessions completed: {}",
+        timer.completed_focus_sessions()
+    ))
+    .alignment(Alignment::Center)
+    .style(Style::default().fg(Color::Green));
 
     let controls =
         Paragraph::new("[h/j/k/l] move [space] start/pause/resume [f] next [r] reset [q] quit")
@@ -152,6 +163,7 @@ fn draw(frame: &mut Frame, timer: &PomodoroTimer, ui_focus: UiFocus) {
 
     frame.render_widget(state, clock_chunks[0]);
     frame.render_widget(remaining, clock_chunks[1]);
+    frame.render_widget(completed_sessions, clock_chunks[2]);
     frame.render_widget(todo, task_chunks[0]);
     frame.render_widget(done, task_chunks[1]);
     frame.render_widget(controls, chunks[2]);

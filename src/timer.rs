@@ -22,6 +22,7 @@ pub struct PomodoroTimer {
     break_duration: Duration,
     remaining: Duration,
     previous_state: Option<TimerState>,
+    completed_focus_sessions: u32,
 }
 
 impl PomodoroTimer {
@@ -32,6 +33,7 @@ impl PomodoroTimer {
             break_duration,
             remaining: focus_duration,
             previous_state: None,
+            completed_focus_sessions: 0,
         }
     }
 
@@ -41,6 +43,10 @@ impl PomodoroTimer {
 
     pub fn remaining(&self) -> Duration {
         self.remaining
+    }
+
+    pub fn completed_focus_sessions(&self) -> u32 {
+        self.completed_focus_sessions
     }
 }
 
@@ -152,6 +158,9 @@ impl PomodoroTimer {
                         TimerState::Break => SessionKind::Break,
                         _ => unreachable!("tick only completes a running session"),
                     };
+                    if completed_session == SessionKind::Focus {
+                        self.completed_focus_sessions += 1;
+                    }
                     self.state = TimerState::Completed(completed_session);
                     self.previous_state = None;
                 } else {
@@ -177,6 +186,7 @@ mod tests {
 
         assert_eq!(timer.state(), TimerState::Ready(SessionKind::Focus));
         assert_eq!(timer.remaining(), Duration::from_secs(25 * 60));
+        assert_eq!(timer.completed_focus_sessions(), 0);
     }
 
     #[test]
@@ -426,5 +436,56 @@ mod tests {
 
         assert_eq!(timer.state(), TimerState::Ready(SessionKind::Focus));
         assert_eq!(timer.remaining(), Duration::from_secs(25 * 60));
+    }
+
+    #[test]
+    fn completing_focus_increments_completed_focus_sessions() {
+        let mut timer = timer();
+        timer.start_focus();
+
+        timer.tick(Duration::from_secs(25 * 60));
+
+        assert_eq!(timer.completed_focus_sessions(), 1);
+    }
+
+    #[test]
+    fn completing_break_does_not_increment_completed_focus_sessions() {
+        let mut timer = timer();
+        timer.start_break();
+
+        timer.tick(Duration::from_secs(5 * 60));
+
+        assert_eq!(timer.completed_focus_sessions(), 0);
+    }
+
+    #[test]
+    fn repeated_ticks_after_focus_completion_increment_only_once() {
+        let mut timer = timer();
+        timer.start_focus();
+
+        timer.tick(Duration::from_secs(25 * 60));
+        timer.tick(Duration::from_secs(1));
+
+        assert_eq!(timer.completed_focus_sessions(), 1);
+    }
+
+    #[test]
+    fn fast_forward_does_not_increment_completed_focus_sessions() {
+        let mut timer = timer();
+        timer.start_focus();
+
+        timer.fast_forward();
+
+        assert_eq!(timer.completed_focus_sessions(), 0);
+    }
+
+    #[test]
+    fn resetting_focus_does_not_increment_completed_focus_sessions() {
+        let mut timer = timer();
+        timer.start_focus();
+
+        timer.reset_session();
+
+        assert_eq!(timer.completed_focus_sessions(), 0);
     }
 }
