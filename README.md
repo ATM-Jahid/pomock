@@ -5,10 +5,9 @@ Pomodoro on the terminal
 ## Controls
 
 - `h/j/k/l` — move between areas
-- `f` — start a focus timer
-- `b` — start a break timer
-- `Space` — pause or resume the active timer
-- `x` — reset to the focus duration
+- `Space` — start a focus timer, or pause/resume the active timer
+- `f` — select the next focus or break session without starting it
+- `r` — reset a running or paused session to its full duration, ready to start
 - `q` — quit
 
 ## License

@@ -16,11 +16,10 @@ use ratatui::{
 
 use std::time::{Duration, Instant};
 
-use display::{format_big_duration, format_state};
-use timer::{PomodoroTimer, TimerState};
-
-mod display;
-mod timer;
+use pomock::{
+    display::{format_big_duration, format_state},
+    timer::{PomodoroTimer, TimerState},
+};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum UiFocus {
@@ -77,23 +76,18 @@ fn run_app(terminal: &mut Terminal<CrosstermBackend<Stdout>>) -> std::io::Result
             draw(frame, &timer, ui_focus);
         })?;
 
-        if event::poll(Duration::from_millis(100))? {
-            if let Event::Key(key) = event::read()? {
-                match key.code {
-                    KeyCode::Char('q') => break,
-                    KeyCode::Char('f') => timer.start_focus(),
-                    KeyCode::Char('b') => timer.start_break(),
-                    KeyCode::Char(' ') => match timer.state() {
-                        TimerState::Focus | TimerState::Break => timer.pause(),
-                        TimerState::Paused => timer.resume(),
-                        TimerState::Idle | TimerState::Completed => {}
-                    },
-                    KeyCode::Char('x') => timer.reset(),
-                    KeyCode::Char(key @ ('h' | 'j' | 'k' | 'l')) => {
-                        ui_focus = ui_focus.navigate(key);
-                    }
-                    _ => {}
+        if event::poll(Duration::from_millis(100))?
+            && let Event::Key(key) = event::read()?
+        {
+            match key.code {
+                KeyCode::Char('q') => break,
+                KeyCode::Char(' ') => timer.primary_action(),
+                KeyCode::Char('f') => timer.fast_forward(),
+                KeyCode::Char('r') => timer.reset_session(),
+                KeyCode::Char(key @ ('h' | 'j' | 'k' | 'l')) => {
+                    ui_focus = ui_focus.navigate(key);
                 }
+                _ => {}
             }
         }
     }
@@ -145,10 +139,9 @@ fn draw(frame: &mut Frame, timer: &PomodoroTimer, ui_focus: UiFocus) {
         .alignment(Alignment::Center)
         .style(Style::default().add_modifier(Modifier::BOLD));
 
-    let controls = Paragraph::new(
-        "[h/j/k/l] move [f] focus [b] break [space] pause/resume [x] reset [q] quit",
-    )
-    .alignment(Alignment::Center);
+    let controls =
+        Paragraph::new("[h/j/k/l] move [space] start/pause/resume [f] next [r] reset [q] quit")
+            .alignment(Alignment::Center);
 
     let todo = Paragraph::new("No tasks yet")
         .alignment(Alignment::Center)

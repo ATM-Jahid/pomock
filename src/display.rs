@@ -1,6 +1,6 @@
 use std::time::Duration;
 
-use crate::timer::TimerState;
+use crate::timer::{SessionKind, TimerState};
 
 const BIG_GLYPH_HEIGHT: usize = 5;
 const BIG_ON: &str = "██";
@@ -20,11 +20,12 @@ pub fn format_big_duration(duration: Duration) -> String {
 
 pub fn format_state(state: TimerState) -> &'static str {
     match state {
-        TimerState::Idle => "Idle",
+        TimerState::Ready(SessionKind::Focus) => "Focus ready",
+        TimerState::Ready(SessionKind::Break) => "Break ready",
         TimerState::Focus => "Focus",
         TimerState::Break => "Break",
         TimerState::Paused => "Paused",
-        TimerState::Completed => "Completed",
+        TimerState::Completed(_) => "Completed",
     }
 }
 
@@ -73,7 +74,6 @@ fn big_glyph(pattern: [&str; BIG_GLYPH_HEIGHT]) -> [String; BIG_GLYPH_HEIGHT] {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::timer::TimerState;
     use std::time::Duration;
 
     #[test]
@@ -121,10 +121,20 @@ mod tests {
 
     #[test]
     fn formats_timer_state_labels() {
-        assert_eq!(format_state(TimerState::Idle), "Idle");
+        assert_eq!(
+            format_state(TimerState::Ready(SessionKind::Focus)),
+            "Focus ready"
+        );
+        assert_eq!(
+            format_state(TimerState::Ready(SessionKind::Break)),
+            "Break ready"
+        );
         assert_eq!(format_state(TimerState::Focus), "Focus");
         assert_eq!(format_state(TimerState::Break), "Break");
         assert_eq!(format_state(TimerState::Paused), "Paused");
-        assert_eq!(format_state(TimerState::Completed), "Completed");
+        assert_eq!(
+            format_state(TimerState::Completed(SessionKind::Focus)),
+            "Completed"
+        );
     }
 }
