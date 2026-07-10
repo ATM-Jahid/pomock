@@ -4,6 +4,7 @@ Pomodoro on the terminal
 
 ## Controls
 
+- `h/j/k/l` — move between areas
 - `f` — start a focus timer
 - `b` — start a break timer
 - `Space` — pause or resume the active timer
