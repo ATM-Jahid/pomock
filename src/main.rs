@@ -9,7 +9,7 @@ use crossterm::{
 use ratatui::{
     Frame, Terminal,
     backend::CrosstermBackend,
-    layout::{Alignment, Constraint, Direction, Layout},
+    layout::{Alignment, Constraint, Direction as LayoutDirection, Layout},
     style::{Color, Modifier, Style},
     widgets::{Block, Borders, List, ListItem, ListState, Paragraph},
 };
@@ -29,15 +29,41 @@ enum UiFocus {
     Done,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Direction {
+    Left,
+    Down,
+    Up,
+    Right,
+}
+
 impl UiFocus {
-    fn navigate(self, key: char) -> Self {
-        match (self, key) {
-            (Self::Clock, 'j') => Self::Todo,
-            (Self::Todo | Self::Done, 'k') => Self::Clock,
-            (Self::Todo, 'l') => Self::Done,
-            (Self::Done, 'h') => Self::Todo,
+    fn navigate(self, direction: Direction) -> Self {
+        match (self, direction) {
+            (Self::Clock, Direction::Down) => Self::Todo,
+            (Self::Todo | Self::Done, Direction::Up) => Self::Clock,
+            (Self::Todo, Direction::Right) => Self::Done,
+            (Self::Done, Direction::Left) => Self::Todo,
             _ => self,
         }
+    }
+}
+
+fn focus_direction(key_code: KeyCode) -> Option<Direction> {
+    match key_code {
+        KeyCode::Char('H') => Some(Direction::Left),
+        KeyCode::Char('J') => Some(Direction::Down),
+        KeyCode::Char('K') => Some(Direction::Up),
+        KeyCode::Char('L') => Some(Direction::Right),
+        _ => None,
+    }
+}
+
+fn row_direction(key_code: KeyCode) -> Option<Direction> {
+    match key_code {
+        KeyCode::Char('j') | KeyCode::Down => Some(Direction::Down),
+        KeyCode::Char('k') | KeyCode::Up => Some(Direction::Up),
+        _ => None,
     }
 }
 
@@ -98,6 +124,67 @@ impl App {
         }
 
         self.edit_mode = EditMode::Normal;
+        self.clamp_selections();
+    }
+
+    fn navigate_focus(&mut self, key_code: KeyCode) -> bool {
+        let Some(direction) = focus_direction(key_code) else {
+            return false;
+        };
+
+        self.ui_focus = self.ui_focus.navigate(direction);
+        true
+    }
+
+    fn move_selection(selection: &mut usize, len: usize, direction: Direction) {
+        if len == 0 {
+            *selection = 0;
+            return;
+        }
+
+        match direction {
+            Direction::Left | Direction::Up => {
+                *selection = selection.saturating_sub(1);
+            }
+            Direction::Down | Direction::Right => {
+                *selection = (*selection + 1).min(len - 1);
+            }
+        }
+    }
+
+    fn clamp_selections(&mut self) {
+        let pending_len = self.tasks.pending().count();
+        let completed_len = self.tasks.completed().count();
+        self.todo_selection = self.todo_selection.min(pending_len.saturating_sub(1));
+        self.done_selection = self.done_selection.min(completed_len.saturating_sub(1));
+    }
+
+    fn selected_todo_index(&self) -> Option<usize> {
+        self.tasks
+            .pending_with_indices()
+            .nth(self.todo_selection)
+            .map(|(index, _)| index)
+    }
+
+    fn selected_done_index(&self) -> Option<usize> {
+        self.tasks
+            .completed_with_indices()
+            .nth(self.done_selection)
+            .map(|(index, _)| index)
+    }
+
+    fn begin_edit(&mut self, task_index: usize) {
+        let description = self
+            .tasks
+            .pending_with_indices()
+            .chain(self.tasks.completed_with_indices())
+            .find(|(index, _)| *index == task_index)
+            .map(|(_, task)| task.description().to_string());
+
+        if let Some(description) = description {
+            self.input = description;
+            self.edit_mode = EditMode::Editing { task_index };
+        }
     }
 
     fn handle_clock_key(&mut self, key_code: KeyCode) {
@@ -105,29 +192,64 @@ impl App {
             KeyCode::Char(' ') => self.timer.primary_action(),
             KeyCode::Char('f') => self.timer.fast_forward(),
             KeyCode::Char('r') => self.timer.reset_session(),
-            KeyCode::Char(key_code @ ('h' | 'j' | 'k' | 'l')) => {
-                self.ui_focus = self.ui_focus.navigate(key_code);
-            }
             _ => {}
         }
     }
 
     fn handle_todo_key(&mut self, key_code: KeyCode) {
+        let len = self.tasks.pending().count();
         match key_code {
             KeyCode::Char('a') => self.begin_add(),
-            KeyCode::Char(key_code @ ('h' | 'j' | 'k' | 'l')) => {
-                self.ui_focus = self.ui_focus.navigate(key_code);
+            KeyCode::Char('e') => {
+                if let Some(index) = self.selected_todo_index() {
+                    self.begin_edit(index);
+                }
             }
-            _ => {}
+            KeyCode::Char('x') => {
+                if let Some(index) = self.selected_todo_index() {
+                    self.tasks.delete(index);
+                    self.clamp_selections();
+                }
+            }
+            KeyCode::Char(' ') => {
+                if let Some(index) = self.selected_todo_index() {
+                    self.tasks.complete(index);
+                    self.clamp_selections();
+                }
+            }
+            key => {
+                if let Some(direction) = row_direction(key) {
+                    Self::move_selection(&mut self.todo_selection, len, direction);
+                }
+            }
         }
     }
 
     fn handle_done_key(&mut self, key_code: KeyCode) {
+        let len = self.tasks.completed().count();
         match key_code {
-            KeyCode::Char(key_code @ ('h' | 'j' | 'k' | 'l')) => {
-                self.ui_focus = self.ui_focus.navigate(key_code);
+            KeyCode::Char('e') => {
+                if let Some(index) = self.selected_done_index() {
+                    self.begin_edit(index);
+                }
             }
-            _ => {}
+            KeyCode::Char('x') => {
+                if let Some(index) = self.selected_done_index() {
+                    self.tasks.delete(index);
+                    self.clamp_selections();
+                }
+            }
+            KeyCode::Char(' ') => {
+                if let Some(index) = self.selected_done_index() {
+                    self.tasks.uncomplete(index);
+                    self.clamp_selections();
+                }
+            }
+            key => {
+                if let Some(direction) = row_direction(key) {
+                    Self::move_selection(&mut self.done_selection, len, direction);
+                }
+            }
         }
     }
 
@@ -187,6 +309,7 @@ fn run_app(terminal: &mut Terminal<CrosstermBackend<Stdout>>) -> std::io::Result
             } else {
                 match key.code {
                     KeyCode::Char('q') => break,
+                    key_code if app.navigate_focus(key_code) => {}
                     key_code => match app.ui_focus {
                         UiFocus::Clock => app.handle_clock_key(key_code),
                         UiFocus::Todo => app.handle_todo_key(key_code),
@@ -216,7 +339,7 @@ fn draw(frame: &mut Frame, app: &App) {
     frame.render_widget(outer_block, area);
 
     let chunks = Layout::default()
-        .direction(Direction::Vertical)
+        .direction(LayoutDirection::Vertical)
         .constraints([
             Constraint::Percentage(55),
             Constraint::Percentage(45),
@@ -225,7 +348,7 @@ fn draw(frame: &mut Frame, app: &App) {
         .split(inner_area);
 
     let task_chunks = Layout::default()
-        .direction(Direction::Horizontal)
+        .direction(LayoutDirection::Horizontal)
         .constraints([Constraint::Percentage(50), Constraint::Percentage(50)])
         .split(chunks[1]);
 
@@ -234,7 +357,7 @@ fn draw(frame: &mut Frame, app: &App) {
     frame.render_widget(clock_block, chunks[0]);
 
     let clock_chunks = Layout::default()
-        .direction(Direction::Vertical)
+        .direction(LayoutDirection::Vertical)
         .constraints([
             Constraint::Length(1),
             Constraint::Min(1),
@@ -259,7 +382,12 @@ fn draw(frame: &mut Frame, app: &App) {
         EditMode::Adding => format!("Add task: {}_", app.input),
         EditMode::Editing { .. } => format!("Edit task: {}_", app.input),
         EditMode::Normal => {
-            "[h/j/k/l] move [a] add [space] action [f] next [r] reset [q] quit".to_string()
+            match app.ui_focus {
+                UiFocus::Clock => "[HJKL] box nav [space] start/pause [f] next [r] reset [q] quit",
+                UiFocus::Todo => "[HJKL] box nav [j/k/arrows] list nav [a] add [e] edit [x] delete [space] complete [q] quit",
+                UiFocus::Done => "[HJKL] box nav [j/k/arrows] list nav [e] edit [x] delete [space] return [q] quit",
+            }
+            .to_string()
         }
     };
 
@@ -342,26 +470,37 @@ fn focused_block(title: &str, focused: bool) -> Block<'_> {
 
 #[cfg(test)]
 mod tests {
-    use super::{App, EditMode, UiFocus};
+    use super::{App, Direction, EditMode, UiFocus, focus_direction, row_direction};
+    use crossterm::event::KeyCode;
 
     #[test]
     fn navigates_between_adjacent_areas() {
-        assert_eq!(UiFocus::Clock.navigate('j'), UiFocus::Todo);
-        assert_eq!(UiFocus::Todo.navigate('k'), UiFocus::Clock);
-        assert_eq!(UiFocus::Todo.navigate('l'), UiFocus::Done);
-        assert_eq!(UiFocus::Done.navigate('h'), UiFocus::Todo);
-        assert_eq!(UiFocus::Done.navigate('k'), UiFocus::Clock);
+        assert_eq!(UiFocus::Clock.navigate(Direction::Down), UiFocus::Todo);
+        assert_eq!(UiFocus::Todo.navigate(Direction::Up), UiFocus::Clock);
+        assert_eq!(UiFocus::Todo.navigate(Direction::Right), UiFocus::Done);
+        assert_eq!(UiFocus::Done.navigate(Direction::Left), UiFocus::Todo);
+        assert_eq!(UiFocus::Done.navigate(Direction::Up), UiFocus::Clock);
     }
 
     #[test]
     fn ignores_directions_without_an_adjacent_area() {
-        assert_eq!(UiFocus::Clock.navigate('h'), UiFocus::Clock);
-        assert_eq!(UiFocus::Clock.navigate('k'), UiFocus::Clock);
-        assert_eq!(UiFocus::Clock.navigate('l'), UiFocus::Clock);
-        assert_eq!(UiFocus::Todo.navigate('h'), UiFocus::Todo);
-        assert_eq!(UiFocus::Todo.navigate('j'), UiFocus::Todo);
-        assert_eq!(UiFocus::Done.navigate('j'), UiFocus::Done);
-        assert_eq!(UiFocus::Done.navigate('l'), UiFocus::Done);
+        assert_eq!(UiFocus::Clock.navigate(Direction::Left), UiFocus::Clock);
+        assert_eq!(UiFocus::Clock.navigate(Direction::Up), UiFocus::Clock);
+        assert_eq!(UiFocus::Clock.navigate(Direction::Right), UiFocus::Clock);
+        assert_eq!(UiFocus::Todo.navigate(Direction::Left), UiFocus::Todo);
+        assert_eq!(UiFocus::Todo.navigate(Direction::Down), UiFocus::Todo);
+        assert_eq!(UiFocus::Done.navigate(Direction::Down), UiFocus::Done);
+        assert_eq!(UiFocus::Done.navigate(Direction::Right), UiFocus::Done);
+    }
+
+    #[test]
+    fn maps_keys_to_directions_by_navigation_context() {
+        assert_eq!(focus_direction(KeyCode::Char('H')), Some(Direction::Left));
+        assert_eq!(focus_direction(KeyCode::Char('j')), None);
+        assert_eq!(row_direction(KeyCode::Char('j')), Some(Direction::Down));
+        assert_eq!(row_direction(KeyCode::Up), Some(Direction::Up));
+        assert_eq!(row_direction(KeyCode::Char('h')), None);
+        assert_eq!(row_direction(KeyCode::Left), None);
     }
 
     #[test]
@@ -405,5 +544,97 @@ mod tests {
         assert_eq!(app.edit_mode, EditMode::Normal);
         assert!(app.input.is_empty());
         assert_eq!(app.tasks.pending().count(), 0);
+    }
+
+    #[test]
+    fn uppercase_vim_keys_move_box_focus() {
+        let mut app = App::new();
+
+        assert!(app.navigate_focus(KeyCode::Char('J')));
+        assert_eq!(app.ui_focus, UiFocus::Todo);
+        assert!(app.navigate_focus(KeyCode::Char('L')));
+        assert_eq!(app.ui_focus, UiFocus::Done);
+        assert!(!app.navigate_focus(KeyCode::Char('h')));
+    }
+
+    #[test]
+    fn row_navigation_stays_within_visible_tasks() {
+        let mut app = App::new();
+        app.tasks.add("First".to_string());
+        app.tasks.add("Second".to_string());
+        app.ui_focus = UiFocus::Todo;
+
+        app.handle_todo_key(KeyCode::Down);
+        app.handle_todo_key(KeyCode::Char('j'));
+        assert_eq!(app.todo_selection, 1);
+
+        app.handle_todo_key(KeyCode::Char('k'));
+        app.handle_todo_key(KeyCode::Up);
+        assert_eq!(app.todo_selection, 0);
+    }
+
+    #[test]
+    fn empty_list_navigation_keeps_a_safe_selection() {
+        let mut app = App::new();
+        app.ui_focus = UiFocus::Todo;
+
+        app.handle_todo_key(KeyCode::Down);
+
+        assert_eq!(app.todo_selection, 0);
+        assert_eq!(app.selected_todo_index(), None);
+    }
+
+    #[test]
+    fn editing_selected_filtered_task_updates_the_right_task() {
+        let mut app = App::new();
+        app.tasks.add("Done".to_string());
+        app.tasks.add("Edit me".to_string());
+        app.tasks.complete(0);
+        app.ui_focus = UiFocus::Todo;
+
+        app.handle_todo_key(KeyCode::Char('e'));
+        assert_eq!(app.edit_mode, EditMode::Editing { task_index: 1 });
+        assert_eq!(app.input, "Edit me");
+        app.input = "Edited".to_string();
+        app.submit_edit();
+
+        assert_eq!(app.tasks.pending().next().unwrap().description(), "Edited");
+    }
+
+    #[test]
+    fn complete_and_uncomplete_clamp_both_selections() {
+        let mut app = App::new();
+        app.tasks.add("First".to_string());
+        app.tasks.add("Second".to_string());
+        app.ui_focus = UiFocus::Todo;
+        app.todo_selection = 1;
+
+        app.handle_todo_key(KeyCode::Char(' '));
+        assert_eq!(app.todo_selection, 0);
+        assert_eq!(
+            app.tasks.completed().next().unwrap().description(),
+            "Second"
+        );
+
+        app.ui_focus = UiFocus::Done;
+        app.handle_done_key(KeyCode::Char(' '));
+        assert_eq!(app.done_selection, 0);
+        assert_eq!(app.tasks.completed().count(), 0);
+        assert_eq!(app.tasks.pending().count(), 2);
+    }
+
+    #[test]
+    fn delete_selected_task_clamps_selection() {
+        let mut app = App::new();
+        app.tasks.add("First".to_string());
+        app.tasks.add("Second".to_string());
+        app.ui_focus = UiFocus::Todo;
+        app.todo_selection = 1;
+
+        app.handle_todo_key(KeyCode::Char('x'));
+
+        assert_eq!(app.todo_selection, 0);
+        assert_eq!(app.tasks.pending().count(), 1);
+        assert_eq!(app.tasks.pending().next().unwrap().description(), "First");
     }
 }

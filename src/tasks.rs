@@ -66,6 +66,15 @@ impl TaskList {
         true
     }
 
+    pub fn delete(&mut self, index: usize) -> bool {
+        if index >= self.tasks.len() {
+            return false;
+        }
+
+        self.tasks.remove(index);
+        true
+    }
+
     pub fn pending(&self) -> impl Iterator<Item = &Task> {
         self.tasks.iter().filter(|task| !task.completed)
     }
@@ -180,6 +189,20 @@ mod tests {
 
         assert!(!tasks.complete(0));
         assert!(!tasks.uncomplete(0));
+    }
+
+    #[test]
+    fn delete_removes_a_task() {
+        let mut tasks = TaskList::new();
+        tasks.add("Keep".to_string());
+        tasks.add("Delete".to_string());
+
+        assert!(tasks.delete(1));
+        assert!(!tasks.delete(3));
+
+        let pending: Vec<_> = tasks.pending().collect();
+        assert_eq!(pending.len(), 1);
+        assert_eq!(pending[0].description(), "Keep");
     }
 
     #[test]
