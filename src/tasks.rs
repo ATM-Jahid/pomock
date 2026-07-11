@@ -73,6 +73,20 @@ impl TaskList {
     pub fn completed(&self) -> impl Iterator<Item = &Task> {
         self.tasks.iter().filter(|task| task.completed)
     }
+
+    pub fn pending_with_indices(&self) -> impl Iterator<Item = (usize, &Task)> {
+        self.tasks
+            .iter()
+            .enumerate()
+            .filter(|(_, task)| !task.completed)
+    }
+
+    pub fn completed_with_indices(&self) -> impl Iterator<Item = (usize, &Task)> {
+        self.tasks
+            .iter()
+            .enumerate()
+            .filter(|(_, task)| task.completed)
+    }
 }
 
 #[cfg(test)]
@@ -166,5 +180,33 @@ mod tests {
 
         assert!(!tasks.complete(0));
         assert!(!tasks.uncomplete(0));
+    }
+
+    #[test]
+    fn pending_indices_refer_to_positions_in_the_full_list() {
+        let mut tasks = TaskList::new();
+        tasks.add("Completed first".to_string());
+        tasks.add("Pending second".to_string());
+        tasks.complete(0);
+
+        let pending: Vec<_> = tasks.pending_with_indices().collect();
+
+        assert_eq!(pending.len(), 1);
+        assert_eq!(pending[0].0, 1);
+        assert_eq!(pending[0].1.description(), "Pending second");
+    }
+
+    #[test]
+    fn completed_indices_refer_to_position_in_the_full_list() {
+        let mut tasks = TaskList::new();
+        tasks.add("Pending first".to_string());
+        tasks.add("Completed second".to_string());
+        tasks.complete(1);
+
+        let completed: Vec<_> = tasks.completed_with_indices().collect();
+
+        assert_eq!(completed.len(), 1);
+        assert_eq!(completed[0].0, 1);
+        assert_eq!(completed[0].1.description(), "Completed second");
     }
 }
