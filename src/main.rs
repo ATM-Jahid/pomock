@@ -100,6 +100,37 @@ impl App {
         self.edit_mode = EditMode::Normal;
     }
 
+    fn handle_clock_key(&mut self, key_code: KeyCode) {
+        match key_code {
+            KeyCode::Char(' ') => self.timer.primary_action(),
+            KeyCode::Char('f') => self.timer.fast_forward(),
+            KeyCode::Char('r') => self.timer.reset_session(),
+            KeyCode::Char(key_code @ ('h' | 'j' | 'k' | 'l')) => {
+                self.ui_focus = self.ui_focus.navigate(key_code);
+            }
+            _ => {}
+        }
+    }
+
+    fn handle_todo_key(&mut self, key_code: KeyCode) {
+        match key_code {
+            KeyCode::Char('a') => self.begin_add(),
+            KeyCode::Char(key_code @ ('h' | 'j' | 'k' | 'l')) => {
+                self.ui_focus = self.ui_focus.navigate(key_code);
+            }
+            _ => {}
+        }
+    }
+
+    fn handle_done_key(&mut self, key_code: KeyCode) {
+        match key_code {
+            KeyCode::Char(key_code @ ('h' | 'j' | 'k' | 'l')) => {
+                self.ui_focus = self.ui_focus.navigate(key_code);
+            }
+            _ => {}
+        }
+    }
+
     fn handle_edit_key(&mut self, key: KeyCode) {
         match key {
             KeyCode::Enter => self.submit_edit(),
@@ -156,14 +187,11 @@ fn run_app(terminal: &mut Terminal<CrosstermBackend<Stdout>>) -> std::io::Result
             } else {
                 match key.code {
                     KeyCode::Char('q') => break,
-                    KeyCode::Char('a') => app.begin_add(),
-                    KeyCode::Char(' ') => app.timer.primary_action(),
-                    KeyCode::Char('f') => app.timer.fast_forward(),
-                    KeyCode::Char('r') => app.timer.reset_session(),
-                    KeyCode::Char(key @ ('h' | 'j' | 'k' | 'l')) => {
-                        app.ui_focus = app.ui_focus.navigate(key);
-                    }
-                    _ => {}
+                    key_code => match app.ui_focus {
+                        UiFocus::Clock => app.handle_clock_key(key_code),
+                        UiFocus::Todo => app.handle_todo_key(key_code),
+                        UiFocus::Done => app.handle_done_key(key_code),
+                    },
                 }
             }
         }
