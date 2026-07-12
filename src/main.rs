@@ -1,7 +1,10 @@
 use std::io::{self, Stdout};
 
 use crossterm::{
-    event::{self, Event, KeyCode},
+    event::{
+        self, DisableMouseCapture, EnableMouseCapture, Event, KeyCode, MouseButton, MouseEvent,
+        MouseEventKind,
+    },
     execute,
     terminal::{EnterAlternateScreen, LeaveAlternateScreen, disable_raw_mode, enable_raw_mode},
 };
@@ -9,7 +12,7 @@ use crossterm::{
 use ratatui::{
     Frame, Terminal,
     backend::CrosstermBackend,
-    layout::{Alignment, Constraint, Direction as LayoutDirection, Layout},
+    layout::{Alignment, Constraint, Direction as LayoutDirection, Layout, Rect},
     style::{Color, Modifier, Style},
     widgets::{Block, Borders, List, ListItem, ListState, Paragraph},
 };
@@ -74,6 +77,13 @@ enum EditMode {
     Editing { task_index: usize },
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum ClickTarget {
+    Clock,
+    Todo(usize),
+    Done(usize),
+}
+
 #[derive(Debug)]
 struct App {
     timer: PomodoroTimer,
@@ -81,8 +91,11 @@ struct App {
     ui_focus: UiFocus,
     todo_selection: usize,
     done_selection: usize,
+    todo_offset: usize,
+    done_offset: usize,
     edit_mode: EditMode,
     input: String,
+    last_click: Option<(ClickTarget, Instant)>,
 }
 
 impl App {
@@ -93,8 +106,11 @@ impl App {
             ui_focus: UiFocus::Clock,
             todo_selection: 0,
             done_selection: 0,
+            todo_offset: 0,
+            done_offset: 0,
             edit_mode: EditMode::Normal,
             input: String::new(),
+            last_click: None,
         }
     }
 
@@ -157,6 +173,8 @@ impl App {
         let completed_len = self.tasks.completed().count();
         self.todo_selection = self.todo_selection.min(pending_len.saturating_sub(1));
         self.done_selection = self.done_selection.min(completed_len.saturating_sub(1));
+        self.todo_offset = self.todo_offset.min(self.todo_selection);
+        self.done_offset = self.done_offset.min(self.done_selection);
     }
 
     fn selected_todo_index(&self) -> Option<usize> {
@@ -264,6 +282,110 @@ impl App {
             _ => {}
         }
     }
+
+    fn handle_mouse(&mut self, mouse: MouseEvent, layout: UiLayout, now: Instant) {
+        if mouse.kind != MouseEventKind::Down(MouseButton::Left) {
+            return;
+        }
+
+        let position = (mouse.column, mouse.row);
+        if layout.clock.contains(position.into()) {
+            self.ui_focus = UiFocus::Clock;
+            self.handle_click_target(ClickTarget::Clock, now);
+        } else if layout.todo.contains(position.into()) {
+            self.ui_focus = UiFocus::Todo;
+            if let Some(selection) = task_row_at(
+                position,
+                layout.todo,
+                self.todo_offset,
+                self.tasks.pending().count(),
+            ) {
+                self.todo_selection = selection;
+                self.handle_click_target(ClickTarget::Todo(selection), now);
+            } else {
+                self.last_click = None;
+            }
+        } else if layout.done.contains(position.into()) {
+            self.ui_focus = UiFocus::Done;
+            if let Some(selection) = task_row_at(
+                position,
+                layout.done,
+                self.done_offset,
+                self.tasks.completed().count(),
+            ) {
+                self.done_selection = selection;
+                self.handle_click_target(ClickTarget::Done(selection), now);
+            } else {
+                self.last_click = None;
+            }
+        } else {
+            self.last_click = None;
+        }
+    }
+
+    fn handle_click_target(&mut self, target: ClickTarget, now: Instant) {
+        let is_double_click = self.last_click.is_some_and(|(last_target, last_time)| {
+            last_target == target
+                && now
+                    .checked_duration_since(last_time)
+                    .is_some_and(|elapsed| elapsed <= DOUBLE_CLICK_WINDOW)
+        });
+
+        if is_double_click {
+            match target {
+                ClickTarget::Clock => self.timer.primary_action(),
+                ClickTarget::Todo(_) => self.handle_todo_key(KeyCode::Char(' ')),
+                ClickTarget::Done(_) => self.handle_done_key(KeyCode::Char(' ')),
+            }
+            self.last_click = None;
+        } else {
+            self.last_click = Some((target, now));
+        }
+    }
+}
+
+const DOUBLE_CLICK_WINDOW: Duration = Duration::from_millis(500);
+
+#[derive(Debug, Clone, Copy)]
+struct UiLayout {
+    clock: Rect,
+    todo: Rect,
+    done: Rect,
+    controls: Rect,
+}
+
+fn ui_layout(area: Rect) -> UiLayout {
+    let inner_area = Block::default().borders(Borders::ALL).inner(area);
+    let chunks = Layout::default()
+        .direction(LayoutDirection::Vertical)
+        .constraints([
+            Constraint::Percentage(55),
+            Constraint::Percentage(45),
+            Constraint::Length(1),
+        ])
+        .split(inner_area);
+    let task_chunks = Layout::default()
+        .direction(LayoutDirection::Horizontal)
+        .constraints([Constraint::Percentage(50), Constraint::Percentage(50)])
+        .split(chunks[1]);
+
+    UiLayout {
+        clock: chunks[0],
+        todo: task_chunks[0],
+        done: task_chunks[1],
+        controls: chunks[2],
+    }
+}
+
+fn task_row_at(position: (u16, u16), area: Rect, offset: usize, len: usize) -> Option<usize> {
+    let inner = Block::default().borders(Borders::ALL).inner(area);
+    let point = position.into();
+    if !inner.contains(point) {
+        return None;
+    }
+
+    let index = offset + usize::from(position.1 - inner.y);
+    (index < len).then_some(index)
 }
 
 fn main() -> std::io::Result<()> {
@@ -277,7 +399,7 @@ fn main() -> std::io::Result<()> {
 fn setup_terminal() -> std::io::Result<Terminal<CrosstermBackend<Stdout>>> {
     enable_raw_mode()?;
     let mut stdout = io::stdout();
-    execute!(stdout, EnterAlternateScreen)?;
+    execute!(stdout, EnterAlternateScreen, EnableMouseCapture)?;
     let backend = CrosstermBackend::new(stdout);
 
     Terminal::new(backend)
@@ -298,16 +420,15 @@ fn run_app(terminal: &mut Terminal<CrosstermBackend<Stdout>>) -> std::io::Result
         }
 
         terminal.draw(|frame| {
-            draw(frame, &app);
+            draw(frame, &mut app);
         })?;
 
-        if event::poll(Duration::from_millis(100))?
-            && let Event::Key(key) = event::read()?
-        {
-            if app.edit_mode != EditMode::Normal {
-                app.handle_edit_key(key.code);
-            } else {
-                match key.code {
+        if event::poll(Duration::from_millis(100))? {
+            match event::read()? {
+                Event::Key(key) if app.edit_mode != EditMode::Normal => {
+                    app.handle_edit_key(key.code);
+                }
+                Event::Key(key) => match key.code {
                     KeyCode::Char('q') => break,
                     key_code if app.navigate_focus(key_code) => {}
                     key_code => match app.ui_focus {
@@ -315,7 +436,11 @@ fn run_app(terminal: &mut Terminal<CrosstermBackend<Stdout>>) -> std::io::Result
                         UiFocus::Todo => app.handle_todo_key(key_code),
                         UiFocus::Done => app.handle_done_key(key_code),
                     },
+                },
+                Event::Mouse(mouse) if app.edit_mode == EditMode::Normal => {
+                    app.handle_mouse(mouse, ui_layout(terminal.size()?.into()), Instant::now());
                 }
+                _ => {}
             }
         }
     }
@@ -325,36 +450,26 @@ fn run_app(terminal: &mut Terminal<CrosstermBackend<Stdout>>) -> std::io::Result
 
 fn restore_terminal(terminal: &mut Terminal<CrosstermBackend<Stdout>>) -> std::io::Result<()> {
     disable_raw_mode()?;
-    execute!(terminal.backend_mut(), LeaveAlternateScreen)?;
+    execute!(
+        terminal.backend_mut(),
+        DisableMouseCapture,
+        LeaveAlternateScreen
+    )?;
     terminal.show_cursor()?;
 
     Ok(())
 }
 
-fn draw(frame: &mut Frame, app: &App) {
+fn draw(frame: &mut Frame, app: &mut App) {
     let area = frame.area();
+    let layout = ui_layout(area);
 
     let outer_block = Block::default().title("pomock").borders(Borders::ALL);
-    let inner_area = outer_block.inner(area);
     frame.render_widget(outer_block, area);
 
-    let chunks = Layout::default()
-        .direction(LayoutDirection::Vertical)
-        .constraints([
-            Constraint::Percentage(55),
-            Constraint::Percentage(45),
-            Constraint::Length(1),
-        ])
-        .split(inner_area);
-
-    let task_chunks = Layout::default()
-        .direction(LayoutDirection::Horizontal)
-        .constraints([Constraint::Percentage(50), Constraint::Percentage(50)])
-        .split(chunks[1]);
-
     let clock_block = focused_block("Clock", app.ui_focus == UiFocus::Clock);
-    let clock_area = clock_block.inner(chunks[0]);
-    frame.render_widget(clock_block, chunks[0]);
+    let clock_area = clock_block.inner(layout.clock);
+    frame.render_widget(clock_block, layout.clock);
 
     let clock_chunks = Layout::default()
         .direction(LayoutDirection::Vertical)
@@ -384,8 +499,8 @@ fn draw(frame: &mut Frame, app: &App) {
         EditMode::Normal => {
             match app.ui_focus {
                 UiFocus::Clock => "[HJKL] box nav [space] start/pause [f] next [r] reset [q] quit",
-                UiFocus::Todo => "[HJKL] box nav [j/k/arrows] list nav [a] add [e] edit [x] delete [space] complete [q] quit",
-                UiFocus::Done => "[HJKL] box nav [j/k/arrows] list nav [e] edit [x] delete [space] return [q] quit",
+                UiFocus::Todo => "[HJKL] box nav [jk/↓↑] list nav [a] add [e] edit [x] delete [space] complete [q] quit",
+                UiFocus::Done => "[HJKL] box nav [jk/↓↑] list nav [e] edit [x] delete [space] return [q] quit",
             }
             .to_string()
         }
@@ -418,6 +533,7 @@ fn draw(frame: &mut Frame, app: &App) {
 
     if !todo_is_empty {
         todo_state.select(Some(app.todo_selection));
+        *todo_state.offset_mut() = app.todo_offset;
     }
 
     let done_items: Vec<ListItem> = app
@@ -445,14 +561,17 @@ fn draw(frame: &mut Frame, app: &App) {
 
     if !done_is_empty {
         done_state.select(Some(app.done_selection));
+        *done_state.offset_mut() = app.done_offset;
     }
 
     frame.render_widget(state, clock_chunks[0]);
     frame.render_widget(remaining, clock_chunks[1]);
     frame.render_widget(completed_sessions, clock_chunks[2]);
-    frame.render_stateful_widget(todo, task_chunks[0], &mut todo_state);
-    frame.render_stateful_widget(done, task_chunks[1], &mut done_state);
-    frame.render_widget(controls, chunks[2]);
+    frame.render_stateful_widget(todo, layout.todo, &mut todo_state);
+    frame.render_stateful_widget(done, layout.done, &mut done_state);
+    frame.render_widget(controls, layout.controls);
+    app.todo_offset = todo_state.offset();
+    app.done_offset = done_state.offset();
 }
 
 fn focused_block(title: &str, focused: bool) -> Block<'_> {
@@ -470,8 +589,22 @@ fn focused_block(title: &str, focused: bool) -> Block<'_> {
 
 #[cfg(test)]
 mod tests {
-    use super::{App, Direction, EditMode, UiFocus, focus_direction, row_direction};
-    use crossterm::event::KeyCode;
+    use super::{
+        App, Direction, EditMode, UiFocus, focus_direction, row_direction, task_row_at, ui_layout,
+    };
+    use crossterm::event::{KeyCode, KeyModifiers, MouseButton, MouseEvent, MouseEventKind};
+    use pomock::timer::{SessionKind, TimerState};
+    use ratatui::layout::Rect;
+    use std::time::{Duration, Instant};
+
+    fn left_click(column: u16, row: u16) -> MouseEvent {
+        MouseEvent {
+            kind: MouseEventKind::Down(MouseButton::Left),
+            column,
+            row,
+            modifiers: KeyModifiers::NONE,
+        }
+    }
 
     #[test]
     fn navigates_between_adjacent_areas() {
@@ -636,5 +769,134 @@ mod tests {
         assert_eq!(app.todo_selection, 0);
         assert_eq!(app.tasks.pending().count(), 1);
         assert_eq!(app.tasks.pending().next().unwrap().description(), "First");
+    }
+
+    #[test]
+    fn task_hit_testing_ignores_borders_empty_space_and_empty_lists() {
+        let area = Rect::new(10, 5, 12, 5);
+
+        assert_eq!(task_row_at((10, 6), area, 0, 3), None);
+        assert_eq!(task_row_at((11, 5), area, 0, 3), None);
+        assert_eq!(task_row_at((11, 6), area, 0, 0), None);
+        assert_eq!(task_row_at((11, 9), area, 0, 3), None);
+    }
+
+    #[test]
+    fn task_hit_testing_maps_visible_rows_through_the_scroll_offset() {
+        let area = Rect::new(10, 5, 12, 5);
+
+        assert_eq!(task_row_at((11, 6), area, 4, 8), Some(4));
+        assert_eq!(task_row_at((20, 8), area, 4, 8), Some(6));
+    }
+
+    #[test]
+    fn clicking_boxes_focuses_them_and_clicking_a_task_selects_its_row() {
+        let mut app = App::new();
+        app.tasks.add("First".to_string());
+        app.tasks.add("Second".to_string());
+        let layout = ui_layout(Rect::new(0, 0, 80, 24));
+        let now = Instant::now();
+
+        app.handle_mouse(
+            left_click(layout.todo.x + 1, layout.todo.y + 2),
+            layout,
+            now,
+        );
+        assert_eq!(app.ui_focus, UiFocus::Todo);
+        assert_eq!(app.todo_selection, 1);
+
+        app.handle_mouse(left_click(layout.clock.x, layout.clock.y), layout, now);
+        assert_eq!(app.ui_focus, UiFocus::Clock);
+    }
+
+    #[test]
+    fn double_clicking_the_clock_runs_its_primary_action_once() {
+        let mut app = App::new();
+        let layout = ui_layout(Rect::new(0, 0, 80, 24));
+        let click = left_click(layout.clock.x + 1, layout.clock.y + 1);
+        let first = Instant::now();
+
+        app.handle_mouse(click, layout, first);
+        assert_eq!(app.timer.state(), TimerState::Ready(SessionKind::Focus));
+
+        app.handle_mouse(click, layout, first + Duration::from_millis(200));
+        assert_eq!(app.timer.state(), TimerState::Focus);
+
+        app.handle_mouse(click, layout, first + Duration::from_millis(300));
+        assert_eq!(app.timer.state(), TimerState::Focus);
+    }
+
+    #[test]
+    fn clock_clicks_outside_the_double_click_window_stay_single_clicks() {
+        let mut app = App::new();
+        let layout = ui_layout(Rect::new(0, 0, 80, 24));
+        let click = left_click(layout.clock.x + 1, layout.clock.y + 1);
+        let first = Instant::now();
+
+        app.handle_mouse(click, layout, first);
+        app.handle_mouse(click, layout, first + Duration::from_millis(501));
+
+        assert_eq!(app.timer.state(), TimerState::Ready(SessionKind::Focus));
+    }
+
+    #[test]
+    fn double_clicking_a_todo_row_completes_that_task() {
+        let mut app = App::new();
+        app.tasks.add("First".to_string());
+        app.tasks.add("Complete me".to_string());
+        let layout = ui_layout(Rect::new(0, 0, 80, 24));
+        let click = left_click(layout.todo.x + 1, layout.todo.y + 2);
+        let first = Instant::now();
+
+        app.handle_mouse(click, layout, first);
+        app.handle_mouse(click, layout, first + Duration::from_millis(200));
+
+        assert_eq!(app.tasks.pending().count(), 1);
+        assert_eq!(
+            app.tasks.completed().next().unwrap().description(),
+            "Complete me"
+        );
+    }
+
+    #[test]
+    fn double_clicking_a_done_row_returns_that_task_to_todo() {
+        let mut app = App::new();
+        app.tasks.add("Return me".to_string());
+        app.tasks.complete(0);
+        let layout = ui_layout(Rect::new(0, 0, 80, 24));
+        let click = left_click(layout.done.x + 1, layout.done.y + 1);
+        let first = Instant::now();
+
+        app.handle_mouse(click, layout, first);
+        app.handle_mouse(click, layout, first + Duration::from_millis(200));
+
+        assert_eq!(app.tasks.completed().count(), 0);
+        assert_eq!(
+            app.tasks.pending().next().unwrap().description(),
+            "Return me"
+        );
+    }
+
+    #[test]
+    fn clicks_on_different_task_rows_do_not_form_a_double_click() {
+        let mut app = App::new();
+        app.tasks.add("First".to_string());
+        app.tasks.add("Second".to_string());
+        let layout = ui_layout(Rect::new(0, 0, 80, 24));
+        let first = Instant::now();
+
+        app.handle_mouse(
+            left_click(layout.todo.x + 1, layout.todo.y + 1),
+            layout,
+            first,
+        );
+        app.handle_mouse(
+            left_click(layout.todo.x + 1, layout.todo.y + 2),
+            layout,
+            first + Duration::from_millis(200),
+        );
+
+        assert_eq!(app.tasks.pending().count(), 2);
+        assert_eq!(app.tasks.completed().count(), 0);
     }
 }
