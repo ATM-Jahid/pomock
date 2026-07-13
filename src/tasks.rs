@@ -8,10 +8,6 @@ impl Task {
     pub fn description(&self) -> &str {
         &self.description
     }
-
-    pub fn is_completed(&self) -> bool {
-        self.completed
-    }
 }
 
 #[derive(Debug, Default)]
@@ -119,7 +115,6 @@ mod tests {
         let pending: Vec<_> = tasks.pending().collect();
         assert_eq!(pending.len(), 1);
         assert_eq!(pending[0].description(), "Write Hello");
-        assert!(!pending[0].is_completed());
     }
 
     #[test]
