@@ -8,6 +8,7 @@ use ratatui::{
 use crate::{
     app::{App, ClickTarget, EditMode, UiFocus},
     display::{format_big_duration, format_state},
+    timer::{SessionKind, TimerState},
 };
 
 #[derive(Debug, Clone, Copy)]
@@ -16,6 +17,14 @@ struct UiLayout {
     todo: Rect,
     done: Rect,
     controls: Rect,
+}
+
+#[derive(Debug, Clone, Copy)]
+struct ClockLayout {
+    state: Rect,
+    remaining: Rect,
+    completed_sessions: Rect,
+    session_controls: [Rect; 3],
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -49,17 +58,8 @@ pub fn draw(frame: &mut Frame, app: &mut App) {
     frame.render_widget(outer_block, area);
 
     let clock_block = focused_block("Clock", app.ui_focus() == UiFocus::Clock, theme);
-    let clock_area = clock_block.inner(layout.clock);
     frame.render_widget(clock_block, layout.clock);
-
-    let clock_chunks = Layout::default()
-        .direction(LayoutDirection::Vertical)
-        .constraints([
-            Constraint::Length(1),
-            Constraint::Min(1),
-            Constraint::Length(1),
-        ])
-        .split(clock_area);
+    let clock_layout = clock_layout(layout.clock);
 
     let state = Paragraph::new(format_state(app.timer().state())).alignment(Alignment::Center);
     let remaining = Paragraph::new(format_big_duration(app.timer().remaining()))
@@ -71,6 +71,16 @@ pub fn draw(frame: &mut Frame, app: &mut App) {
     ))
     .alignment(Alignment::Center)
     .style(Style::default().fg(theme.completed_sessions));
+    let current_session = match app.timer().state() {
+        TimerState::Ready(session) | TimerState::Running(session) | TimerState::Paused(session) => {
+            session
+        }
+    };
+    let session_controls = [
+        (SessionKind::Focus, "Focus"),
+        (SessionKind::ShortBreak, "Short break"),
+        (SessionKind::LongBreak, "Long break"),
+    ];
 
     let controls = Paragraph::new(controls_text(app)).alignment(Alignment::Center);
 
@@ -132,9 +142,25 @@ pub fn draw(frame: &mut Frame, app: &mut App) {
         *done_state.offset_mut() = app.done_offset();
     }
 
-    frame.render_widget(state, clock_chunks[0]);
-    frame.render_widget(remaining, clock_chunks[1]);
-    frame.render_widget(completed_sessions, clock_chunks[2]);
+    frame.render_widget(state, clock_layout.state);
+    frame.render_widget(remaining, clock_layout.remaining);
+    frame.render_widget(completed_sessions, clock_layout.completed_sessions);
+    for ((session, label), area) in session_controls
+        .into_iter()
+        .zip(clock_layout.session_controls)
+    {
+        let style = if session == current_session {
+            Style::default().add_modifier(Modifier::REVERSED)
+        } else {
+            Style::default()
+        };
+        frame.render_widget(
+            Paragraph::new(format!("[ {label} ]"))
+                .alignment(Alignment::Center)
+                .style(style),
+            area,
+        );
+    }
     frame.render_stateful_widget(todo, layout.todo, &mut todo_state);
     frame.render_stateful_widget(done, layout.done, &mut done_state);
     frame.render_widget(controls, layout.controls);
@@ -146,7 +172,9 @@ pub fn click_target(area: Rect, position: (u16, u16), app: &App) -> ClickTarget 
     let layout = ui_layout(area);
     let point = position.into();
 
-    if layout.clock.contains(point) {
+    if let Some(session) = session_control_at(layout.clock, point) {
+        ClickTarget::SessionControl(session)
+    } else if layout.clock.contains(point) {
         ClickTarget::Clock
     } else if layout.todo.contains(point) {
         task_row_at(
@@ -167,6 +195,46 @@ pub fn click_target(area: Rect, position: (u16, u16), app: &App) -> ClickTarget 
     } else {
         ClickTarget::Outside
     }
+}
+
+fn clock_layout(area: Rect) -> ClockLayout {
+    let inner = Block::default().borders(Borders::ALL).inner(area);
+    let chunks = Layout::default()
+        .direction(LayoutDirection::Vertical)
+        .constraints([
+            Constraint::Length(1),
+            Constraint::Min(1),
+            Constraint::Length(1),
+            Constraint::Length(1),
+        ])
+        .split(inner);
+    let controls = Layout::default()
+        .direction(LayoutDirection::Horizontal)
+        .constraints([
+            Constraint::Ratio(1, 3),
+            Constraint::Ratio(1, 3),
+            Constraint::Ratio(1, 3),
+        ])
+        .split(chunks[3]);
+
+    ClockLayout {
+        state: chunks[0],
+        remaining: chunks[1],
+        completed_sessions: chunks[2],
+        session_controls: [controls[0], controls[1], controls[2]],
+    }
+}
+
+fn session_control_at(area: Rect, point: ratatui::layout::Position) -> Option<SessionKind> {
+    let controls = clock_layout(area).session_controls;
+    [
+        SessionKind::Focus,
+        SessionKind::ShortBreak,
+        SessionKind::LongBreak,
+    ]
+    .into_iter()
+    .zip(controls)
+    .find_map(|(session, area)| area.contains(point).then_some(session))
 }
 
 fn ui_layout(area: Rect) -> UiLayout {
@@ -204,12 +272,16 @@ fn task_row_at(position: (u16, u16), area: Rect, offset: usize, len: usize) -> O
 }
 
 fn controls_text(app: &App) -> String {
+    if app.is_reset_confirmation_open() {
+        return "Reset session? [y/Enter] confirm [n/Esc] cancel".to_string();
+    }
+
     match app.edit_mode() {
         EditMode::Adding => format!("Add task: {}_", app.input()),
         EditMode::Editing { .. } => format!("Edit task: {}_", app.input()),
         EditMode::Normal => match app.ui_focus() {
             UiFocus::Clock => {
-                "[HJKL] box nav [space] start/pause [f] next [r] reset [q] quit"
+                "[HJKL] box nav [space] start/pause [n] next [r] reset [q] quit"
             }
             UiFocus::Todo => {
                 "[HJKL] box nav [jk/↓↑] list nav [a] add [e] edit [x] delete [space] complete [q] quit"
@@ -312,5 +384,24 @@ mod tests {
             click_target(area, (layout.todo.x + 1, layout.todo.y + 1), &app),
             ClickTarget::TodoTask(4)
         );
+    }
+
+    #[test]
+    fn click_translation_maps_all_visible_session_controls() {
+        let app = App::new();
+        let area = Rect::new(0, 0, 80, 24);
+        let layout = ui_layout(area);
+        let controls = clock_layout(layout.clock).session_controls;
+
+        for (control, session) in controls.into_iter().zip([
+            SessionKind::Focus,
+            SessionKind::ShortBreak,
+            SessionKind::LongBreak,
+        ]) {
+            assert_eq!(
+                click_target(area, (control.x, control.y), &app),
+                ClickTarget::SessionControl(session)
+            );
+        }
     }
 }

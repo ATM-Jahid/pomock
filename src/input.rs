@@ -3,7 +3,20 @@ use crossterm::event::KeyCode;
 use crate::app::{Action, Direction, EditMode, UiFocus};
 
 /// Maps a physical key to a semantic action for the current application context.
-pub fn map_key(key: KeyCode, edit_mode: EditMode, focus: UiFocus) -> Option<Action> {
+pub fn map_key(
+    key: KeyCode,
+    edit_mode: EditMode,
+    focus: UiFocus,
+    reset_confirmation_open: bool,
+) -> Option<Action> {
+    if reset_confirmation_open {
+        return match key {
+            KeyCode::Char('y') | KeyCode::Enter => Some(Action::ConfirmReset),
+            KeyCode::Char('n') | KeyCode::Esc => Some(Action::CancelReset),
+            _ => None,
+        };
+    }
+
     if edit_mode != EditMode::Normal {
         return match key {
             KeyCode::Enter => Some(Action::SubmitEdit),
@@ -21,7 +34,7 @@ pub fn map_key(key: KeyCode, edit_mode: EditMode, focus: UiFocus) -> Option<Acti
     match (focus, key) {
         (_, KeyCode::Char('q')) => Some(Action::Quit),
         (UiFocus::Clock, KeyCode::Char(' ')) => Some(Action::PrimaryAction),
-        (UiFocus::Clock, KeyCode::Char('f')) => Some(Action::SelectNextSession),
+        (UiFocus::Clock, KeyCode::Char('n')) => Some(Action::SelectNextSession),
         (UiFocus::Clock, KeyCode::Char('r')) => Some(Action::ResetSession),
         (UiFocus::Todo, KeyCode::Char('a')) => Some(Action::BeginAdd),
         (UiFocus::Todo | UiFocus::Done, KeyCode::Char('e')) => Some(Action::EditSelected),
@@ -57,11 +70,11 @@ mod tests {
     #[test]
     fn maps_global_normal_mode_actions() {
         assert_eq!(
-            map_key(KeyCode::Char('J'), EditMode::Normal, UiFocus::Clock),
+            map_key(KeyCode::Char('J'), EditMode::Normal, UiFocus::Clock, false),
             Some(Action::NavigateFocus(Direction::Down))
         );
         assert_eq!(
-            map_key(KeyCode::Char('q'), EditMode::Normal, UiFocus::Done),
+            map_key(KeyCode::Char('q'), EditMode::Normal, UiFocus::Done, false),
             Some(Action::Quit)
         );
     }
@@ -69,23 +82,23 @@ mod tests {
     #[test]
     fn maps_keys_by_focused_area() {
         assert_eq!(
-            map_key(KeyCode::Char(' '), EditMode::Normal, UiFocus::Clock),
+            map_key(KeyCode::Char(' '), EditMode::Normal, UiFocus::Clock, false),
             Some(Action::PrimaryAction)
         );
         assert_eq!(
-            map_key(KeyCode::Char('a'), EditMode::Normal, UiFocus::Todo),
+            map_key(KeyCode::Char('a'), EditMode::Normal, UiFocus::Todo, false),
             Some(Action::BeginAdd)
         );
         assert_eq!(
-            map_key(KeyCode::Down, EditMode::Normal, UiFocus::Done),
+            map_key(KeyCode::Down, EditMode::Normal, UiFocus::Done, false),
             Some(Action::MoveSelection(Direction::Down))
         );
         assert_eq!(
-            map_key(KeyCode::Char('a'), EditMode::Normal, UiFocus::Done),
+            map_key(KeyCode::Char('a'), EditMode::Normal, UiFocus::Done, false),
             None
         );
         assert_eq!(
-            map_key(KeyCode::Down, EditMode::Normal, UiFocus::Clock),
+            map_key(KeyCode::Down, EditMode::Normal, UiFocus::Clock, false),
             None
         );
     }
@@ -93,23 +106,24 @@ mod tests {
     #[test]
     fn edit_mode_takes_precedence_over_normal_commands() {
         assert_eq!(
-            map_key(KeyCode::Char('q'), EditMode::Adding, UiFocus::Todo),
+            map_key(KeyCode::Char('q'), EditMode::Adding, UiFocus::Todo, false),
             Some(Action::PushInput('q'))
         );
         assert_eq!(
             map_key(
                 KeyCode::Char('J'),
                 EditMode::Editing { task_index: 0 },
-                UiFocus::Todo
+                UiFocus::Todo,
+                false,
             ),
             Some(Action::PushInput('J'))
         );
         assert_eq!(
-            map_key(KeyCode::Enter, EditMode::Adding, UiFocus::Todo),
+            map_key(KeyCode::Enter, EditMode::Adding, UiFocus::Todo, false),
             Some(Action::SubmitEdit)
         );
         assert_eq!(
-            map_key(KeyCode::Left, EditMode::Adding, UiFocus::Todo),
+            map_key(KeyCode::Left, EditMode::Adding, UiFocus::Todo, false),
             None
         );
     }
@@ -117,11 +131,40 @@ mod tests {
     #[test]
     fn normal_mode_ignores_unmapped_keys() {
         assert_eq!(
-            map_key(KeyCode::Enter, EditMode::Normal, UiFocus::Todo),
+            map_key(KeyCode::Enter, EditMode::Normal, UiFocus::Todo, false),
             None
         );
         assert_eq!(
-            map_key(KeyCode::Char('h'), EditMode::Normal, UiFocus::Todo),
+            map_key(KeyCode::Char('h'), EditMode::Normal, UiFocus::Todo, false),
+            None
+        );
+    }
+
+    #[test]
+    fn reset_confirmation_keys_take_precedence_over_every_other_context() {
+        for (key, expected) in [
+            (KeyCode::Char('y'), Some(Action::ConfirmReset)),
+            (KeyCode::Enter, Some(Action::ConfirmReset)),
+            (KeyCode::Char('n'), Some(Action::CancelReset)),
+            (KeyCode::Esc, Some(Action::CancelReset)),
+            (KeyCode::Char('q'), None),
+            (KeyCode::Char('H'), None),
+        ] {
+            assert_eq!(
+                map_key(key, EditMode::Adding, UiFocus::Todo, true),
+                expected
+            );
+        }
+    }
+
+    #[test]
+    fn maps_next_session_to_n_only_in_clock_context() {
+        assert_eq!(
+            map_key(KeyCode::Char('n'), EditMode::Normal, UiFocus::Clock, false),
+            Some(Action::SelectNextSession)
+        );
+        assert_eq!(
+            map_key(KeyCode::Char('f'), EditMode::Normal, UiFocus::Clock, false),
             None
         );
     }

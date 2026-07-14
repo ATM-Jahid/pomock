@@ -1,4 +1,7 @@
-use std::time::{Duration, Instant};
+use std::{
+    num::NonZeroU32,
+    time::{Duration, Instant},
+};
 
 use crate::{
     SessionKind,
@@ -7,6 +10,7 @@ use crate::{
 };
 
 const DOUBLE_CLICK_WINDOW: Duration = Duration::from_millis(500);
+const RESET_CONFIRMATION_THRESHOLD: Duration = Duration::from_secs(10);
 
 /// The application area that currently receives contextual commands.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -34,6 +38,8 @@ pub enum Action {
     PrimaryAction,
     SelectNextSession,
     ResetSession,
+    ConfirmReset,
+    CancelReset,
     BeginAdd,
     EditSelected,
     DeleteSelected,
@@ -76,11 +82,18 @@ pub enum EditMode {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ClickTarget {
     Clock,
+    SessionControl(SessionKind),
     Todo,
     TodoTask(usize),
     Done,
     DoneTask(usize),
     Outside,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum PendingReset {
+    ResumeOnCancel,
+    StayPaused,
 }
 
 /// Runtime application state and terminal-independent state transitions.
@@ -96,13 +109,19 @@ pub struct App {
     edit_mode: EditMode,
     input: String,
     last_click: Option<(ClickTarget, Instant)>,
+    pending_reset: Option<PendingReset>,
 }
 
 impl App {
     /// Creates an application with the current default durations and no tasks.
     pub fn new() -> Self {
         Self {
-            timer: PomodoroTimer::new(Duration::from_secs(25 * 60), Duration::from_secs(5 * 60)),
+            timer: PomodoroTimer::new(
+                Duration::from_secs(25 * 60),
+                Duration::from_secs(5 * 60),
+                Duration::from_secs(15 * 60),
+                NonZeroU32::new(4).expect("the default long-break interval is positive"),
+            ),
             tasks: TaskList::new(),
             ui_focus: UiFocus::Clock,
             todo_selection: 0,
@@ -112,6 +131,7 @@ impl App {
             edit_mode: EditMode::Normal,
             input: String::new(),
             last_click: None,
+            pending_reset: None,
         }
     }
 
@@ -125,6 +145,15 @@ impl App {
 
     /// Applies a semantic action without depending on its physical key mapping.
     pub fn dispatch(&mut self, action: Action) -> AppOutcome {
+        if self.pending_reset.is_some() {
+            match action {
+                Action::ConfirmReset => self.confirm_reset(),
+                Action::CancelReset => self.cancel_reset(),
+                _ => {}
+            }
+            return AppOutcome::None;
+        }
+
         match action {
             Action::Quit => return AppOutcome::Quit,
             Action::NavigateFocus(direction) => self.navigate_focus(direction),
@@ -140,6 +169,7 @@ impl App {
             },
             Action::SelectNextSession => self.select_next_session(),
             Action::ResetSession => self.reset_session(),
+            Action::ConfirmReset | Action::CancelReset => {}
             Action::BeginAdd => self.begin_add(),
             Action::EditSelected => match self.ui_focus {
                 UiFocus::Clock => {}
@@ -162,20 +192,9 @@ impl App {
 
     /// Advances monotonic application time and reports a completed session.
     pub fn tick(&mut self, elapsed: Duration) -> AppOutcome {
-        let running_session = match self.timer.state() {
-            TimerState::Focus => Some(SessionKind::Focus),
-            TimerState::Break => Some(SessionKind::Break),
-            _ => None,
-        };
-
-        self.timer.tick(elapsed);
-
-        match (running_session, self.timer.state()) {
-            (Some(session), TimerState::Completed(completed)) if session == completed => {
-                AppOutcome::SessionCompleted(completed)
-            }
-            _ => AppOutcome::None,
-        }
+        self.timer
+            .tick(elapsed)
+            .map_or(AppOutcome::None, AppOutcome::SessionCompleted)
     }
 
     /// Returns the area that receives contextual semantic actions.
@@ -186,6 +205,11 @@ impl App {
     /// Returns the current text-entry context.
     pub fn edit_mode(&self) -> EditMode {
         self.edit_mode
+    }
+
+    /// Reports whether reset confirmation currently owns keyboard and mouse input.
+    pub fn is_reset_confirmation_open(&self) -> bool {
+        self.pending_reset.is_some()
     }
 
     pub(crate) fn input(&self) -> &str {
@@ -271,11 +295,36 @@ impl App {
     }
 
     fn select_next_session(&mut self) {
-        self.timer.fast_forward();
+        self.timer.select_next_session();
     }
 
     fn reset_session(&mut self) {
+        let pending_reset = match self.timer.state() {
+            TimerState::Running(_) => PendingReset::ResumeOnCancel,
+            TimerState::Paused(_) => PendingReset::StayPaused,
+            TimerState::Ready(_) => return,
+        };
+
+        if self.timer.progress() < RESET_CONFIRMATION_THRESHOLD {
+            self.timer.reset_session();
+            return;
+        }
+
+        self.timer.pause();
+        self.pending_reset = Some(pending_reset);
+        self.clear_pending_click();
+    }
+
+    fn confirm_reset(&mut self) {
         self.timer.reset_session();
+        self.pending_reset = None;
+    }
+
+    fn cancel_reset(&mut self) {
+        if self.pending_reset == Some(PendingReset::ResumeOnCancel) {
+            self.timer.resume();
+        }
+        self.pending_reset = None;
     }
 
     fn move_todo_selection(&mut self, direction: Direction) {
@@ -330,10 +379,26 @@ impl App {
 
     /// Applies a semantic click after the UI boundary performs hit testing.
     pub fn handle_click_target(&mut self, target: ClickTarget, now: Instant) {
+        if self.edit_mode != EditMode::Normal || self.pending_reset.is_some() {
+            return;
+        }
+
         match target {
             ClickTarget::Clock => {
                 self.focus(UiFocus::Clock);
                 self.handle_actionable_click(target, now);
+            }
+            ClickTarget::SessionControl(session) => {
+                self.focus(UiFocus::Clock);
+                if !matches!(self.timer.state(), TimerState::Ready(_)) {
+                    self.clear_pending_click();
+                } else if self.is_double_click(target, now) {
+                    self.timer.start_session(session);
+                    self.clear_pending_click();
+                } else {
+                    self.timer.select_session(session);
+                    self.last_click = Some((target, now));
+                }
             }
             ClickTarget::Todo => {
                 self.focus(UiFocus::Todo);
@@ -362,19 +427,17 @@ impl App {
     }
 
     fn handle_actionable_click(&mut self, target: ClickTarget, now: Instant) {
-        let is_double_click = self.last_click.is_some_and(|(last_target, last_time)| {
-            last_target == target
-                && now
-                    .checked_duration_since(last_time)
-                    .is_some_and(|elapsed| elapsed <= DOUBLE_CLICK_WINDOW)
-        });
+        let is_double_click = self.is_double_click(target, now);
 
         if is_double_click {
             match target {
                 ClickTarget::Clock => self.clock_primary_action(),
                 ClickTarget::TodoTask(_) => self.complete_selected_todo(),
                 ClickTarget::DoneTask(_) => self.return_selected_done(),
-                ClickTarget::Todo | ClickTarget::Done | ClickTarget::Outside => {
+                ClickTarget::SessionControl(_)
+                | ClickTarget::Todo
+                | ClickTarget::Done
+                | ClickTarget::Outside => {
                     unreachable!("only actionable targets are recorded")
                 }
             }
@@ -382,6 +445,15 @@ impl App {
         } else {
             self.last_click = Some((target, now));
         }
+    }
+
+    fn is_double_click(&self, target: ClickTarget, now: Instant) -> bool {
+        self.last_click.is_some_and(|(last_target, last_time)| {
+            last_target == target
+                && now
+                    .checked_duration_since(last_time)
+                    .is_some_and(|elapsed| elapsed <= DOUBLE_CLICK_WINDOW)
+        })
     }
 
     fn move_selection(selection: &mut usize, len: usize, direction: Direction) {
@@ -462,6 +534,12 @@ mod tests {
         let _ = app.dispatch(Action::NavigateFocus(Direction::Up));
     }
 
+    fn double_click_session(app: &mut App, session: SessionKind, first_click: Instant) {
+        let target = ClickTarget::SessionControl(session);
+        app.handle_click_target(target, first_click);
+        app.handle_click_target(target, first_click + Duration::from_millis(100));
+    }
+
     #[test]
     fn navigates_between_adjacent_areas() {
         assert_eq!(UiFocus::Clock.navigate(Direction::Down), UiFocus::Todo);
@@ -522,15 +600,17 @@ mod tests {
     }
 
     #[test]
-    fn tick_reports_break_completion() {
-        let mut app = App::new();
-        let _ = app.dispatch(Action::SelectNextSession);
-        let _ = app.dispatch(Action::PrimaryAction);
+    fn tick_reports_each_break_completion_exactly_once() {
+        for (session, duration) in [
+            (SessionKind::ShortBreak, Duration::from_secs(5 * 60)),
+            (SessionKind::LongBreak, Duration::from_secs(15 * 60)),
+        ] {
+            let mut app = App::new();
+            double_click_session(&mut app, session, Instant::now());
 
-        assert_eq!(
-            app.tick(Duration::from_secs(5 * 60)),
-            AppOutcome::SessionCompleted(SessionKind::Break)
-        );
+            assert_eq!(app.tick(duration), AppOutcome::SessionCompleted(session));
+            assert_eq!(app.tick(Duration::from_secs(1)), AppOutcome::None);
+        }
     }
 
     #[test]
@@ -655,15 +735,184 @@ mod tests {
     }
 
     #[test]
+    fn reset_below_ten_seconds_is_immediate() {
+        let mut app = App::new();
+        let _ = app.dispatch(Action::PrimaryAction);
+        let _ = app.tick(Duration::from_secs(9));
+
+        let _ = app.dispatch(Action::ResetSession);
+
+        assert!(!app.is_reset_confirmation_open());
+        assert_eq!(app.timer().state(), TimerState::Ready(SessionKind::Focus));
+        assert_eq!(app.timer().remaining(), Duration::from_secs(25 * 60));
+    }
+
+    #[test]
+    fn reset_at_ten_seconds_pauses_and_requests_confirmation() {
+        let mut app = App::new();
+        let _ = app.dispatch(Action::PrimaryAction);
+        let _ = app.tick(Duration::from_secs(10));
+
+        let _ = app.dispatch(Action::ResetSession);
+
+        assert!(app.is_reset_confirmation_open());
+        assert_eq!(app.timer().state(), TimerState::Paused(SessionKind::Focus));
+        assert_eq!(app.timer().remaining(), Duration::from_secs(25 * 60 - 10));
+    }
+
+    #[test]
+    fn confirming_reset_returns_the_same_session_to_ready() {
+        let mut app = App::new();
+        double_click_session(&mut app, SessionKind::LongBreak, Instant::now());
+        let _ = app.tick(Duration::from_secs(10));
+        let _ = app.dispatch(Action::ResetSession);
+
+        let _ = app.dispatch(Action::ConfirmReset);
+
+        assert!(!app.is_reset_confirmation_open());
+        assert_eq!(
+            app.timer().state(),
+            TimerState::Ready(SessionKind::LongBreak)
+        );
+        assert_eq!(app.timer().remaining(), Duration::from_secs(15 * 60));
+    }
+
+    #[test]
+    fn cancelling_reset_restores_running_but_preserves_paused() {
+        let mut running = App::new();
+        let _ = running.dispatch(Action::PrimaryAction);
+        let _ = running.tick(Duration::from_secs(10));
+        let _ = running.dispatch(Action::ResetSession);
+        let _ = running.dispatch(Action::CancelReset);
+        assert_eq!(
+            running.timer().state(),
+            TimerState::Running(SessionKind::Focus)
+        );
+
+        let mut paused = App::new();
+        let _ = paused.dispatch(Action::PrimaryAction);
+        let _ = paused.tick(Duration::from_secs(10));
+        let _ = paused.dispatch(Action::PrimaryAction);
+        let _ = paused.dispatch(Action::ResetSession);
+        let _ = paused.dispatch(Action::CancelReset);
+        assert_eq!(
+            paused.timer().state(),
+            TimerState::Paused(SessionKind::Focus)
+        );
+    }
+
+    #[test]
+    fn reset_confirmation_ignores_unrelated_actions_and_mouse() {
+        let mut app = App::new();
+        let _ = app.dispatch(Action::PrimaryAction);
+        let _ = app.tick(Duration::from_secs(10));
+        let _ = app.dispatch(Action::ResetSession);
+        let focus = app.ui_focus();
+        let remaining = app.timer().remaining();
+
+        assert_eq!(app.dispatch(Action::Quit), AppOutcome::None);
+        let _ = app.dispatch(Action::PrimaryAction);
+        let _ = app.dispatch(Action::NavigateFocus(Direction::Down));
+        app.handle_click_target(ClickTarget::Todo, Instant::now());
+
+        assert!(app.is_reset_confirmation_open());
+        assert_eq!(app.ui_focus(), focus);
+        assert_eq!(app.timer().remaining(), remaining);
+        assert_eq!(app.timer().state(), TimerState::Paused(SessionKind::Focus));
+    }
+
+    #[test]
+    fn session_control_single_click_selects_and_double_click_starts() {
+        let mut app = App::new();
+        let now = Instant::now();
+        let target = ClickTarget::SessionControl(SessionKind::LongBreak);
+
+        app.handle_click_target(target, now);
+        assert_eq!(app.ui_focus(), UiFocus::Clock);
+        assert_eq!(
+            app.timer().state(),
+            TimerState::Ready(SessionKind::LongBreak)
+        );
+
+        app.handle_click_target(target, now + Duration::from_millis(100));
+        assert_eq!(
+            app.timer().state(),
+            TimerState::Running(SessionKind::LongBreak)
+        );
+    }
+
+    #[test]
+    fn different_or_too_slow_session_clicks_remain_ready() {
+        let mut different = App::new();
+        let now = Instant::now();
+        different.handle_click_target(ClickTarget::SessionControl(SessionKind::LongBreak), now);
+        different.handle_click_target(
+            ClickTarget::SessionControl(SessionKind::ShortBreak),
+            now + Duration::from_millis(100),
+        );
+        assert_eq!(
+            different.timer().state(),
+            TimerState::Ready(SessionKind::ShortBreak)
+        );
+
+        let mut slow = App::new();
+        let target = ClickTarget::SessionControl(SessionKind::LongBreak);
+        slow.handle_click_target(target, now);
+        slow.handle_click_target(target, now + Duration::from_millis(501));
+        assert_eq!(
+            slow.timer().state(),
+            TimerState::Ready(SessionKind::LongBreak)
+        );
+    }
+
+    #[test]
+    fn session_controls_do_not_replace_running_or_paused_sessions() {
+        let mut app = App::new();
+        let now = Instant::now();
+        double_click_session(&mut app, SessionKind::LongBreak, now);
+
+        app.handle_click_target(
+            ClickTarget::SessionControl(SessionKind::ShortBreak),
+            now + Duration::from_millis(200),
+        );
+        assert_eq!(
+            app.timer().state(),
+            TimerState::Running(SessionKind::LongBreak)
+        );
+
+        let _ = app.dispatch(Action::PrimaryAction);
+        app.handle_click_target(
+            ClickTarget::SessionControl(SessionKind::Focus),
+            now + Duration::from_millis(300),
+        );
+        assert_eq!(
+            app.timer().state(),
+            TimerState::Paused(SessionKind::LongBreak)
+        );
+    }
+
+    #[test]
+    fn mouse_is_ignored_during_task_editing() {
+        let mut app = App::new();
+        let _ = app.dispatch(Action::NavigateFocus(Direction::Down));
+        let _ = app.dispatch(Action::BeginAdd);
+
+        app.handle_click_target(ClickTarget::Clock, Instant::now());
+
+        assert_eq!(app.ui_focus(), UiFocus::Todo);
+        assert_eq!(app.edit_mode(), EditMode::Adding);
+    }
+
+    #[test]
     fn double_clicking_a_target_runs_its_contextual_action_once() {
         let mut app = App::new();
         let first = Instant::now();
         app.handle_click_target(ClickTarget::Clock, first);
         app.handle_click_target(ClickTarget::Clock, first + Duration::from_millis(200));
-        assert_eq!(app.timer().state(), TimerState::Focus);
+        assert_eq!(app.timer().state(), TimerState::Running(SessionKind::Focus));
 
         app.handle_click_target(ClickTarget::Clock, first + Duration::from_millis(300));
-        assert_eq!(app.timer().state(), TimerState::Focus);
+        assert_eq!(app.timer().state(), TimerState::Running(SessionKind::Focus));
     }
 
     #[test]

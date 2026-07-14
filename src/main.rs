@@ -76,13 +76,19 @@ fn run_app(terminal: &mut Terminal<CrosstermBackend<Stdout>>) -> std::io::Result
         if event::poll(Duration::from_millis(100))? {
             match event::read()? {
                 Event::Key(key) => {
-                    if let Some(action) = map_key(key.code, app.edit_mode(), app.ui_focus())
-                        && handle_outcome(app.dispatch(action))
+                    if let Some(action) = map_key(
+                        key.code,
+                        app.edit_mode(),
+                        app.ui_focus(),
+                        app.is_reset_confirmation_open(),
+                    ) && handle_outcome(app.dispatch(action))
                     {
                         break;
                     }
                 }
-                Event::Mouse(mouse) if app.edit_mode() == EditMode::Normal => {
+                Event::Mouse(mouse)
+                    if app.edit_mode() == EditMode::Normal && !app.is_reset_confirmation_open() =>
+                {
                     handle_mouse(&mut app, mouse, terminal.size()?.into(), Instant::now());
                 }
                 _ => {}

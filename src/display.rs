@@ -21,11 +21,14 @@ pub fn format_big_duration(duration: Duration) -> String {
 pub fn format_state(state: TimerState) -> &'static str {
     match state {
         TimerState::Ready(SessionKind::Focus) => "Focus ready",
-        TimerState::Ready(SessionKind::Break) => "Break ready",
-        TimerState::Focus => "Focus",
-        TimerState::Break => "Break",
-        TimerState::Paused => "Paused",
-        TimerState::Completed(_) => "Completed",
+        TimerState::Ready(SessionKind::ShortBreak) => "Short break ready",
+        TimerState::Ready(SessionKind::LongBreak) => "Long break ready",
+        TimerState::Running(SessionKind::Focus) => "Focus",
+        TimerState::Running(SessionKind::ShortBreak) => "Short break",
+        TimerState::Running(SessionKind::LongBreak) => "Long break",
+        TimerState::Paused(SessionKind::Focus) => "Focus paused",
+        TimerState::Paused(SessionKind::ShortBreak) => "Short break paused",
+        TimerState::Paused(SessionKind::LongBreak) => "Long break paused",
     }
 }
 
@@ -126,15 +129,20 @@ mod tests {
             "Focus ready"
         );
         assert_eq!(
-            format_state(TimerState::Ready(SessionKind::Break)),
-            "Break ready"
+            format_state(TimerState::Ready(SessionKind::ShortBreak)),
+            "Short break ready"
         );
-        assert_eq!(format_state(TimerState::Focus), "Focus");
-        assert_eq!(format_state(TimerState::Break), "Break");
-        assert_eq!(format_state(TimerState::Paused), "Paused");
         assert_eq!(
-            format_state(TimerState::Completed(SessionKind::Focus)),
-            "Completed"
+            format_state(TimerState::Ready(SessionKind::LongBreak)),
+            "Long break ready"
+        );
+        assert_eq!(
+            format_state(TimerState::Running(SessionKind::Focus)),
+            "Focus"
+        );
+        assert_eq!(
+            format_state(TimerState::Paused(SessionKind::LongBreak)),
+            "Long break paused"
         );
     }
 }

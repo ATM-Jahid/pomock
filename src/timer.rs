@@ -1,38 +1,54 @@
-use std::time::Duration;
+use std::{num::NonZeroU32, time::Duration};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum SessionKind {
     Focus,
-    Break,
+    ShortBreak,
+    LongBreak,
+}
+
+impl SessionKind {
+    fn next(self) -> Self {
+        match self {
+            Self::Focus => Self::ShortBreak,
+            Self::ShortBreak => Self::LongBreak,
+            Self::LongBreak => Self::Focus,
+        }
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum TimerState {
     Ready(SessionKind),
-    Focus,
-    Break,
-    Paused,
-    Completed(SessionKind),
+    Running(SessionKind),
+    Paused(SessionKind),
 }
 
 #[derive(Debug, Clone)]
 pub struct PomodoroTimer {
     state: TimerState,
     focus_duration: Duration,
-    break_duration: Duration,
+    short_break_duration: Duration,
+    long_break_duration: Duration,
+    long_break_interval: NonZeroU32,
     remaining: Duration,
-    previous_state: Option<TimerState>,
     completed_focus_sessions: u32,
 }
 
 impl PomodoroTimer {
-    pub fn new(focus_duration: Duration, break_duration: Duration) -> Self {
+    pub fn new(
+        focus_duration: Duration,
+        short_break_duration: Duration,
+        long_break_duration: Duration,
+        long_break_interval: NonZeroU32,
+    ) -> Self {
         Self {
             state: TimerState::Ready(SessionKind::Focus),
             focus_duration,
-            break_duration,
+            short_break_duration,
+            long_break_duration,
+            long_break_interval,
             remaining: focus_duration,
-            previous_state: None,
             completed_focus_sessions: 0,
         }
     }
@@ -48,120 +64,109 @@ impl PomodoroTimer {
     pub fn completed_focus_sessions(&self) -> u32 {
         self.completed_focus_sessions
     }
-}
 
-impl PomodoroTimer {
+    pub fn progress(&self) -> Duration {
+        let session = self.session_kind();
+        self.duration_for(session).saturating_sub(self.remaining)
+    }
+
     pub fn primary_action(&mut self) {
         match self.state {
-            TimerState::Ready(SessionKind::Focus) => self.start_focus(),
-            TimerState::Ready(SessionKind::Break) => self.start_break(),
-            TimerState::Focus | TimerState::Break => self.pause(),
-            TimerState::Paused => self.resume(),
-            TimerState::Completed(SessionKind::Focus) => self.start_break(),
-            TimerState::Completed(SessionKind::Break) => self.start_focus(),
+            TimerState::Ready(session) => self.state = TimerState::Running(session),
+            TimerState::Running(_) => self.pause(),
+            TimerState::Paused(_) => self.resume(),
         }
     }
 
-    pub fn fast_forward(&mut self) {
-        let next_session = match self.current_session() {
-            Some(SessionKind::Break) => SessionKind::Focus,
-            Some(SessionKind::Focus) | None => SessionKind::Break,
+    pub fn select_next_session(&mut self) {
+        let TimerState::Ready(session) = self.state else {
+            return;
         };
 
-        self.state = TimerState::Ready(next_session);
-        self.remaining = self.duration_for(next_session);
-        self.previous_state = None;
+        self.select_session(session.next());
+    }
+
+    pub fn select_session(&mut self, session: SessionKind) {
+        if !matches!(self.state, TimerState::Ready(_)) {
+            return;
+        }
+
+        self.state = TimerState::Ready(session);
+        self.remaining = self.duration_for(session);
+    }
+
+    pub fn start_session(&mut self, session: SessionKind) {
+        if !matches!(self.state, TimerState::Ready(_)) {
+            return;
+        }
+
+        self.state = TimerState::Running(session);
+        self.remaining = self.duration_for(session);
+    }
+
+    pub fn pause(&mut self) {
+        if let TimerState::Running(session) = self.state {
+            self.state = TimerState::Paused(session);
+        }
+    }
+
+    pub fn resume(&mut self) {
+        if let TimerState::Paused(session) = self.state {
+            self.state = TimerState::Running(session);
+        }
     }
 
     pub fn reset_session(&mut self) {
         let session = match self.state {
-            TimerState::Focus => SessionKind::Focus,
-            TimerState::Break => SessionKind::Break,
-            TimerState::Paused => match self.previous_state {
-                Some(TimerState::Focus) => SessionKind::Focus,
-                Some(TimerState::Break) => SessionKind::Break,
-                _ => return,
-            },
-            TimerState::Ready(_) | TimerState::Completed(_) => return,
+            TimerState::Running(session) | TimerState::Paused(session) => session,
+            TimerState::Ready(_) => return,
         };
 
         self.state = TimerState::Ready(session);
         self.remaining = self.duration_for(session);
-        self.previous_state = None;
+    }
+
+    /// Advances a running session and returns its completion event exactly once.
+    pub fn tick(&mut self, elapsed: Duration) -> Option<SessionKind> {
+        let TimerState::Running(completed_session) = self.state else {
+            return None;
+        };
+
+        if elapsed < self.remaining {
+            self.remaining -= elapsed;
+            return None;
+        }
+
+        let next_session = match completed_session {
+            SessionKind::Focus => {
+                self.completed_focus_sessions = self.completed_focus_sessions.saturating_add(1);
+                if self.completed_focus_sessions % self.long_break_interval.get() == 0 {
+                    SessionKind::LongBreak
+                } else {
+                    SessionKind::ShortBreak
+                }
+            }
+            SessionKind::ShortBreak | SessionKind::LongBreak => SessionKind::Focus,
+        };
+
+        self.state = TimerState::Ready(next_session);
+        self.remaining = self.duration_for(next_session);
+        Some(completed_session)
+    }
+
+    fn session_kind(&self) -> SessionKind {
+        match self.state {
+            TimerState::Ready(session)
+            | TimerState::Running(session)
+            | TimerState::Paused(session) => session,
+        }
     }
 
     fn duration_for(&self, session: SessionKind) -> Duration {
         match session {
             SessionKind::Focus => self.focus_duration,
-            SessionKind::Break => self.break_duration,
-        }
-    }
-
-    fn current_session(&self) -> Option<SessionKind> {
-        match self.state {
-            TimerState::Ready(session) => Some(session),
-            TimerState::Focus => Some(SessionKind::Focus),
-            TimerState::Break => Some(SessionKind::Break),
-            TimerState::Paused => match self.previous_state {
-                Some(TimerState::Focus) => Some(SessionKind::Focus),
-                Some(TimerState::Break) => Some(SessionKind::Break),
-                _ => None,
-            },
-            TimerState::Completed(session) => Some(session),
-        }
-    }
-
-    fn start_focus(&mut self) {
-        self.state = TimerState::Focus;
-        self.remaining = self.focus_duration;
-        self.previous_state = None;
-    }
-
-    fn start_break(&mut self) {
-        self.state = TimerState::Break;
-        self.remaining = self.break_duration;
-        self.previous_state = None;
-    }
-
-    fn pause(&mut self) {
-        match self.state {
-            TimerState::Focus | TimerState::Break => {
-                self.previous_state = Some(self.state);
-                self.state = TimerState::Paused;
-            }
-            TimerState::Ready(_) | TimerState::Paused | TimerState::Completed(_) => {}
-        }
-    }
-
-    fn resume(&mut self) {
-        if self.state == TimerState::Paused
-            && let Some(previous_state) = self.previous_state
-        {
-            self.state = previous_state;
-            self.previous_state = None;
-        }
-    }
-
-    pub fn tick(&mut self, elapsed: Duration) {
-        match self.state {
-            TimerState::Focus | TimerState::Break => {
-                if elapsed >= self.remaining {
-                    self.remaining = Duration::ZERO;
-                    let completed_session = match self.state {
-                        TimerState::Focus => SessionKind::Focus,
-                        TimerState::Break => SessionKind::Break,
-                        _ => unreachable!("tick only completes a running session"),
-                    };
-                    if completed_session == SessionKind::Focus {
-                        self.completed_focus_sessions += 1;
-                    }
-                    self.state = TimerState::Completed(completed_session);
-                    self.previous_state = None;
-                } else {
-                    self.remaining -= elapsed;
-                }
-            }
-            TimerState::Ready(_) | TimerState::Paused | TimerState::Completed(_) => {}
+            SessionKind::ShortBreak => self.short_break_duration,
+            SessionKind::LongBreak => self.long_break_duration,
         }
     }
 }
@@ -170,8 +175,18 @@ impl PomodoroTimer {
 mod tests {
     use super::*;
 
+    const FOCUS: Duration = Duration::from_secs(25 * 60);
+    const SHORT_BREAK: Duration = Duration::from_secs(5 * 60);
+    const LONG_BREAK: Duration = Duration::from_secs(15 * 60);
+
     fn timer() -> PomodoroTimer {
-        PomodoroTimer::new(Duration::from_secs(25 * 60), Duration::from_secs(5 * 60))
+        PomodoroTimer::new(FOCUS, SHORT_BREAK, LONG_BREAK, NonZeroU32::new(4).unwrap())
+    }
+
+    fn complete(timer: &mut PomodoroTimer, session: SessionKind) {
+        timer.start_session(session);
+        let duration = timer.remaining();
+        assert_eq!(timer.tick(duration), Some(session));
     }
 
     #[test]
@@ -179,263 +194,203 @@ mod tests {
         let timer = timer();
 
         assert_eq!(timer.state(), TimerState::Ready(SessionKind::Focus));
-        assert_eq!(timer.remaining(), Duration::from_secs(25 * 60));
+        assert_eq!(timer.remaining(), FOCUS);
         assert_eq!(timer.completed_focus_sessions(), 0);
     }
 
     #[test]
-    fn primary_action_starts_focus_when_ready() {
-        let mut timer = timer();
+    fn primary_action_transitions_ready_running_paused_and_running_for_every_kind() {
+        for (session, selections, duration) in [
+            (SessionKind::Focus, 0, FOCUS),
+            (SessionKind::ShortBreak, 1, SHORT_BREAK),
+            (SessionKind::LongBreak, 2, LONG_BREAK),
+        ] {
+            let mut timer = timer();
+            for _ in 0..selections {
+                timer.select_next_session();
+            }
 
-        timer.primary_action();
+            timer.primary_action();
+            assert_eq!(timer.state(), TimerState::Running(session));
+            timer.tick(Duration::from_secs(1));
 
-        assert_eq!(timer.state(), TimerState::Focus);
-        assert_eq!(timer.remaining(), Duration::from_secs(25 * 60));
+            timer.primary_action();
+            assert_eq!(timer.state(), TimerState::Paused(session));
+            assert_eq!(timer.remaining(), duration - Duration::from_secs(1));
+
+            timer.primary_action();
+            assert_eq!(timer.state(), TimerState::Running(session));
+            assert_eq!(timer.remaining(), duration - Duration::from_secs(1));
+        }
     }
 
     #[test]
-    fn primary_action_pauses_a_running_session() {
+    fn ready_selection_cycles_all_session_kinds_without_starting() {
         let mut timer = timer();
-        timer.primary_action();
 
-        timer.primary_action();
-
-        assert_eq!(timer.state(), TimerState::Paused);
+        timer.select_next_session();
+        assert_eq!(timer.state(), TimerState::Ready(SessionKind::ShortBreak));
+        assert_eq!(timer.remaining(), SHORT_BREAK);
+        timer.select_next_session();
+        assert_eq!(timer.state(), TimerState::Ready(SessionKind::LongBreak));
+        assert_eq!(timer.remaining(), LONG_BREAK);
+        timer.select_next_session();
+        assert_eq!(timer.state(), TimerState::Ready(SessionKind::Focus));
+        assert_eq!(timer.remaining(), FOCUS);
     }
 
     #[test]
-    fn primary_action_resumes_a_paused_session() {
+    fn selection_does_nothing_while_running_or_paused() {
         let mut timer = timer();
         timer.primary_action();
-        timer.tick(Duration::from_secs(60));
+
+        timer.select_next_session();
+        assert_eq!(timer.state(), TimerState::Running(SessionKind::Focus));
         timer.primary_action();
 
-        timer.primary_action();
+        timer.select_next_session();
+        assert_eq!(timer.state(), TimerState::Paused(SessionKind::Focus));
+    }
 
-        assert_eq!(timer.state(), TimerState::Focus);
+    #[test]
+    fn explicit_session_controls_start_only_from_ready() {
+        let mut timer = timer();
+
+        timer.start_session(SessionKind::LongBreak);
+        assert_eq!(timer.state(), TimerState::Running(SessionKind::LongBreak));
+        assert_eq!(timer.remaining(), LONG_BREAK);
+
+        timer.start_session(SessionKind::ShortBreak);
+        assert_eq!(timer.state(), TimerState::Running(SessionKind::LongBreak));
+        timer.primary_action();
+        timer.start_session(SessionKind::Focus);
+        assert_eq!(timer.state(), TimerState::Paused(SessionKind::LongBreak));
+    }
+
+    #[test]
+    fn explicit_session_selection_changes_only_a_ready_timer() {
+        let mut timer = timer();
+
+        timer.select_session(SessionKind::LongBreak);
+        assert_eq!(timer.state(), TimerState::Ready(SessionKind::LongBreak));
+        assert_eq!(timer.remaining(), LONG_BREAK);
+
+        timer.primary_action();
+        timer.select_session(SessionKind::ShortBreak);
+        assert_eq!(timer.state(), TimerState::Running(SessionKind::LongBreak));
+
+        timer.primary_action();
+        timer.select_session(SessionKind::Focus);
+        assert_eq!(timer.state(), TimerState::Paused(SessionKind::LongBreak));
+    }
+
+    #[test]
+    fn tick_only_reduces_running_sessions() {
+        let mut timer = timer();
+
+        assert_eq!(timer.tick(Duration::from_secs(60)), None);
+        assert_eq!(timer.remaining(), FOCUS);
+        timer.primary_action();
+        assert_eq!(timer.tick(Duration::from_secs(60)), None);
+        assert_eq!(timer.remaining(), Duration::from_secs(24 * 60));
+        timer.primary_action();
+        assert_eq!(timer.tick(Duration::from_secs(60)), None);
         assert_eq!(timer.remaining(), Duration::from_secs(24 * 60));
     }
 
     #[test]
-    fn primary_action_starts_break_after_focus_completes() {
+    fn completion_is_an_event_and_immediately_prepares_the_next_session() {
         let mut timer = timer();
         timer.primary_action();
-        timer.tick(Duration::from_secs(25 * 60));
 
-        timer.primary_action();
-
-        assert_eq!(timer.state(), TimerState::Break);
-        assert_eq!(timer.remaining(), Duration::from_secs(5 * 60));
+        assert_eq!(timer.tick(FOCUS), Some(SessionKind::Focus));
+        assert_eq!(timer.state(), TimerState::Ready(SessionKind::ShortBreak));
+        assert_eq!(timer.remaining(), SHORT_BREAK);
+        assert_eq!(timer.tick(Duration::from_secs(1)), None);
+        assert_eq!(timer.completed_focus_sessions(), 1);
     }
 
     #[test]
-    fn primary_action_starts_focus_after_break_completes() {
+    fn focus_recommendations_cover_before_at_and_after_modulo_boundary() {
         let mut timer = timer();
-        timer.fast_forward();
-        timer.primary_action();
-        timer.tick(Duration::from_secs(5 * 60));
 
-        timer.primary_action();
-
-        assert_eq!(timer.state(), TimerState::Focus);
-        assert_eq!(timer.remaining(), Duration::from_secs(25 * 60));
+        for completed in 1..=5 {
+            complete(&mut timer, SessionKind::Focus);
+            let recommendation = if completed == 4 {
+                SessionKind::LongBreak
+            } else {
+                SessionKind::ShortBreak
+            };
+            assert_eq!(timer.state(), TimerState::Ready(recommendation));
+            assert_eq!(timer.completed_focus_sessions(), completed);
+        }
     }
 
     #[test]
-    fn fast_forward_selects_break_from_initial_focus() {
+    fn manual_overrides_do_not_shift_focus_recommendations() {
         let mut timer = timer();
 
-        timer.fast_forward();
+        for _ in 0..3 {
+            complete(&mut timer, SessionKind::Focus);
+            timer.select_next_session();
+            timer.select_next_session();
+        }
+        assert_eq!(timer.completed_focus_sessions(), 3);
 
-        assert_eq!(timer.state(), TimerState::Ready(SessionKind::Break));
-        assert_eq!(timer.remaining(), Duration::from_secs(5 * 60));
+        complete(&mut timer, SessionKind::Focus);
+        assert_eq!(timer.state(), TimerState::Ready(SessionKind::LongBreak));
     }
 
     #[test]
-    fn fast_forward_moves_between_session_types() {
-        let mut timer = timer();
+    fn both_break_kinds_complete_back_to_focus_without_changing_count() {
+        for session in [SessionKind::ShortBreak, SessionKind::LongBreak] {
+            let mut timer = timer();
 
-        timer.fast_forward();
-        assert_eq!(timer.state(), TimerState::Ready(SessionKind::Break));
-        assert_eq!(timer.remaining(), Duration::from_secs(5 * 60));
+            complete(&mut timer, session);
 
-        timer.fast_forward();
-        assert_eq!(timer.state(), TimerState::Ready(SessionKind::Focus));
-        assert_eq!(timer.remaining(), Duration::from_secs(25 * 60));
+            assert_eq!(timer.state(), TimerState::Ready(SessionKind::Focus));
+            assert_eq!(timer.remaining(), FOCUS);
+            assert_eq!(timer.completed_focus_sessions(), 0);
+        }
     }
 
     #[test]
-    fn fast_forward_uses_paused_session_type() {
-        let mut timer = timer();
-        timer.primary_action();
-        timer.primary_action();
+    fn reset_restores_full_duration_for_running_and_paused_sessions() {
+        for pause_first in [false, true] {
+            let mut timer = timer();
+            timer.start_session(SessionKind::LongBreak);
+            timer.tick(Duration::from_secs(60));
+            if pause_first {
+                timer.pause();
+            }
 
-        timer.fast_forward();
+            timer.reset_session();
 
-        assert_eq!(timer.state(), TimerState::Ready(SessionKind::Break));
+            assert_eq!(timer.state(), TimerState::Ready(SessionKind::LongBreak));
+            assert_eq!(timer.remaining(), LONG_BREAK);
+            assert_eq!(timer.progress(), Duration::ZERO);
+        }
     }
 
     #[test]
-    fn ready_session_starts_only_after_primary_action() {
+    fn reset_and_selection_do_not_change_completed_focus_count() {
         let mut timer = timer();
-        timer.fast_forward();
-
-        timer.tick(Duration::from_secs(60));
-        assert_eq!(timer.state(), TimerState::Ready(SessionKind::Break));
-        assert_eq!(timer.remaining(), Duration::from_secs(5 * 60));
-
-        timer.primary_action();
-        assert_eq!(timer.state(), TimerState::Break);
-    }
-
-    #[test]
-    fn reset_session_returns_running_session_to_ready() {
-        let mut timer = timer();
-        timer.primary_action();
-        timer.tick(Duration::from_secs(60));
-
-        timer.reset_session();
-
-        assert_eq!(timer.state(), TimerState::Ready(SessionKind::Focus));
-        assert_eq!(timer.remaining(), Duration::from_secs(25 * 60));
-    }
-
-    #[test]
-    fn reset_session_returns_paused_break_to_ready() {
-        let mut timer = timer();
-        timer.fast_forward();
-        timer.primary_action();
-        timer.tick(Duration::from_secs(60));
-        timer.primary_action();
-
-        timer.reset_session();
-
-        assert_eq!(timer.state(), TimerState::Ready(SessionKind::Break));
-        assert_eq!(timer.remaining(), Duration::from_secs(5 * 60));
-    }
-
-    #[test]
-    fn reset_session_returns_paused_focus_to_ready() {
-        let mut timer = timer();
-        timer.primary_action();
-        timer.tick(Duration::from_secs(60));
-        timer.primary_action();
-
-        timer.reset_session();
-
-        assert_eq!(timer.state(), TimerState::Ready(SessionKind::Focus));
-        assert_eq!(timer.remaining(), Duration::from_secs(25 * 60));
-    }
-
-    #[test]
-    fn reset_session_does_nothing_after_completion() {
-        let mut timer = timer();
-        timer.fast_forward();
-        timer.primary_action();
-        timer.tick(Duration::from_secs(5 * 60));
-
-        timer.reset_session();
-
-        assert_eq!(timer.state(), TimerState::Completed(SessionKind::Break));
-        assert_eq!(timer.remaining(), Duration::ZERO);
-    }
-
-    #[test]
-    fn reset_session_does_nothing_when_ready() {
-        let mut timer = timer();
-
-        timer.reset_session();
-        assert_eq!(timer.state(), TimerState::Ready(SessionKind::Focus));
-
-        timer.fast_forward();
-        timer.reset_session();
-        assert_eq!(timer.state(), TimerState::Ready(SessionKind::Break));
-        assert_eq!(timer.remaining(), Duration::from_secs(5 * 60));
-    }
-
-    #[test]
-    fn tick_reduces_remaining_time_while_focus_is_running() {
-        let mut timer = timer();
-
-        timer.primary_action();
-        timer.tick(Duration::from_secs(60));
-
-        assert_eq!(timer.state(), TimerState::Focus);
-        assert_eq!(timer.remaining(), Duration::from_secs(24 * 60));
-    }
-
-    #[test]
-    fn tick_completes_timer_when_elapsed_reaches_remaining_time() {
-        let mut timer = PomodoroTimer::new(Duration::from_secs(10), Duration::from_secs(5));
-
         timer.primary_action();
         timer.tick(Duration::from_secs(10));
-
-        assert_eq!(timer.state(), TimerState::Completed(SessionKind::Focus));
-        assert_eq!(timer.remaining(), Duration::ZERO);
-    }
-
-    #[test]
-    fn paused_timer_does_not_tick_down() {
-        let mut timer = timer();
-
-        timer.primary_action();
-        timer.primary_action();
-        timer.tick(Duration::from_secs(60));
-
-        assert_eq!(timer.state(), TimerState::Paused);
-        assert_eq!(timer.remaining(), Duration::from_secs(25 * 60));
-    }
-
-    #[test]
-    fn completing_focus_increments_completed_focus_sessions() {
-        let mut timer = timer();
-        timer.primary_action();
-
-        timer.tick(Duration::from_secs(25 * 60));
-
-        assert_eq!(timer.completed_focus_sessions(), 1);
-    }
-
-    #[test]
-    fn completing_break_does_not_increment_completed_focus_sessions() {
-        let mut timer = timer();
-        timer.fast_forward();
-        timer.primary_action();
-
-        timer.tick(Duration::from_secs(5 * 60));
+        timer.reset_session();
+        timer.select_next_session();
 
         assert_eq!(timer.completed_focus_sessions(), 0);
     }
 
     #[test]
-    fn repeated_ticks_after_focus_completion_increment_only_once() {
+    fn reset_does_nothing_to_a_ready_session() {
         let mut timer = timer();
-        timer.primary_action();
-
-        timer.tick(Duration::from_secs(25 * 60));
-        timer.tick(Duration::from_secs(1));
-
-        assert_eq!(timer.completed_focus_sessions(), 1);
-    }
-
-    #[test]
-    fn fast_forward_does_not_increment_completed_focus_sessions() {
-        let mut timer = timer();
-        timer.primary_action();
-
-        timer.fast_forward();
-
-        assert_eq!(timer.completed_focus_sessions(), 0);
-    }
-
-    #[test]
-    fn resetting_focus_does_not_increment_completed_focus_sessions() {
-        let mut timer = timer();
-        timer.primary_action();
+        timer.select_next_session();
 
         timer.reset_session();
 
-        assert_eq!(timer.completed_focus_sessions(), 0);
+        assert_eq!(timer.state(), TimerState::Ready(SessionKind::ShortBreak));
+        assert_eq!(timer.remaining(), SHORT_BREAK);
     }
 }
