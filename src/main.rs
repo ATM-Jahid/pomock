@@ -15,6 +15,7 @@ use std::time::{Duration, Instant};
 
 use pomock::{
     app::{App, AppOutcome, EditMode},
+    config::Config,
     input::map_key,
     ui::{click_target, draw},
 };
@@ -48,12 +49,13 @@ fn advance_timer(app: &mut App, last_tick: &mut Instant, now: Instant) -> AppOut
     app.tick(elapsed)
 }
 
-fn main() -> std::io::Result<()> {
+fn main() -> Result<(), Box<dyn std::error::Error>> {
+    let config = Config::load()?;
     let mut session = TerminalSession::start()?;
-    let run_result = run_app(session.terminal_mut());
+    let run_result = run_app(session.terminal_mut(), &config);
     let restore_result = session.restore();
 
-    combine_run_and_restore_results(run_result, restore_result)
+    Ok(combine_run_and_restore_results(run_result, restore_result)?)
 }
 
 struct TerminalSession {
@@ -173,8 +175,11 @@ fn combine_run_and_restore_results(
     }
 }
 
-fn run_app(terminal: &mut Terminal<CrosstermBackend<Stdout>>) -> std::io::Result<()> {
-    let mut app = App::new();
+fn run_app(
+    terminal: &mut Terminal<CrosstermBackend<Stdout>>,
+    config: &Config,
+) -> std::io::Result<()> {
+    let mut app = App::from_config(config);
 
     let mut last_tick = Instant::now();
 

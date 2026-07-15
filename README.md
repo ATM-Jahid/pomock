@@ -5,10 +5,10 @@ built with [Ratatui](https://ratatui.rs/)
 and [Crossterm](https://github.com/crossterm-rs/crossterm).
 
 > [!IMPORTANT]
-> pomock is in early development.
+> `pomock` is in early development.
 > The timer, in-memory task workflow, keyboard controls,
 > and mouse controls work today.
-> Configuration, persistence, and notifications are planned
+> Task persistence, settings UI, and notifications are planned
 > but are not implemented yet.
 
 ## Current features
@@ -17,12 +17,13 @@ and [Crossterm](https://github.com/crossterm-rs/crossterm).
   with start, pause, resume, reset, and cycle-session controls.
 - Editable to-do and completed-task lists.
 - Keyboard and mouse navigation.
+- TOML configuration for session durations and the long-break interval.
 
-Tasks and the completed-focus count currently reset when pomock exits.
+Tasks and the completed-focus count currently reset when `pomock` exits.
 
 ## Run from source
 
-pomock currently targets Rust 2024 and requires a recent stable Rust toolchain.
+`pomock` currently targets Rust 2024 and requires a recent stable Rust toolchain.
 
 ```sh
 git clone https://github.com/ATM-Jahid/pomock.git
@@ -74,8 +75,26 @@ While adding or editing, type normally, press Enter to submit,
 or press Esc to cancel.
 Mouse input is ignored until text entry finishes.
 
+## Configuration
+
+On first run,
+`pomock` uses these defaults without requiring a configuration file:
+
+```toml
+[timer]
+focus_minutes = 25
+short_break_minutes = 5
+long_break_minutes = 15
+long_break_interval = 4
+```
+
+To customize them, create `pomock/config.toml`
+in your platform's standard user configuration directory
+(for example, `$XDG_CONFIG_HOME` or `~/.config` on Linux).
+All duration values and `long_break_interval` must be greater than zero.
+
 ## License
 
 Copyright (C) 2026 ATM Jahid Hasan<br>
-**pomock** is released under the
+`pomock` is released under the
 [GNU AGPL](https://www.gnu.org/licenses/agpl-3.0.en.html).

@@ -1,10 +1,8 @@
-use std::{
-    num::NonZeroU32,
-    time::{Duration, Instant},
-};
+use std::time::{Duration, Instant};
 
 use crate::{
     SessionKind,
+    config::Config,
     tasks::TaskList,
     timer::{PomodoroTimer, TimerState},
 };
@@ -135,12 +133,18 @@ pub struct App {
 impl App {
     /// Creates an application with the current default durations and no tasks.
     pub fn new() -> Self {
+        Self::from_config(&Config::default())
+    }
+
+    /// Creates an application using validated durable configuration.
+    pub fn from_config(config: &Config) -> Self {
+        let timer = config.timer();
         Self {
             timer: PomodoroTimer::new(
-                Duration::from_secs(25 * 60),
-                Duration::from_secs(5 * 60),
-                Duration::from_secs(15 * 60),
-                NonZeroU32::new(4).expect("the default long-break interval is positive"),
+                timer.focus_duration(),
+                timer.short_break_duration(),
+                timer.long_break_duration(),
+                timer.long_break_interval(),
             ),
             tasks: TaskList::new(),
             ui_focus: UiFocus::Clock,
@@ -648,7 +652,10 @@ impl Default for App {
 mod tests {
     use std::time::{Duration, Instant};
 
-    use crate::timer::{SessionKind, TimerState};
+    use crate::{
+        config::{Config, TimerConfig},
+        timer::{SessionKind, TimerState},
+    };
 
     use super::{
         Action, App, AppOutcome, ClickTarget, ConfirmationOperation, Direction, EditMode,
@@ -679,6 +686,27 @@ mod tests {
             let _ = app.dispatch(Action::PrimaryAction);
         }
         app
+    }
+
+    #[test]
+    fn configured_durations_and_interval_drive_the_timer() {
+        let config = Config::new(TimerConfig::new(2, 1, 3, 2).unwrap()).unwrap();
+        let mut app = App::from_config(&config);
+
+        assert_eq!(app.timer().remaining(), Duration::from_secs(2 * 60));
+
+        for expected_next in [SessionKind::ShortBreak, SessionKind::LongBreak] {
+            let _ = app.dispatch(Action::PrimaryAction);
+            assert_eq!(
+                app.tick(Duration::from_secs(2 * 60)),
+                AppOutcome::SessionCompleted(SessionKind::Focus)
+            );
+            assert_eq!(app.timer().state(), TimerState::Ready(expected_next));
+            let _ = app.dispatch(Action::CycleSession);
+            if expected_next == SessionKind::ShortBreak {
+                let _ = app.dispatch(Action::CycleSession);
+            }
+        }
     }
 
     #[test]

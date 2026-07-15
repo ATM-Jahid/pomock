@@ -11,6 +11,7 @@
 //! stable third-party library interface.
 
 pub mod app;
+pub mod config;
 mod display;
 pub mod input;
 mod tasks;
