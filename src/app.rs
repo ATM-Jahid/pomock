@@ -10,7 +10,7 @@ use crate::{
 };
 
 const DOUBLE_CLICK_WINDOW: Duration = Duration::from_millis(500);
-const RESET_CONFIRMATION_THRESHOLD: Duration = Duration::from_secs(10);
+const PROGRESS_CONFIRMATION_THRESHOLD: Duration = Duration::from_secs(10);
 
 /// The application area that currently receives contextual commands.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -36,10 +36,10 @@ pub enum Action {
     NavigateFocus(Direction),
     MoveSelection(Direction),
     PrimaryAction,
-    SelectNextSession,
+    CycleSession,
     ResetSession,
-    ConfirmReset,
-    CancelReset,
+    ConfirmPendingAction,
+    CancelPendingAction,
     BeginAdd,
     EditSelected,
     DeleteSelected,
@@ -91,9 +91,29 @@ pub enum ClickTarget {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum PendingReset {
-    ResumeOnCancel,
-    StayPaused,
+pub(crate) enum TimerChange {
+    Reset,
+    Cycle,
+    SelectSession(SessionKind),
+    StartSession(SessionKind),
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum ConfirmationOperation {
+    Quit,
+    TimerChange(TimerChange),
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum PriorActivity {
+    Running,
+    Paused,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct PendingConfirmation {
+    operation: ConfirmationOperation,
+    prior_activity: PriorActivity,
 }
 
 /// Runtime application state and terminal-independent state transitions.
@@ -109,7 +129,7 @@ pub struct App {
     edit_mode: EditMode,
     input: String,
     last_click: Option<(ClickTarget, Instant)>,
-    pending_reset: Option<PendingReset>,
+    pending_confirmation: Option<PendingConfirmation>,
 }
 
 impl App {
@@ -131,7 +151,7 @@ impl App {
             edit_mode: EditMode::Normal,
             input: String::new(),
             last_click: None,
-            pending_reset: None,
+            pending_confirmation: None,
         }
     }
 
@@ -145,17 +165,19 @@ impl App {
 
     /// Applies a semantic action without depending on its physical key mapping.
     pub fn dispatch(&mut self, action: Action) -> AppOutcome {
-        if self.pending_reset.is_some() {
-            match action {
-                Action::ConfirmReset => self.confirm_reset(),
-                Action::CancelReset => self.cancel_reset(),
-                _ => {}
-            }
-            return AppOutcome::None;
+        if self.pending_confirmation.is_some() {
+            return match action {
+                Action::ConfirmPendingAction => self.confirm_pending_action(),
+                Action::CancelPendingAction => {
+                    self.cancel_pending_action();
+                    AppOutcome::None
+                }
+                _ => AppOutcome::None,
+            };
         }
 
         match action {
-            Action::Quit => return AppOutcome::Quit,
+            Action::Quit => return self.request_quit(),
             Action::NavigateFocus(direction) => self.navigate_focus(direction),
             Action::MoveSelection(direction) => match self.ui_focus {
                 UiFocus::Clock => {}
@@ -167,9 +189,9 @@ impl App {
                 UiFocus::Todo => self.complete_selected_todo(),
                 UiFocus::Done => self.return_selected_done(),
             },
-            Action::SelectNextSession => self.select_next_session(),
+            Action::CycleSession => self.cycle_session(),
             Action::ResetSession => self.reset_session(),
-            Action::ConfirmReset | Action::CancelReset => {}
+            Action::ConfirmPendingAction | Action::CancelPendingAction => {}
             Action::BeginAdd => self.begin_add(),
             Action::EditSelected => match self.ui_focus {
                 UiFocus::Clock => {}
@@ -207,9 +229,13 @@ impl App {
         self.edit_mode
     }
 
-    /// Reports whether reset confirmation currently owns keyboard and mouse input.
-    pub fn is_reset_confirmation_open(&self) -> bool {
-        self.pending_reset.is_some()
+    /// Reports whether a confirmation owns keyboard and mouse input.
+    pub fn is_confirmation_open(&self) -> bool {
+        self.pending_confirmation.is_some()
+    }
+
+    pub(crate) fn pending_confirmation(&self) -> Option<ConfirmationOperation> {
+        self.pending_confirmation.map(|pending| pending.operation)
     }
 
     pub(crate) fn input(&self) -> &str {
@@ -294,37 +320,100 @@ impl App {
         self.timer.primary_action();
     }
 
-    fn select_next_session(&mut self) {
-        self.timer.select_next_session();
+    fn cycle_session(&mut self) {
+        self.request_timer_change(TimerChange::Cycle);
     }
 
     fn reset_session(&mut self) {
-        let pending_reset = match self.timer.state() {
-            TimerState::Running(_) => PendingReset::ResumeOnCancel,
-            TimerState::Paused(_) => PendingReset::StayPaused,
-            TimerState::Ready(_) => return,
+        self.request_timer_change(TimerChange::Reset);
+    }
+
+    fn request_quit(&mut self) -> AppOutcome {
+        let prior_activity = match self.timer.state() {
+            TimerState::Running(_) => PriorActivity::Running,
+            TimerState::Paused(_) => PriorActivity::Paused,
+            TimerState::Ready(_) => return AppOutcome::Quit,
         };
 
-        if self.timer.progress() < RESET_CONFIRMATION_THRESHOLD {
-            self.timer.reset_session();
+        if self.timer.progress() < PROGRESS_CONFIRMATION_THRESHOLD {
+            return AppOutcome::Quit;
+        }
+
+        self.timer.pause();
+        self.pending_confirmation = Some(PendingConfirmation {
+            operation: ConfirmationOperation::Quit,
+            prior_activity,
+        });
+        self.clear_pending_click();
+        AppOutcome::None
+    }
+
+    fn request_timer_change(&mut self, change: TimerChange) {
+        let prior_activity = match self.timer.state() {
+            TimerState::Running(_) => PriorActivity::Running,
+            TimerState::Paused(_) => PriorActivity::Paused,
+            TimerState::Ready(_) => {
+                match change {
+                    TimerChange::Reset => {}
+                    TimerChange::Cycle => self.timer.cycle_ready_session(),
+                    TimerChange::SelectSession(session) => self.timer.select_session(session),
+                    TimerChange::StartSession(session) => self.timer.start_session(session),
+                }
+                return;
+            }
+        };
+
+        if self.timer.progress() < PROGRESS_CONFIRMATION_THRESHOLD {
+            self.apply_timer_change(change);
             return;
         }
 
         self.timer.pause();
-        self.pending_reset = Some(pending_reset);
+        self.pending_confirmation = Some(PendingConfirmation {
+            operation: ConfirmationOperation::TimerChange(change),
+            prior_activity,
+        });
         self.clear_pending_click();
     }
 
-    fn confirm_reset(&mut self) {
+    fn apply_timer_change(&mut self, change: TimerChange) {
         self.timer.reset_session();
-        self.pending_reset = None;
+        match change {
+            TimerChange::Reset => {}
+            TimerChange::Cycle => self.timer.cycle_ready_session(),
+            TimerChange::SelectSession(session) => self.timer.select_session(session),
+            TimerChange::StartSession(session) => self.timer.start_session(session),
+        }
     }
 
-    fn cancel_reset(&mut self) {
-        if self.pending_reset == Some(PendingReset::ResumeOnCancel) {
+    fn confirm_pending_action(&mut self) -> AppOutcome {
+        let outcome = match self.pending_confirmation.take() {
+            Some(PendingConfirmation {
+                operation: ConfirmationOperation::Quit,
+                ..
+            }) => AppOutcome::Quit,
+            Some(PendingConfirmation {
+                operation: ConfirmationOperation::TimerChange(change),
+                ..
+            }) => {
+                self.apply_timer_change(change);
+                AppOutcome::None
+            }
+            None => AppOutcome::None,
+        };
+        self.clear_pending_click();
+        outcome
+    }
+
+    fn cancel_pending_action(&mut self) {
+        let resume = self
+            .pending_confirmation
+            .take()
+            .is_some_and(|pending| pending.prior_activity == PriorActivity::Running);
+        if resume {
             self.timer.resume();
         }
-        self.pending_reset = None;
+        self.clear_pending_click();
     }
 
     fn move_todo_selection(&mut self, direction: Direction) {
@@ -379,7 +468,12 @@ impl App {
 
     /// Applies a semantic click after the UI boundary performs hit testing.
     pub fn handle_click_target(&mut self, target: ClickTarget, now: Instant) {
-        if self.edit_mode != EditMode::Normal || self.pending_reset.is_some() {
+        if self.edit_mode != EditMode::Normal {
+            return;
+        }
+
+        if self.pending_confirmation.is_some() {
+            self.upgrade_pending_session_click(target, now);
             return;
         }
 
@@ -390,14 +484,29 @@ impl App {
             }
             ClickTarget::SessionControl(session) => {
                 self.focus(UiFocus::Clock);
-                if !matches!(self.timer.state(), TimerState::Ready(_)) {
-                    self.clear_pending_click();
-                } else if self.is_double_click(target, now) {
-                    self.timer.start_session(session);
-                    self.clear_pending_click();
-                } else {
-                    self.timer.select_session(session);
-                    self.last_click = Some((target, now));
+                match self.timer.state() {
+                    TimerState::Ready(_) => {
+                        if self.is_double_click(target, now) {
+                            self.timer.start_session(session);
+                            self.clear_pending_click();
+                        } else {
+                            self.timer.select_session(session);
+                            self.last_click = Some((target, now));
+                        }
+                    }
+                    TimerState::Running(active_session) | TimerState::Paused(active_session) => {
+                        if session == active_session {
+                            if self.is_double_click(target, now) {
+                                self.clock_primary_action();
+                                self.clear_pending_click();
+                            } else {
+                                self.last_click = Some((target, now));
+                            }
+                        } else {
+                            self.request_timer_change(TimerChange::SelectSession(session));
+                            self.last_click = Some((target, now));
+                        }
+                    }
                 }
             }
             ClickTarget::Todo => {
@@ -424,6 +533,25 @@ impl App {
 
     fn clear_pending_click(&mut self) {
         self.last_click = None;
+    }
+
+    fn upgrade_pending_session_click(&mut self, target: ClickTarget, now: Instant) {
+        let ClickTarget::SessionControl(session) = target else {
+            return;
+        };
+        let should_upgrade = self.pending_confirmation.is_some_and(|pending| {
+            pending.operation
+                == ConfirmationOperation::TimerChange(TimerChange::SelectSession(session))
+                && self.is_double_click(target, now)
+        });
+
+        if should_upgrade {
+            if let Some(pending) = &mut self.pending_confirmation {
+                pending.operation =
+                    ConfirmationOperation::TimerChange(TimerChange::StartSession(session));
+            }
+            self.clear_pending_click();
+        }
     }
 
     fn handle_actionable_click(&mut self, target: ClickTarget, now: Instant) {
@@ -522,7 +650,10 @@ mod tests {
 
     use crate::timer::{SessionKind, TimerState};
 
-    use super::{Action, App, AppOutcome, ClickTarget, Direction, EditMode, UiFocus};
+    use super::{
+        Action, App, AppOutcome, ClickTarget, ConfirmationOperation, Direction, EditMode,
+        TimerChange, UiFocus,
+    };
 
     fn add_task(app: &mut App, description: &str) {
         let _ = app.dispatch(Action::NavigateFocus(Direction::Down));
@@ -538,6 +669,16 @@ mod tests {
         let target = ClickTarget::SessionControl(session);
         app.handle_click_target(target, first_click);
         app.handle_click_target(target, first_click + Duration::from_millis(100));
+    }
+
+    fn active_focus(progress: Duration, pause: bool) -> App {
+        let mut app = App::new();
+        let _ = app.dispatch(Action::PrimaryAction);
+        let _ = app.tick(progress);
+        if pause {
+            let _ = app.dispatch(Action::PrimaryAction);
+        }
+        app
     }
 
     #[test]
@@ -585,6 +726,60 @@ mod tests {
             AppOutcome::None
         );
         assert_eq!(app.dispatch(Action::Quit), AppOutcome::Quit);
+    }
+
+    #[test]
+    fn quit_below_ten_seconds_is_immediate_for_running_and_paused_sessions() {
+        for initially_paused in [false, true] {
+            let mut app = active_focus(Duration::from_secs(9), initially_paused);
+
+            assert_eq!(app.dispatch(Action::Quit), AppOutcome::Quit);
+            assert!(!app.is_confirmation_open());
+        }
+    }
+
+    #[test]
+    fn quit_at_ten_seconds_pauses_and_requests_confirmation() {
+        for initially_paused in [false, true] {
+            let mut app = active_focus(Duration::from_secs(10), initially_paused);
+
+            assert_eq!(app.dispatch(Action::Quit), AppOutcome::None);
+
+            assert!(app.is_confirmation_open());
+            assert_eq!(
+                app.pending_confirmation(),
+                Some(ConfirmationOperation::Quit)
+            );
+            assert_eq!(app.timer().state(), TimerState::Paused(SessionKind::Focus));
+            assert_eq!(app.timer().remaining(), Duration::from_secs(25 * 60 - 10));
+        }
+    }
+
+    #[test]
+    fn confirming_quit_emits_quit_outcome() {
+        let mut app = active_focus(Duration::from_secs(10), false);
+        assert_eq!(app.dispatch(Action::Quit), AppOutcome::None);
+
+        assert_eq!(app.dispatch(Action::ConfirmPendingAction), AppOutcome::Quit);
+        assert!(!app.is_confirmation_open());
+    }
+
+    #[test]
+    fn cancelling_quit_restores_running_but_preserves_paused() {
+        for initially_paused in [false, true] {
+            let mut app = active_focus(Duration::from_secs(10), initially_paused);
+            let _ = app.dispatch(Action::Quit);
+
+            assert_eq!(app.dispatch(Action::CancelPendingAction), AppOutcome::None);
+
+            let expected = if initially_paused {
+                TimerState::Paused(SessionKind::Focus)
+            } else {
+                TimerState::Running(SessionKind::Focus)
+            };
+            assert_eq!(app.timer().state(), expected);
+            assert_eq!(app.timer().remaining(), Duration::from_secs(25 * 60 - 10));
+        }
     }
 
     #[test]
@@ -742,7 +937,7 @@ mod tests {
 
         let _ = app.dispatch(Action::ResetSession);
 
-        assert!(!app.is_reset_confirmation_open());
+        assert!(!app.is_confirmation_open());
         assert_eq!(app.timer().state(), TimerState::Ready(SessionKind::Focus));
         assert_eq!(app.timer().remaining(), Duration::from_secs(25 * 60));
     }
@@ -755,7 +950,7 @@ mod tests {
 
         let _ = app.dispatch(Action::ResetSession);
 
-        assert!(app.is_reset_confirmation_open());
+        assert!(app.is_confirmation_open());
         assert_eq!(app.timer().state(), TimerState::Paused(SessionKind::Focus));
         assert_eq!(app.timer().remaining(), Duration::from_secs(25 * 60 - 10));
     }
@@ -767,9 +962,9 @@ mod tests {
         let _ = app.tick(Duration::from_secs(10));
         let _ = app.dispatch(Action::ResetSession);
 
-        let _ = app.dispatch(Action::ConfirmReset);
+        let _ = app.dispatch(Action::ConfirmPendingAction);
 
-        assert!(!app.is_reset_confirmation_open());
+        assert!(!app.is_confirmation_open());
         assert_eq!(
             app.timer().state(),
             TimerState::Ready(SessionKind::LongBreak)
@@ -783,7 +978,7 @@ mod tests {
         let _ = running.dispatch(Action::PrimaryAction);
         let _ = running.tick(Duration::from_secs(10));
         let _ = running.dispatch(Action::ResetSession);
-        let _ = running.dispatch(Action::CancelReset);
+        let _ = running.dispatch(Action::CancelPendingAction);
         assert_eq!(
             running.timer().state(),
             TimerState::Running(SessionKind::Focus)
@@ -794,7 +989,7 @@ mod tests {
         let _ = paused.tick(Duration::from_secs(10));
         let _ = paused.dispatch(Action::PrimaryAction);
         let _ = paused.dispatch(Action::ResetSession);
-        let _ = paused.dispatch(Action::CancelReset);
+        let _ = paused.dispatch(Action::CancelPendingAction);
         assert_eq!(
             paused.timer().state(),
             TimerState::Paused(SessionKind::Focus)
@@ -802,11 +997,11 @@ mod tests {
     }
 
     #[test]
-    fn reset_confirmation_ignores_unrelated_actions_and_mouse() {
+    fn confirmation_ignores_unrelated_actions_and_mouse() {
         let mut app = App::new();
         let _ = app.dispatch(Action::PrimaryAction);
         let _ = app.tick(Duration::from_secs(10));
-        let _ = app.dispatch(Action::ResetSession);
+        let _ = app.dispatch(Action::CycleSession);
         let focus = app.ui_focus();
         let remaining = app.timer().remaining();
 
@@ -815,10 +1010,115 @@ mod tests {
         let _ = app.dispatch(Action::NavigateFocus(Direction::Down));
         app.handle_click_target(ClickTarget::Todo, Instant::now());
 
-        assert!(app.is_reset_confirmation_open());
+        assert!(app.is_confirmation_open());
         assert_eq!(app.ui_focus(), focus);
         assert_eq!(app.timer().remaining(), remaining);
         assert_eq!(app.timer().state(), TimerState::Paused(SessionKind::Focus));
+    }
+
+    #[test]
+    fn ready_session_cycles_without_starting() {
+        let mut app = App::new();
+
+        let _ = app.dispatch(Action::CycleSession);
+
+        assert_eq!(
+            app.timer().state(),
+            TimerState::Ready(SessionKind::ShortBreak)
+        );
+        assert_eq!(app.timer().remaining(), Duration::from_secs(5 * 60));
+    }
+
+    #[test]
+    fn cycling_below_ten_seconds_immediately_discards_progress() {
+        for pause_first in [false, true] {
+            let mut app = App::new();
+            let _ = app.dispatch(Action::PrimaryAction);
+            let _ = app.tick(Duration::from_secs(9));
+            if pause_first {
+                let _ = app.dispatch(Action::PrimaryAction);
+            }
+
+            let _ = app.dispatch(Action::CycleSession);
+
+            assert!(!app.is_confirmation_open());
+            assert_eq!(
+                app.timer().state(),
+                TimerState::Ready(SessionKind::ShortBreak)
+            );
+            assert_eq!(app.timer().remaining(), Duration::from_secs(5 * 60));
+        }
+    }
+
+    #[test]
+    fn cycling_at_ten_seconds_pauses_and_requests_confirmation() {
+        for pause_first in [false, true] {
+            let mut app = App::new();
+            let _ = app.dispatch(Action::PrimaryAction);
+            let _ = app.tick(Duration::from_secs(10));
+            if pause_first {
+                let _ = app.dispatch(Action::PrimaryAction);
+            }
+
+            let _ = app.dispatch(Action::CycleSession);
+
+            assert!(app.is_confirmation_open());
+            assert_eq!(
+                app.pending_confirmation(),
+                Some(ConfirmationOperation::TimerChange(TimerChange::Cycle))
+            );
+            assert_eq!(app.timer().state(), TimerState::Paused(SessionKind::Focus));
+            assert_eq!(app.timer().remaining(), Duration::from_secs(25 * 60 - 10));
+        }
+    }
+
+    #[test]
+    fn confirming_cycle_discards_progress_and_prepares_following_session() {
+        let mut app = App::new();
+        let _ = app.dispatch(Action::PrimaryAction);
+        let _ = app.tick(Duration::from_secs(10));
+        let _ = app.dispatch(Action::CycleSession);
+
+        let _ = app.dispatch(Action::ConfirmPendingAction);
+
+        assert!(!app.is_confirmation_open());
+        assert_eq!(
+            app.timer().state(),
+            TimerState::Ready(SessionKind::ShortBreak)
+        );
+        assert_eq!(app.timer().remaining(), Duration::from_secs(5 * 60));
+    }
+
+    #[test]
+    fn cancelling_cycle_restores_running_but_preserves_paused() {
+        let mut running = App::new();
+        let _ = running.dispatch(Action::PrimaryAction);
+        let _ = running.tick(Duration::from_secs(10));
+        let _ = running.dispatch(Action::CycleSession);
+        let _ = running.dispatch(Action::CancelPendingAction);
+        assert_eq!(
+            running.timer().state(),
+            TimerState::Running(SessionKind::Focus)
+        );
+        assert_eq!(
+            running.timer().remaining(),
+            Duration::from_secs(25 * 60 - 10)
+        );
+
+        let mut paused = App::new();
+        let _ = paused.dispatch(Action::PrimaryAction);
+        let _ = paused.tick(Duration::from_secs(10));
+        let _ = paused.dispatch(Action::PrimaryAction);
+        let _ = paused.dispatch(Action::CycleSession);
+        let _ = paused.dispatch(Action::CancelPendingAction);
+        assert_eq!(
+            paused.timer().state(),
+            TimerState::Paused(SessionKind::Focus)
+        );
+        assert_eq!(
+            paused.timer().remaining(),
+            Duration::from_secs(25 * 60 - 10)
+        );
     }
 
     #[test]
@@ -866,29 +1166,167 @@ mod tests {
     }
 
     #[test]
-    fn session_controls_do_not_replace_running_or_paused_sessions() {
-        let mut app = App::new();
+    fn double_clicking_active_session_control_pauses_or_resumes() {
+        for (initially_paused, expected) in [
+            (false, TimerState::Paused(SessionKind::Focus)),
+            (true, TimerState::Running(SessionKind::Focus)),
+        ] {
+            let mut app = active_focus(Duration::from_secs(10), initially_paused);
+            let now = Instant::now();
+            let target = ClickTarget::SessionControl(SessionKind::Focus);
+
+            app.handle_click_target(target, now);
+            assert!(!app.is_confirmation_open());
+            app.handle_click_target(target, now + Duration::from_millis(100));
+
+            assert_eq!(app.timer().state(), expected);
+            assert_eq!(app.timer().remaining(), Duration::from_secs(25 * 60 - 10));
+        }
+    }
+
+    #[test]
+    fn single_clicking_different_session_below_threshold_selects_it_immediately() {
+        for initially_paused in [false, true] {
+            let mut app = active_focus(Duration::from_secs(9), initially_paused);
+
+            app.handle_click_target(
+                ClickTarget::SessionControl(SessionKind::ShortBreak),
+                Instant::now(),
+            );
+
+            assert!(!app.is_confirmation_open());
+            assert_eq!(
+                app.timer().state(),
+                TimerState::Ready(SessionKind::ShortBreak)
+            );
+            assert_eq!(app.timer().remaining(), Duration::from_secs(5 * 60));
+        }
+    }
+
+    #[test]
+    fn single_clicking_different_session_at_threshold_confirms_selection() {
+        for initially_paused in [false, true] {
+            let mut app = active_focus(Duration::from_secs(10), initially_paused);
+            let now = Instant::now();
+            let target = ClickTarget::SessionControl(SessionKind::LongBreak);
+
+            app.handle_click_target(target, now);
+
+            assert_eq!(
+                app.pending_confirmation(),
+                Some(ConfirmationOperation::TimerChange(
+                    TimerChange::SelectSession(SessionKind::LongBreak)
+                ))
+            );
+            let _ = app.dispatch(Action::ConfirmPendingAction);
+            assert_eq!(
+                app.timer().state(),
+                TimerState::Ready(SessionKind::LongBreak)
+            );
+            assert_eq!(app.timer().remaining(), Duration::from_secs(15 * 60));
+
+            app.handle_click_target(target, now + Duration::from_millis(100));
+            assert_eq!(
+                app.timer().state(),
+                TimerState::Ready(SessionKind::LongBreak)
+            );
+        }
+    }
+
+    #[test]
+    fn double_clicking_different_session_below_threshold_starts_it_immediately() {
+        for initially_paused in [false, true] {
+            let mut app = active_focus(Duration::from_secs(9), initially_paused);
+            let now = Instant::now();
+            let target = ClickTarget::SessionControl(SessionKind::ShortBreak);
+
+            app.handle_click_target(target, now);
+            app.handle_click_target(target, now + Duration::from_millis(100));
+
+            assert!(!app.is_confirmation_open());
+            assert_eq!(
+                app.timer().state(),
+                TimerState::Running(SessionKind::ShortBreak)
+            );
+            assert_eq!(app.timer().remaining(), Duration::from_secs(5 * 60));
+        }
+    }
+
+    #[test]
+    fn second_matching_click_upgrades_confirmed_change_to_change_and_start() {
+        for initially_paused in [false, true] {
+            let mut app = active_focus(Duration::from_secs(10), initially_paused);
+            let now = Instant::now();
+            let target = ClickTarget::SessionControl(SessionKind::ShortBreak);
+
+            app.handle_click_target(target, now);
+            assert_eq!(
+                app.pending_confirmation(),
+                Some(ConfirmationOperation::TimerChange(
+                    TimerChange::SelectSession(SessionKind::ShortBreak)
+                ))
+            );
+            app.handle_click_target(target, now + Duration::from_millis(100));
+            assert_eq!(
+                app.pending_confirmation(),
+                Some(ConfirmationOperation::TimerChange(
+                    TimerChange::StartSession(SessionKind::ShortBreak)
+                ))
+            );
+            let _ = app.dispatch(Action::ConfirmPendingAction);
+
+            assert_eq!(
+                app.timer().state(),
+                TimerState::Running(SessionKind::ShortBreak)
+            );
+            assert_eq!(app.timer().remaining(), Duration::from_secs(5 * 60));
+        }
+    }
+
+    #[test]
+    fn cancelling_upgraded_session_change_restores_prior_activity() {
+        for initially_paused in [false, true] {
+            let mut app = active_focus(Duration::from_secs(10), initially_paused);
+            let now = Instant::now();
+            let target = ClickTarget::SessionControl(SessionKind::LongBreak);
+            app.handle_click_target(target, now);
+            app.handle_click_target(target, now + Duration::from_millis(100));
+
+            let _ = app.dispatch(Action::CancelPendingAction);
+
+            let expected = if initially_paused {
+                TimerState::Paused(SessionKind::Focus)
+            } else {
+                TimerState::Running(SessionKind::Focus)
+            };
+            assert_eq!(app.timer().state(), expected);
+            assert_eq!(app.timer().remaining(), Duration::from_secs(25 * 60 - 10));
+        }
+    }
+
+    #[test]
+    fn mismatched_or_late_second_click_does_not_upgrade_pending_selection() {
         let now = Instant::now();
-        double_click_session(&mut app, SessionKind::LongBreak, now);
+        for second_click in [
+            (
+                ClickTarget::SessionControl(SessionKind::LongBreak),
+                Duration::from_millis(100),
+            ),
+            (
+                ClickTarget::SessionControl(SessionKind::ShortBreak),
+                Duration::from_millis(501),
+            ),
+        ] {
+            let mut app = active_focus(Duration::from_secs(10), false);
+            app.handle_click_target(ClickTarget::SessionControl(SessionKind::ShortBreak), now);
+            app.handle_click_target(second_click.0, now + second_click.1);
+            let _ = app.dispatch(Action::ConfirmPendingAction);
 
-        app.handle_click_target(
-            ClickTarget::SessionControl(SessionKind::ShortBreak),
-            now + Duration::from_millis(200),
-        );
-        assert_eq!(
-            app.timer().state(),
-            TimerState::Running(SessionKind::LongBreak)
-        );
-
-        let _ = app.dispatch(Action::PrimaryAction);
-        app.handle_click_target(
-            ClickTarget::SessionControl(SessionKind::Focus),
-            now + Duration::from_millis(300),
-        );
-        assert_eq!(
-            app.timer().state(),
-            TimerState::Paused(SessionKind::LongBreak)
-        );
+            assert_eq!(
+                app.timer().state(),
+                TimerState::Ready(SessionKind::ShortBreak)
+            );
+        }
     }
 
     #[test]

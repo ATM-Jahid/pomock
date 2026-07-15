@@ -6,7 +6,7 @@ use ratatui::{
 };
 
 use crate::{
-    app::{App, ClickTarget, EditMode, UiFocus},
+    app::{App, ClickTarget, ConfirmationOperation, EditMode, TimerChange, UiFocus},
     display::{format_big_duration, format_state},
     timer::{SessionKind, TimerState},
 };
@@ -272,8 +272,9 @@ fn task_row_at(position: (u16, u16), area: Rect, offset: usize, len: usize) -> O
 }
 
 fn controls_text(app: &App) -> String {
-    if app.is_reset_confirmation_open() {
-        return "Reset session? [y/Enter] confirm [n/Esc] cancel".to_string();
+    if let Some(operation) = app.pending_confirmation() {
+        let prompt = confirmation_prompt(operation);
+        return format!("{prompt} [y/Enter] confirm [n/Esc] cancel");
     }
 
     match app.edit_mode() {
@@ -281,7 +282,7 @@ fn controls_text(app: &App) -> String {
         EditMode::Editing { .. } => format!("Edit task: {}_", app.input()),
         EditMode::Normal => match app.ui_focus() {
             UiFocus::Clock => {
-                "[HJKL] box nav [space] start/pause [n] next [r] reset [q] quit"
+                "[HJKL] box nav [space] start/pause [c] cycle session [r] reset [q] quit"
             }
             UiFocus::Todo => {
                 "[HJKL] box nav [jk/↓↑] list nav [a] add [e] edit [x] delete [space] complete [q] quit"
@@ -291,6 +292,31 @@ fn controls_text(app: &App) -> String {
             }
         }
         .to_string(),
+    }
+}
+
+fn confirmation_prompt(operation: ConfirmationOperation) -> String {
+    match operation {
+        ConfirmationOperation::Quit => "Quit and discard progress?".to_string(),
+        ConfirmationOperation::TimerChange(change) => match change {
+            TimerChange::Reset => "Reset session?".to_string(),
+            TimerChange::Cycle => "Discard progress and cycle session?".to_string(),
+            TimerChange::SelectSession(session) => {
+                format!("Discard progress and change to {}?", session_label(session))
+            }
+            TimerChange::StartSession(session) => format!(
+                "Discard progress, change to {}, and start it?",
+                session_label(session)
+            ),
+        },
+    }
+}
+
+fn session_label(session: SessionKind) -> &'static str {
+    match session {
+        SessionKind::Focus => "Focus",
+        SessionKind::ShortBreak => "Short break",
+        SessionKind::LongBreak => "Long break",
     }
 }
 
@@ -309,6 +335,8 @@ fn focused_block(title: &str, focused: bool, theme: Theme) -> Block<'_> {
 
 #[cfg(test)]
 mod tests {
+    use std::time::Duration;
+
     use crate::app::{Action, Direction};
 
     use super::*;
@@ -321,6 +349,56 @@ mod tests {
         }
         let _ = app.dispatch(Action::SubmitEdit);
         let _ = app.dispatch(Action::NavigateFocus(Direction::Up));
+    }
+
+    #[test]
+    fn clock_legend_describes_cycle_session_control() {
+        let app = App::new();
+
+        assert!(controls_text(&app).contains("[c] cycle session"));
+        assert!(!controls_text(&app).contains("[n] next"));
+    }
+
+    #[test]
+    fn cycle_confirmation_describes_progress_loss() {
+        let mut app = App::new();
+        let _ = app.dispatch(Action::PrimaryAction);
+        let _ = app.tick(Duration::from_secs(10));
+        let _ = app.dispatch(Action::CycleSession);
+
+        assert_eq!(
+            controls_text(&app),
+            "Discard progress and cycle session? [y/Enter] confirm [n/Esc] cancel"
+        );
+    }
+
+    #[test]
+    fn quit_confirmation_describes_progress_loss() {
+        let mut app = App::new();
+        let _ = app.dispatch(Action::PrimaryAction);
+        let _ = app.tick(Duration::from_secs(10));
+        let _ = app.dispatch(Action::Quit);
+
+        assert_eq!(
+            controls_text(&app),
+            "Quit and discard progress? [y/Enter] confirm [n/Esc] cancel"
+        );
+    }
+
+    #[test]
+    fn session_change_confirmation_distinguishes_select_from_start() {
+        assert_eq!(
+            confirmation_prompt(ConfirmationOperation::TimerChange(
+                TimerChange::SelectSession(SessionKind::ShortBreak),
+            )),
+            "Discard progress and change to Short break?"
+        );
+        assert_eq!(
+            confirmation_prompt(ConfirmationOperation::TimerChange(
+                TimerChange::StartSession(SessionKind::ShortBreak),
+            )),
+            "Discard progress, change to Short break, and start it?"
+        );
     }
 
     #[test]

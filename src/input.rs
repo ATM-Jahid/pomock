@@ -7,12 +7,12 @@ pub fn map_key(
     key: KeyCode,
     edit_mode: EditMode,
     focus: UiFocus,
-    reset_confirmation_open: bool,
+    confirmation_open: bool,
 ) -> Option<Action> {
-    if reset_confirmation_open {
+    if confirmation_open {
         return match key {
-            KeyCode::Char('y') | KeyCode::Enter => Some(Action::ConfirmReset),
-            KeyCode::Char('n') | KeyCode::Esc => Some(Action::CancelReset),
+            KeyCode::Char('y') | KeyCode::Enter => Some(Action::ConfirmPendingAction),
+            KeyCode::Char('n') | KeyCode::Esc => Some(Action::CancelPendingAction),
             _ => None,
         };
     }
@@ -34,7 +34,7 @@ pub fn map_key(
     match (focus, key) {
         (_, KeyCode::Char('q')) => Some(Action::Quit),
         (UiFocus::Clock, KeyCode::Char(' ')) => Some(Action::PrimaryAction),
-        (UiFocus::Clock, KeyCode::Char('n')) => Some(Action::SelectNextSession),
+        (UiFocus::Clock, KeyCode::Char('c')) => Some(Action::CycleSession),
         (UiFocus::Clock, KeyCode::Char('r')) => Some(Action::ResetSession),
         (UiFocus::Todo, KeyCode::Char('a')) => Some(Action::BeginAdd),
         (UiFocus::Todo | UiFocus::Done, KeyCode::Char('e')) => Some(Action::EditSelected),
@@ -141,12 +141,12 @@ mod tests {
     }
 
     #[test]
-    fn reset_confirmation_keys_take_precedence_over_every_other_context() {
+    fn confirmation_keys_take_precedence_over_every_other_context() {
         for (key, expected) in [
-            (KeyCode::Char('y'), Some(Action::ConfirmReset)),
-            (KeyCode::Enter, Some(Action::ConfirmReset)),
-            (KeyCode::Char('n'), Some(Action::CancelReset)),
-            (KeyCode::Esc, Some(Action::CancelReset)),
+            (KeyCode::Char('y'), Some(Action::ConfirmPendingAction)),
+            (KeyCode::Enter, Some(Action::ConfirmPendingAction)),
+            (KeyCode::Char('n'), Some(Action::CancelPendingAction)),
+            (KeyCode::Esc, Some(Action::CancelPendingAction)),
             (KeyCode::Char('q'), None),
             (KeyCode::Char('H'), None),
         ] {
@@ -158,13 +158,13 @@ mod tests {
     }
 
     #[test]
-    fn maps_next_session_to_n_only_in_clock_context() {
+    fn maps_cycle_session_to_c_only_in_clock_context() {
         assert_eq!(
-            map_key(KeyCode::Char('n'), EditMode::Normal, UiFocus::Clock, false),
-            Some(Action::SelectNextSession)
+            map_key(KeyCode::Char('c'), EditMode::Normal, UiFocus::Clock, false),
+            Some(Action::CycleSession)
         );
         assert_eq!(
-            map_key(KeyCode::Char('f'), EditMode::Normal, UiFocus::Clock, false),
+            map_key(KeyCode::Char('n'), EditMode::Normal, UiFocus::Clock, false),
             None
         );
     }

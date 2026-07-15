@@ -14,7 +14,7 @@ and [Crossterm](https://github.com/crossterm-rs/crossterm).
 ## Current features
 
 - Focus and break countdown sessions
-  with start, pause, resume, reset, and next-session controls.
+  with start, pause, resume, reset, and cycle-session controls.
 - Editable to-do and completed-task lists.
 - Keyboard and mouse navigation.
 
@@ -39,13 +39,17 @@ Controls are contextual to the focused box.
 - `H`, `J`, `K`, `L` — move focus
   between the clock, to-do, and completed-task boxes.
 - `q` — quit when not adding or editing a task.
+Running or paused sessions ask for confirmation after 10 seconds of progress.
 
 ### Clock
 
 - `Space` — start a ready session, pause or resume an active session.
-- `f` — select the next focus or break session without starting it.
+- `c` — cycle the session through focus, short break, and long break.
 - `r` — reset a running or paused session to its full duration.
 - Double-click the clock — perform the same action as `Space`.
+- Click a different session button — change to that session.
+- Double-click the active session button — pause or resume it.
+- Double-click a different session button — change to that session and start it.
 
 ### To-do tasks
 
