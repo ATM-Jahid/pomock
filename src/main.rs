@@ -38,6 +38,12 @@ fn handle_outcome(outcome: AppOutcome) -> bool {
     }
 }
 
+fn advance_timer(app: &mut App, last_tick: &mut Instant, now: Instant) -> AppOutcome {
+    let elapsed = now.duration_since(*last_tick);
+    *last_tick = now;
+    app.tick(elapsed)
+}
+
 fn main() -> std::io::Result<()> {
     let mut terminal = setup_terminal()?;
     let result = run_app(&mut terminal);
@@ -62,10 +68,7 @@ fn run_app(terminal: &mut Terminal<CrosstermBackend<Stdout>>) -> std::io::Result
 
     loop {
         let now = Instant::now();
-        let elapsed = now.duration_since(last_tick);
-        last_tick = now;
-
-        if handle_outcome(app.tick(elapsed)) {
+        if handle_outcome(advance_timer(&mut app, &mut last_tick, now)) {
             break;
         }
 
@@ -74,7 +77,13 @@ fn run_app(terminal: &mut Terminal<CrosstermBackend<Stdout>>) -> std::io::Result
         })?;
 
         if event::poll(Duration::from_millis(100))? {
-            match event::read()? {
+            let event = event::read()?;
+            let now = Instant::now();
+            if handle_outcome(advance_timer(&mut app, &mut last_tick, now)) {
+                break;
+            }
+
+            match event {
                 Event::Key(key) => {
                     if let Some(action) = map_key(
                         key.code,
@@ -87,7 +96,7 @@ fn run_app(terminal: &mut Terminal<CrosstermBackend<Stdout>>) -> std::io::Result
                     }
                 }
                 Event::Mouse(mouse) if app.edit_mode() == EditMode::Normal => {
-                    handle_mouse(&mut app, mouse, terminal.size()?.into(), Instant::now());
+                    handle_mouse(&mut app, mouse, terminal.size()?.into(), now);
                 }
                 _ => {}
             }
@@ -107,4 +116,41 @@ fn restore_terminal(terminal: &mut Terminal<CrosstermBackend<Stdout>>) -> std::i
     terminal.show_cursor()?;
 
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use pomock::app::Action;
+
+    #[test]
+    fn ready_time_before_start_is_not_charged_to_the_running_session() {
+        let mut app = App::new();
+        let start = Instant::now();
+        let mut last_tick = start;
+        let key_time = start + Duration::from_millis(80);
+
+        assert_eq!(
+            advance_timer(&mut app, &mut last_tick, key_time),
+            AppOutcome::None
+        );
+        assert_eq!(app.dispatch(Action::PrimaryAction), AppOutcome::None);
+
+        assert_eq!(
+            advance_timer(
+                &mut app,
+                &mut last_tick,
+                key_time + Duration::from_secs(25 * 60) - Duration::from_millis(1),
+            ),
+            AppOutcome::None
+        );
+        assert_eq!(
+            advance_timer(
+                &mut app,
+                &mut last_tick,
+                key_time + Duration::from_secs(25 * 60),
+            ),
+            AppOutcome::SessionCompleted(pomock::SessionKind::Focus)
+        );
+    }
 }
