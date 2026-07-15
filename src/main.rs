@@ -2,8 +2,8 @@ use std::io::{self, Stdout};
 
 use crossterm::{
     event::{
-        self, DisableMouseCapture, EnableMouseCapture, Event, MouseButton, MouseEvent,
-        MouseEventKind,
+        self, DisableMouseCapture, EnableMouseCapture, Event, KeyEventKind, MouseButton,
+        MouseEvent, MouseEventKind,
     },
     execute,
     terminal::{EnterAlternateScreen, LeaveAlternateScreen, disable_raw_mode, enable_raw_mode},
@@ -36,6 +36,10 @@ fn handle_outcome(outcome: AppOutcome) -> bool {
         AppOutcome::SessionCompleted(_) => false,
         AppOutcome::Quit => true,
     }
+}
+
+fn should_handle_key_event(kind: KeyEventKind) -> bool {
+    kind != KeyEventKind::Release
 }
 
 fn advance_timer(app: &mut App, last_tick: &mut Instant, now: Instant) -> AppOutcome {
@@ -192,7 +196,7 @@ fn run_app(terminal: &mut Terminal<CrosstermBackend<Stdout>>) -> std::io::Result
             }
 
             match event {
-                Event::Key(key) => {
+                Event::Key(key) if should_handle_key_event(key.kind) => {
                     if let Some(action) = map_key(
                         key.code,
                         app.edit_mode(),
@@ -218,6 +222,13 @@ fn run_app(terminal: &mut Terminal<CrosstermBackend<Stdout>>) -> std::io::Result
 mod tests {
     use super::*;
     use pomock::app::Action;
+
+    #[test]
+    fn key_releases_are_ignored_while_presses_and_repeats_are_handled() {
+        assert!(should_handle_key_event(KeyEventKind::Press));
+        assert!(should_handle_key_event(KeyEventKind::Repeat));
+        assert!(!should_handle_key_event(KeyEventKind::Release));
+    }
 
     #[test]
     fn ready_time_before_start_is_not_charged_to_the_running_session() {
