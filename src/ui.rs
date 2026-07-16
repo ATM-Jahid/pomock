@@ -68,6 +68,7 @@ fn theme_color(color: ThemeColor) -> Color {
         ThemeColor::LightMagenta => Color::LightMagenta,
         ThemeColor::LightCyan => Color::LightCyan,
         ThemeColor::White => Color::White,
+        ThemeColor::Rgb(red, green, blue) => Color::Rgb(red, green, blue),
     }
 }
 
@@ -75,7 +76,7 @@ fn theme_color(color: ThemeColor) -> Color {
 pub fn draw(frame: &mut Frame, app: &mut App, theme: Theme, keys: &KeysConfig) {
     let theme = app
         .settings()
-        .map_or(theme, |settings| Theme::from(settings.draft().theme()));
+        .map_or(theme, |settings| Theme::from(settings.config().theme()));
     let area = frame.area();
     let layout = ui_layout(area);
 
@@ -345,22 +346,23 @@ fn controls_text(app: &App, keys: &KeysConfig) -> String {
             let list_navigation =
                 key_labels(&[first_key(keys.list_down()), first_key(keys.list_up())]);
             let quit = format_key(first_key(keys.quit()));
+            let settings = format_key(first_key(keys.settings()));
             match app.ui_focus() {
                 UiFocus::Clock => format!(
-                    "[{focus_navigation}] box nav [{}] start/pause [{}] cycle session [{}] reset [s] settings [{quit}] quit",
+                    "[{focus_navigation}] box nav [{}] start/pause [{}] cycle session [{}] reset [{settings}] settings [{quit}] quit",
                     format_key(first_key(keys.clock_primary())),
                     format_key(first_key(keys.cycle_session())),
                     format_key(first_key(keys.reset_session())),
                 ),
                 UiFocus::Todo => format!(
-                    "[{focus_navigation}] box nav [{list_navigation}] list nav [{}] add [{}] edit [{}] delete [{}] complete [s] settings [{quit}] quit",
+                    "[{focus_navigation}] box nav [{list_navigation}] list nav [{}] add [{}] edit [{}] delete [{}] complete [{settings}] settings [{quit}] quit",
                     format_key(first_key(keys.add_task())),
                     format_key(first_key(keys.edit_task())),
                     format_key(first_key(keys.delete_task())),
                     format_key(first_key(keys.task_primary())),
                 ),
                 UiFocus::Done => format!(
-                    "[{focus_navigation}] box nav [{list_navigation}] list nav [{}] edit [{}] delete [{}] return [s] settings [{quit}] quit",
+                    "[{focus_navigation}] box nav [{list_navigation}] list nav [{}] edit [{}] delete [{}] return [{settings}] settings [{quit}] quit",
                     format_key(first_key(keys.edit_task())),
                     format_key(first_key(keys.delete_task())),
                     format_key(first_key(keys.task_primary())),
@@ -395,9 +397,6 @@ fn confirmation_prompt(operation: ConfirmationOperation) -> String {
                 session_label(session)
             ),
         },
-        ConfirmationOperation::ApplySettings(_) => {
-            "Apply timer settings and discard progress?".to_string()
-        }
     }
 }
 
@@ -506,23 +505,33 @@ fn draw_settings(frame: &mut Frame, app: &App, theme: Theme) {
         &mut state,
     );
 
-    let footer = if let Some(error) = settings.error() {
-        format!("{error}\n[Esc] back")
-    } else if settings.input().is_some() {
-        "Type a positive number  [Enter] apply  [s] save  [Esc] cancel".to_string()
-    } else if settings.is_capturing_key() {
-        "Press a key  [s] save  [Esc] cancel".to_string()
-    } else {
-        "[↑/↓ or j/k] select  [←/→] change  [Enter] edit  [s] save  [Esc] close".to_string()
-    };
+    let footer = settings_footer(settings);
     frame.render_widget(
         Paragraph::new(footer).alignment(Alignment::Center),
         footer_area,
     );
 }
 
+fn settings_footer(settings: &crate::settings::SettingsOverlay) -> String {
+    let close = format_key(first_key(settings.config().keys().settings()));
+    if let Some(error) = settings.error() {
+        format!("{error}\n[Esc] back")
+    } else if settings.input().is_some() {
+        let prompt = if matches!(settings.field(), SettingField::Theme(_)) {
+            "Type a preset or #RRGGBB"
+        } else {
+            "Type a positive number"
+        };
+        format!("{prompt}  [Enter] apply  [Esc] cancel")
+    } else if settings.is_capturing_key() {
+        "Press a key  [Esc] cancel".to_string()
+    } else {
+        format!("[↑/↓ or j/k] select  [←/→ or h/l] change  [Enter/Space] edit  [{close}/Esc] close")
+    }
+}
+
 fn setting_row(field: SettingField, settings: &crate::settings::SettingsOverlay) -> String {
-    let config = settings.draft();
+    let config = settings.config();
     let (label, value) = match field {
         SettingField::FocusMinutes => (
             "  Focus minutes",
@@ -547,7 +556,7 @@ fn setting_row(field: SettingField, settings: &crate::settings::SettingsOverlay)
         ),
         SettingField::Theme(role) => (
             theme_role_label(role),
-            format!("{:?}", config.theme().color(role)),
+            config.theme().color(role).to_string(),
         ),
         SettingField::Key(action) => (
             key_action_label(action),
@@ -595,6 +604,7 @@ fn key_action_label(action: KeyAction) -> &'static str {
         KeyAction::ListDown => "  List down",
         KeyAction::ListUp => "  List up",
         KeyAction::Quit => "  Quit",
+        KeyAction::Settings => "  Settings",
         KeyAction::ClockPrimary => "  Clock primary",
         KeyAction::CycleSession => "  Cycle session",
         KeyAction::ResetSession => "  Reset session",
@@ -690,6 +700,17 @@ mod tests {
     }
 
     #[test]
+    fn rgb_colors_map_to_terminal_rgb_colors() {
+        let config = ThemeConfig::default()
+            .with_color(ThemeRole::FocusedBorder, ThemeColor::Rgb(0x5f, 0xd7, 0xff));
+
+        assert_eq!(
+            Theme::from(&config).focused_border,
+            Color::Rgb(0x5f, 0xd7, 0xff)
+        );
+    }
+
+    #[test]
     fn normal_mode_help_uses_configured_key_labels() {
         let app = App::new();
         let keys: KeysConfig = toml::from_str(
@@ -703,6 +724,17 @@ mod tests {
         assert!(help.contains("[Enter] start/pause"));
         assert!(help.contains("[n] cycle session"));
         assert!(!help.contains("[c] cycle session"));
+    }
+
+    #[test]
+    fn normal_mode_help_uses_the_configured_settings_key() {
+        let app = App::new();
+        let keys: KeysConfig = toml::from_str("settings = \"t\"\n").unwrap();
+
+        let help = controls_text(&app, &keys);
+
+        assert!(help.contains("[t] settings"));
+        assert!(!help.contains("[s] settings"));
     }
 
     #[test]
@@ -861,7 +893,7 @@ mod tests {
         }
         let area = Rect::new(0, 0, 80, 24);
         let (list, _) = settings_parts(area);
-        let selected_row = settings_visual_row(24);
+        let selected_row = settings_visual_row(25);
         let first_visible = settings_offset(selected_row, usize::from(list.height));
         let expected = settings_field_row(first_visible).unwrap();
 
@@ -903,5 +935,23 @@ mod tests {
                 ClickTarget::SettingsRow(*first_field)
             );
         }
+    }
+
+    #[test]
+    fn settings_help_shows_fixed_navigation_and_the_active_close_keys() {
+        let mut app = App::new();
+        let _ = app.dispatch(Action::OpenSettings);
+        for _ in 0..18 {
+            let _ = app.dispatch(Action::SettingsMove(true));
+        }
+        let _ = app.dispatch(Action::SettingsActivate);
+        let _ = app.dispatch(Action::SettingsCaptureKey(ConfigKey::Character('t')));
+
+        let footer = settings_footer(app.settings().unwrap());
+
+        assert!(footer.contains("[←/→ or h/l] change"));
+        assert!(footer.contains("[Enter/Space] edit"));
+        assert!(footer.contains("[t/Esc] close"));
+        assert!(!footer.contains("[s/Esc] close"));
     }
 }

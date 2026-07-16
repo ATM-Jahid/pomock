@@ -40,23 +40,22 @@ Controls are contextual to the focused box.
 - `H`, `J`, `K`, `L` — move focus
   between the clock, to-do, and completed-task boxes.
 - `q` — quit when not adding or editing a task.
-- `s` — open the settings overlay.
-Running or paused sessions ask for confirmation after 10 seconds of progress.
+  Running or paused sessions ask for confirmation after 10 seconds of progress.
+- `s` or `Esc` — open the settings overlay.
 
 ### Settings
 
 - Up / Down or `j` / `k` — select a setting.
 - Left / Right or `h` / `l` — adjust a number, toggle, or color.
-- Enter or Space — edit a number, capture a key, toggle a value, or activate
-  Save/Cancel.
-- `s` — save settings and close the overlay.
-- Esc — cancel the current edit/capture, or close the overlay without saving.
+- Enter or Space — edit the selected field.
+  Enter applies an entered value;
+  pressing a valid key applies a captured binding.
+  Both return to navigation.
+- The configured Settings key — close the overlay while navigating it.
+- Esc — cancel the current edit or key capture before it is accepted.
 - Click a visible setting — select it; double-click to edit or activate it.
 
-Opening settings pauses a running timer.
-Canceling restores its prior activity.
-Pressing `s` again saves and closes settings.
-Saved changes are written immediately to `config.toml`.
+Every accepted change takes effect and is written immediately to `config.toml`.
 
 ### Clock
 
@@ -122,6 +121,7 @@ focus_right = "L"
 list_down = ["j", "down"]
 list_up = ["k", "up"]
 quit = "q"
+settings = "s"
 clock_primary = "space"
 cycle_session = "c"
 reset_session = "r"
@@ -130,6 +130,30 @@ edit_task = "e"
 delete_task = "x"
 task_primary = "space"
 ```
+
+To customize them, create `pomock/config.toml`
+in your platform's standard user configuration directory
+(for example, `$XDG_CONFIG_HOME` or `~/.config` on Linux).
+All duration values and `long_break_interval` must be greater than zero.
+
+By default, `pomock` saves task descriptions, order, and completion state
+after every successful task change.
+The `tasks.toml` file lives under
+the platform's standard per-user application data directory
+(for example, `$XDG_DATA_HOME/pomock` or `~/.local/share/pomock` on Linux).
+
+The `[theme]` section is optional.
+Colors accept `#RRGGBB` values or portable terminal names:
+`black`, `red`, `green`, `yellow`, `blue`, `magenta`, `cyan`, `gray`, `dark_gray`,
+the `light_` variants of red through cyan, and `white`.
+
+The `[keys]` section is also optional.
+Each binding is either a single key or an ordered list of keys;
+the controls text shows only the first key.
+A key is one printable character or one of
+`space`, `enter`, `backspace`, `up`, `down`, `left`, and `right`.
+`Esc` is reserved as the fixed Settings alias in normal mode
+and for cancel/back behavior in modal contexts.
 
 Sound is disabled by default. To play a custom file whenever any session
 completes, add its path:
@@ -145,28 +169,6 @@ An unreadable or unsupported file, or an unavailable audio device,
 is ignored so the timer keeps running.
 Paths beginning with `~/` are expanded from the current user's home directory.
 Absolute paths are also accepted, but relative paths are not.
-
-To customize them, create `pomock/config.toml`
-in your platform's standard user configuration directory
-(for example, `$XDG_CONFIG_HOME` or `~/.config` on Linux).
-All duration values and `long_break_interval` must be greater than zero.
-
-By default, `pomock` saves task descriptions, order, and completion state
-after every successful task change.
-The `tasks.toml` file lives under
-the platform's standard per-user application data directory
-(for example, `$XDG_DATA_HOME/pomock` or `~/.local/share/pomock` on Linux).
-
-The `[theme]` section is optional, and individual omitted roles keep their
-defaults. Colors use portable terminal names: `black`, `red`, `green`,
-`yellow`, `blue`, `magenta`, `cyan`, `gray`, `dark_gray`, the `light_` variants
-of red through cyan, and `white`.
-
-The `[keys]` section is also optional.
-Each binding is either a single key or an ordered list of keys;
-the controls text shows only the first key.
-A key is one printable character or one of
-`space`, `enter`, `esc`, `backspace`, `up`, `down`, `left`, and `right`.
 
 ## License
 

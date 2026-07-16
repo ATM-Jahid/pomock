@@ -33,29 +33,25 @@ pub fn map_key(
     }
 
     match settings_mode {
-        SettingsMode::EditingNumber => {
+        SettingsMode::EditingValue => {
             return match key {
-                KeyCode::Char('s') => Some(Action::SettingsSave),
                 KeyCode::Enter => Some(Action::SettingsSubmitInput),
                 KeyCode::Esc => Some(Action::SettingsCancel),
                 KeyCode::Backspace => Some(Action::SettingsPopInput),
-                KeyCode::Char(digit) if digit.is_ascii_digit() => {
-                    Some(Action::SettingsPushDigit(digit))
-                }
+                KeyCode::Char(character) => Some(Action::SettingsPushInput(character)),
                 _ => None,
             };
         }
         SettingsMode::CapturingKey => {
             return match key {
-                KeyCode::Char('s') => Some(Action::SettingsSave),
                 KeyCode::Esc => Some(Action::SettingsCancel),
                 _ => config_key(key).map(Action::SettingsCaptureKey),
             };
         }
         SettingsMode::Navigating => {
             return match key {
-                KeyCode::Esc => Some(Action::SettingsCancel),
-                KeyCode::Char('s') => Some(Action::SettingsSave),
+                KeyCode::Esc => Some(Action::SettingsClose),
+                key if key_matches_any(key, keys.settings()) => Some(Action::SettingsClose),
                 KeyCode::Enter | KeyCode::Char(' ') => Some(Action::SettingsActivate),
                 KeyCode::Up | KeyCode::Char('k') => Some(Action::SettingsMove(false)),
                 KeyCode::Down | KeyCode::Char('j') => Some(Action::SettingsMove(true)),
@@ -67,7 +63,7 @@ pub fn map_key(
         SettingsMode::Closed => {}
     }
 
-    if key == KeyCode::Char('s') {
+    if key == KeyCode::Esc || key_matches_any(key, keys.settings()) {
         return Some(Action::OpenSettings);
     }
 
@@ -462,6 +458,17 @@ mod tests {
         );
         assert_eq!(
             map_key(
+                KeyCode::Esc,
+                EditMode::Normal,
+                UiFocus::Clock,
+                false,
+                SettingsMode::Closed,
+                &keys
+            ),
+            Some(Action::OpenSettings)
+        );
+        assert_eq!(
+            map_key(
                 KeyCode::Char('s'),
                 EditMode::Normal,
                 UiFocus::Clock,
@@ -469,18 +476,29 @@ mod tests {
                 SettingsMode::Navigating,
                 &keys
             ),
-            Some(Action::SettingsSave)
+            Some(Action::SettingsClose)
         );
         assert_eq!(
             map_key(
-                KeyCode::Down,
+                KeyCode::Esc,
                 EditMode::Normal,
                 UiFocus::Clock,
                 false,
                 SettingsMode::Navigating,
                 &keys
             ),
-            Some(Action::SettingsMove(true))
+            Some(Action::SettingsClose)
+        );
+        assert_eq!(
+            map_key(
+                KeyCode::Char('l'),
+                EditMode::Normal,
+                UiFocus::Clock,
+                false,
+                SettingsMode::Navigating,
+                &keys
+            ),
+            Some(Action::SettingsAdjust(true))
         );
         assert_eq!(
             map_key(
@@ -488,10 +506,10 @@ mod tests {
                 EditMode::Normal,
                 UiFocus::Clock,
                 false,
-                SettingsMode::EditingNumber,
+                SettingsMode::EditingValue,
                 &keys
             ),
-            Some(Action::SettingsPushDigit('7'))
+            Some(Action::SettingsPushInput('7'))
         );
         assert_eq!(
             map_key(
@@ -516,10 +534,10 @@ mod tests {
             Some(Action::SettingsCancel)
         );
 
-        let keys: KeysConfig = toml::from_str("focus_left = \"s\"\n").unwrap();
+        let keys: KeysConfig = toml::from_str("settings = \"t\"\ncycle_session = \"s\"\n").unwrap();
         assert_eq!(
             map_key(
-                KeyCode::Char('s'),
+                KeyCode::Char('t'),
                 EditMode::Normal,
                 UiFocus::Clock,
                 false,
@@ -530,14 +548,36 @@ mod tests {
         );
         assert_eq!(
             map_key(
-                KeyCode::Char('s'),
+                KeyCode::Char('t'),
+                EditMode::Normal,
+                UiFocus::Clock,
+                false,
+                SettingsMode::Navigating,
+                &keys
+            ),
+            Some(Action::SettingsClose)
+        );
+        assert_eq!(
+            map_key(
+                KeyCode::Char('t'),
                 EditMode::Adding,
                 UiFocus::Todo,
                 false,
                 SettingsMode::Closed,
                 &keys
             ),
-            Some(Action::PushInput('s'))
+            Some(Action::PushInput('t'))
+        );
+        assert_eq!(
+            map_key(
+                KeyCode::Char('t'),
+                EditMode::Normal,
+                UiFocus::Clock,
+                false,
+                SettingsMode::EditingValue,
+                &keys
+            ),
+            Some(Action::SettingsPushInput('t'))
         );
     }
 }

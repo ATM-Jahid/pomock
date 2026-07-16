@@ -58,6 +58,12 @@ impl ConfigKey {
     }
 }
 
+impl fmt::Display for ConfigKey {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter.write_str(&self.stored_name())
+    }
+}
+
 impl Serialize for ConfigKey {
     fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
     where
@@ -153,6 +159,7 @@ pub struct KeysConfig {
     pub(super) list_down: KeyBindings,
     pub(super) list_up: KeyBindings,
     pub(super) quit: KeyBindings,
+    pub(super) settings: KeyBindings,
     pub(super) clock_primary: KeyBindings,
     pub(super) cycle_session: KeyBindings,
     pub(super) reset_session: KeyBindings,
@@ -171,6 +178,7 @@ pub enum KeyAction {
     ListDown,
     ListUp,
     Quit,
+    Settings,
     ClockPrimary,
     CycleSession,
     ResetSession,
@@ -201,6 +209,9 @@ impl KeysConfig {
     }
     pub fn quit(&self) -> &[ConfigKey] {
         self.quit.as_slice()
+    }
+    pub fn settings(&self) -> &[ConfigKey] {
+        self.settings.as_slice()
     }
     pub fn clock_primary(&self) -> &[ConfigKey] {
         self.clock_primary.as_slice()
@@ -233,6 +244,7 @@ impl KeysConfig {
             KeyAction::ListDown => self.list_down(),
             KeyAction::ListUp => self.list_up(),
             KeyAction::Quit => self.quit(),
+            KeyAction::Settings => self.settings(),
             KeyAction::ClockPrimary => self.clock_primary(),
             KeyAction::CycleSession => self.cycle_session(),
             KeyAction::ResetSession => self.reset_session(),
@@ -253,6 +265,7 @@ impl KeysConfig {
             KeyAction::ListDown => self.list_down = binding,
             KeyAction::ListUp => self.list_up = binding,
             KeyAction::Quit => self.quit = binding,
+            KeyAction::Settings => self.settings = binding,
             KeyAction::ClockPrimary => self.clock_primary = binding,
             KeyAction::CycleSession => self.cycle_session = binding,
             KeyAction::ResetSession => self.reset_session = binding,
@@ -271,6 +284,7 @@ impl KeysConfig {
             ("focus_up", self.focus_up()),
             ("focus_right", self.focus_right()),
             ("quit", self.quit()),
+            ("settings", self.settings()),
             ("clock_primary", self.clock_primary()),
             ("cycle_session", self.cycle_session()),
             ("reset_session", self.reset_session()),
@@ -285,15 +299,36 @@ impl KeysConfig {
             if keys.is_empty() {
                 return Err(ConfigValidationError::EmptyKeyBindings { field });
             }
+            if keys.contains(&ConfigKey::Escape) {
+                return Err(ConfigValidationError::ReservedKey {
+                    field,
+                    key: ConfigKey::Escape,
+                });
+            }
         }
 
-        let global = binding_entries(&bindings[..5]);
+        for key in self.settings() {
+            if matches!(
+                key,
+                ConfigKey::Enter
+                    | ConfigKey::Space
+                    | ConfigKey::Up
+                    | ConfigKey::Down
+                    | ConfigKey::Left
+                    | ConfigKey::Right
+                    | ConfigKey::Character('h' | 'j' | 'k' | 'l')
+            ) {
+                return Err(ConfigValidationError::SettingsOverlayKey { key: *key });
+            }
+        }
+
+        let global = binding_entries(&bindings[..6]);
         validate_unique_bindings(&global)?;
 
-        let clock = binding_entries(&bindings[5..8]);
+        let clock = binding_entries(&bindings[6..9]);
         validate_context_bindings(&global, &clock)?;
 
-        let tasks = binding_entries(&bindings[8..]);
+        let tasks = binding_entries(&bindings[9..]);
         validate_context_bindings(&global, &tasks)
     }
 }
@@ -308,6 +343,7 @@ impl Default for KeysConfig {
             list_down: KeyBindings(vec![ConfigKey::Character('j'), ConfigKey::Down]),
             list_up: KeyBindings(vec![ConfigKey::Character('k'), ConfigKey::Up]),
             quit: KeyBindings::one(ConfigKey::Character('q')),
+            settings: KeyBindings::one(ConfigKey::Character('s')),
             clock_primary: KeyBindings::one(ConfigKey::Space),
             cycle_session: KeyBindings::one(ConfigKey::Character('c')),
             reset_session: KeyBindings::one(ConfigKey::Character('r')),

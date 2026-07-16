@@ -196,6 +196,13 @@ pub enum ConfigValidationError {
         first: &'static str,
         second: &'static str,
     },
+    ReservedKey {
+        field: &'static str,
+        key: ConfigKey,
+    },
+    SettingsOverlayKey {
+        key: ConfigKey,
+    },
     RelativeSoundPath {
         path: PathBuf,
     },
@@ -216,6 +223,13 @@ impl fmt::Display for ConfigValidationError {
             Self::ConflictingKeys { first, second } => {
                 write!(formatter, "keys.{first} conflicts with keys.{second}")
             }
+            Self::ReservedKey { field, key } => {
+                write!(formatter, "keys.{field} cannot use reserved key {key}")
+            }
+            Self::SettingsOverlayKey { key } => write!(
+                formatter,
+                "keys.settings cannot use fixed settings-overlay control {key}"
+            ),
             Self::RelativeSoundPath { path } => write!(
                 formatter,
                 "sound.file must be an absolute path or start with ~/; got {}",
@@ -431,6 +445,7 @@ mod tests {
             config.keys().list_up(),
             [ConfigKey::Character('k'), ConfigKey::Up]
         );
+        assert_eq!(config.keys().settings(), [ConfigKey::Character('s')]);
     }
 
     #[test]
@@ -634,6 +649,89 @@ mod tests {
     }
 
     #[test]
+    fn escape_is_reserved_for_modal_cancellation() {
+        let path = temp_path("reserved-escape.toml");
+        fs::write(
+            &path,
+            "[timer]\nfocus_minutes = 25\nshort_break_minutes = 5\nlong_break_minutes = 15\nlong_break_interval = 4\n\n[keys]\ncycle_session = \"esc\"\n",
+        )
+        .unwrap();
+
+        let error = Config::load_from(&path).unwrap_err();
+
+        assert!(matches!(error, ConfigError::Validation { .. }));
+        assert!(error.to_string().contains(path.to_str().unwrap()));
+        assert!(error.to_string().contains("keys.cycle_session"));
+        assert!(error.to_string().contains("reserved key esc"));
+        fs::remove_file(path).unwrap();
+    }
+
+    #[test]
+    fn settings_rejects_fixed_overlay_controls() {
+        let path = temp_path("settings-overlay-key.toml");
+        fs::write(
+            &path,
+            "[timer]\nfocus_minutes = 25\nshort_break_minutes = 5\nlong_break_minutes = 15\nlong_break_interval = 4\n\n[keys]\nsettings = \"enter\"\n",
+        )
+        .unwrap();
+
+        let error = Config::load_from(&path).unwrap_err();
+
+        assert!(matches!(error, ConfigError::Validation { .. }));
+        assert!(error.to_string().contains(path.to_str().unwrap()));
+        assert!(error.to_string().contains("keys.settings"));
+        assert!(
+            error
+                .to_string()
+                .contains("fixed settings-overlay control enter")
+        );
+        fs::remove_file(path).unwrap();
+    }
+
+    #[test]
+    fn lowercase_s_can_be_reused_after_settings_is_rebound() {
+        let keys = KeysConfig {
+            settings: KeyBindings::one(ConfigKey::Character('t')),
+            cycle_session: KeyBindings::one(ConfigKey::Character('s')),
+            ..KeysConfig::default()
+        };
+
+        let config = Config::with_settings(
+            TimerConfig::default(),
+            TasksConfig::default(),
+            ThemeConfig::default(),
+            keys,
+        )
+        .unwrap();
+
+        assert_eq!(config.keys().settings(), [ConfigKey::Character('t')]);
+        assert_eq!(config.keys().cycle_session(), [ConfigKey::Character('s')]);
+    }
+
+    #[test]
+    fn settings_is_validated_as_a_global_action() {
+        let keys = KeysConfig {
+            settings: KeyBindings::one(ConfigKey::Character('q')),
+            ..KeysConfig::default()
+        };
+
+        let error = Config::with_settings(
+            TimerConfig::default(),
+            TasksConfig::default(),
+            ThemeConfig::default(),
+            keys,
+        )
+        .unwrap_err();
+
+        assert!(matches!(
+            error,
+            ConfigValidationError::ConflictingKeys { .. }
+        ));
+        assert!(error.to_string().contains("keys.quit"));
+        assert!(error.to_string().contains("keys.settings"));
+    }
+
+    #[test]
     fn invalid_key_name_reports_its_path_and_supported_forms() {
         let path = temp_path("invalid-key.toml");
         fs::write(
@@ -701,6 +799,30 @@ mod tests {
         assert_eq!(config.theme().focused_border(), ThemeColor::LightCyan);
         assert_eq!(config.theme().unfocused_border(), ThemeColor::DarkGray);
         assert_eq!(config.theme().done_highlight(), ThemeColor::Green);
+        fs::remove_file(path).unwrap();
+    }
+
+    #[test]
+    fn hex_theme_colors_load_and_save_canonically() {
+        let path = temp_path("hex-theme.toml");
+        fs::write(
+            &path,
+            "[timer]\nfocus_minutes = 25\nshort_break_minutes = 5\nlong_break_minutes = 15\nlong_break_interval = 4\n\n[theme]\nfocused_border = \"#5FD7fF\"\n",
+        )
+        .unwrap();
+
+        let config = Config::load_from(&path).unwrap();
+        assert_eq!(
+            config.theme().focused_border(),
+            ThemeColor::Rgb(0x5f, 0xd7, 0xff)
+        );
+
+        config.save_to(&path).unwrap();
+        assert!(
+            fs::read_to_string(&path)
+                .unwrap()
+                .contains("focused_border = \"#5fd7ff\"")
+        );
         fs::remove_file(path).unwrap();
     }
 

@@ -325,7 +325,7 @@ fn run_app(
                         app.ui_focus(),
                         app.is_confirmation_open(),
                         app.settings_mode(),
-                        config.keys(),
+                        app.input_keys(),
                     ) {
                         let outcome = app.dispatch(action);
                         if handle_outcome(

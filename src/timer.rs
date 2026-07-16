@@ -31,6 +31,7 @@ pub struct PomodoroTimer {
     short_break_duration: Duration,
     long_break_duration: Duration,
     long_break_interval: NonZeroU32,
+    installed_duration: Duration,
     remaining: Duration,
     completed_focus_sessions: u32,
 }
@@ -48,6 +49,7 @@ impl PomodoroTimer {
             short_break_duration,
             long_break_duration,
             long_break_interval,
+            installed_duration: focus_duration,
             remaining: focus_duration,
             completed_focus_sessions: 0,
         }
@@ -66,8 +68,25 @@ impl PomodoroTimer {
     }
 
     pub fn progress(&self) -> Duration {
-        let session = self.session_kind();
-        self.duration_for(session).saturating_sub(self.remaining)
+        self.installed_duration.saturating_sub(self.remaining)
+    }
+
+    /// Replaces duration presets without disturbing an active session.
+    pub fn reconfigure(
+        &mut self,
+        focus_duration: Duration,
+        short_break_duration: Duration,
+        long_break_duration: Duration,
+        long_break_interval: NonZeroU32,
+    ) {
+        self.focus_duration = focus_duration;
+        self.short_break_duration = short_break_duration;
+        self.long_break_duration = long_break_duration;
+        self.long_break_interval = long_break_interval;
+
+        if let TimerState::Ready(session) = self.state {
+            self.install(session);
+        }
     }
 
     pub fn primary_action(&mut self) {
@@ -92,7 +111,7 @@ impl PomodoroTimer {
         }
 
         self.state = TimerState::Ready(session);
-        self.remaining = self.duration_for(session);
+        self.install(session);
     }
 
     pub fn start_session(&mut self, session: SessionKind) {
@@ -101,7 +120,7 @@ impl PomodoroTimer {
         }
 
         self.state = TimerState::Running(session);
-        self.remaining = self.duration_for(session);
+        self.install(session);
     }
 
     pub fn pause(&mut self) {
@@ -123,7 +142,7 @@ impl PomodoroTimer {
         };
 
         self.state = TimerState::Ready(session);
-        self.remaining = self.duration_for(session);
+        self.install(session);
     }
 
     /// Advances a running session and returns its completion event exactly once.
@@ -150,16 +169,8 @@ impl PomodoroTimer {
         };
 
         self.state = TimerState::Ready(next_session);
-        self.remaining = self.duration_for(next_session);
+        self.install(next_session);
         Some(completed_session)
-    }
-
-    fn session_kind(&self) -> SessionKind {
-        match self.state {
-            TimerState::Ready(session)
-            | TimerState::Running(session)
-            | TimerState::Paused(session) => session,
-        }
     }
 
     fn duration_for(&self, session: SessionKind) -> Duration {
@@ -168,6 +179,11 @@ impl PomodoroTimer {
             SessionKind::ShortBreak => self.short_break_duration,
             SessionKind::LongBreak => self.long_break_duration,
         }
+    }
+
+    fn install(&mut self, session: SessionKind) {
+        self.installed_duration = self.duration_for(session);
+        self.remaining = self.installed_duration;
     }
 }
 
@@ -370,6 +386,46 @@ mod tests {
             assert_eq!(timer.remaining(), LONG_BREAK);
             assert_eq!(timer.progress(), Duration::ZERO);
         }
+    }
+
+    #[test]
+    fn reconfigure_preserves_an_active_sessions_installed_duration_and_progress() {
+        let mut timer = timer();
+        timer.primary_action();
+        assert_eq!(timer.tick(Duration::from_secs(60)), None);
+        timer.pause();
+
+        timer.reconfigure(
+            Duration::from_secs(30 * 60),
+            Duration::from_secs(7 * 60),
+            Duration::from_secs(20 * 60),
+            NonZeroU32::new(3).unwrap(),
+        );
+
+        assert_eq!(timer.state(), TimerState::Paused(SessionKind::Focus));
+        assert_eq!(timer.progress(), Duration::from_secs(60));
+        assert_eq!(timer.remaining(), FOCUS - Duration::from_secs(60));
+
+        timer.resume();
+        assert_eq!(timer.tick(timer.remaining()), Some(SessionKind::Focus));
+        assert_eq!(timer.state(), TimerState::Ready(SessionKind::ShortBreak));
+        assert_eq!(timer.remaining(), Duration::from_secs(7 * 60));
+    }
+
+    #[test]
+    fn reconfigure_updates_a_ready_sessions_installed_duration() {
+        let mut timer = timer();
+
+        timer.reconfigure(
+            Duration::from_secs(30 * 60),
+            SHORT_BREAK,
+            LONG_BREAK,
+            NonZeroU32::new(4).unwrap(),
+        );
+
+        assert_eq!(timer.state(), TimerState::Ready(SessionKind::Focus));
+        assert_eq!(timer.remaining(), Duration::from_secs(30 * 60));
+        assert_eq!(timer.progress(), Duration::ZERO);
     }
 
     #[test]

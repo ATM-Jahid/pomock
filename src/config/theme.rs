@@ -1,8 +1,9 @@
-use serde::{Deserialize, Serialize};
+use std::{fmt, str::FromStr};
 
-/// A portable named terminal color accepted by the shared configuration.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "snake_case")]
+use serde::{Deserialize, Deserializer, Serialize, Serializer, de};
+
+/// A portable named terminal color or an exact RGB color.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ThemeColor {
     Black,
     Red,
@@ -20,6 +21,7 @@ pub enum ThemeColor {
     LightMagenta,
     LightCyan,
     White,
+    Rgb(u8, u8, u8),
 }
 
 /// Durable colors assigned to semantic presentation roles.
@@ -122,16 +124,95 @@ impl ThemeColor {
     ];
 
     pub fn cycle(self, forward: bool) -> Self {
-        let index = Self::ALL
-            .iter()
-            .position(|color| *color == self)
-            .unwrap_or(0);
-        let next = if forward {
-            (index + 1) % Self::ALL.len()
+        let index = Self::ALL.iter().position(|color| *color == self);
+        match (index, forward) {
+            (Some(index), true) => Self::ALL[(index + 1) % Self::ALL.len()],
+            (Some(index), false) => Self::ALL[(index + Self::ALL.len() - 1) % Self::ALL.len()],
+            (None, true) => Self::ALL[0],
+            (None, false) => Self::ALL[Self::ALL.len() - 1],
+        }
+    }
+
+    fn name(self) -> Option<&'static str> {
+        match self {
+            Self::Black => Some("black"),
+            Self::Red => Some("red"),
+            Self::Green => Some("green"),
+            Self::Yellow => Some("yellow"),
+            Self::Blue => Some("blue"),
+            Self::Magenta => Some("magenta"),
+            Self::Cyan => Some("cyan"),
+            Self::Gray => Some("gray"),
+            Self::DarkGray => Some("dark_gray"),
+            Self::LightRed => Some("light_red"),
+            Self::LightGreen => Some("light_green"),
+            Self::LightYellow => Some("light_yellow"),
+            Self::LightBlue => Some("light_blue"),
+            Self::LightMagenta => Some("light_magenta"),
+            Self::LightCyan => Some("light_cyan"),
+            Self::White => Some("white"),
+            Self::Rgb(_, _, _) => None,
+        }
+    }
+}
+
+impl fmt::Display for ThemeColor {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        if let Some(name) = self.name() {
+            formatter.write_str(name)
+        } else if let Self::Rgb(red, green, blue) = self {
+            write!(formatter, "#{red:02x}{green:02x}{blue:02x}")
         } else {
-            (index + Self::ALL.len() - 1) % Self::ALL.len()
-        };
-        Self::ALL[next]
+            unreachable!("all named colors have a stored name")
+        }
+    }
+}
+
+impl FromStr for ThemeColor {
+    type Err = String;
+
+    fn from_str(value: &str) -> Result<Self, Self::Err> {
+        let named = Self::ALL
+            .into_iter()
+            .find(|color| color.name() == Some(value));
+        if let Some(color) = named {
+            return Ok(color);
+        }
+
+        if let Some(hex) = value.strip_prefix('#')
+            && hex.len() == 6
+            && let Ok(rgb) = u32::from_str_radix(hex, 16)
+        {
+            return Ok(Self::Rgb(
+                ((rgb >> 16) & 0xff) as u8,
+                ((rgb >> 8) & 0xff) as u8,
+                (rgb & 0xff) as u8,
+            ));
+        }
+
+        Err(format!(
+            "color must be a supported preset name or #RRGGBB; found {value:?}"
+        ))
+    }
+}
+
+impl Serialize for ThemeColor {
+    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
+    where
+        S: Serializer,
+    {
+        serializer.serialize_str(&self.to_string())
+    }
+}
+
+impl<'de> Deserialize<'de> for ThemeColor {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        String::deserialize(deserializer)?
+            .parse()
+            .map_err(de::Error::custom)
     }
 }
 
@@ -144,5 +225,37 @@ impl Default for ThemeConfig {
             ThemeColor::Green,
             ThemeColor::Green,
         )
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn named_and_hex_colors_round_trip_through_toml() {
+        for color in [ThemeColor::LightCyan, ThemeColor::Rgb(0x5f, 0xd7, 0xff)] {
+            let config = ThemeConfig::default().with_color(ThemeRole::FocusedBorder, color);
+            let stored = toml::to_string(&config).unwrap();
+            assert_eq!(
+                toml::from_str::<ThemeConfig>(&stored)
+                    .unwrap()
+                    .focused_border(),
+                color
+            );
+        }
+    }
+
+    #[test]
+    fn hex_colors_accept_either_case_and_display_canonically() {
+        assert_eq!("#5FD7fF".parse(), Ok(ThemeColor::Rgb(0x5f, 0xd7, 0xff)));
+        assert_eq!(ThemeColor::Rgb(0x5f, 0xd7, 0xff).to_string(), "#5fd7ff");
+    }
+
+    #[test]
+    fn cycling_from_custom_colors_enters_the_named_preset_ring() {
+        let custom = ThemeColor::Rgb(1, 2, 3);
+        assert_eq!(custom.cycle(true), ThemeColor::Black);
+        assert_eq!(custom.cycle(false), ThemeColor::White);
     }
 }
