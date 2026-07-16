@@ -147,6 +147,7 @@ pub struct App {
     input: String,
     last_click: Option<(ClickTarget, Instant)>,
     pending_confirmation: Option<PendingConfirmation>,
+    show_task_numbers: bool,
 }
 
 impl App {
@@ -186,6 +187,7 @@ impl App {
             input: String::new(),
             last_click: None,
             pending_confirmation: None,
+            show_task_numbers: config.tasks().show_numbers(),
         }
     }
 
@@ -325,6 +327,10 @@ impl App {
     pub(crate) fn set_offsets(&mut self, todo_offset: usize, done_offset: usize) {
         self.todo_offset = todo_offset;
         self.done_offset = done_offset;
+    }
+
+    pub(crate) fn show_task_numbers(&self) -> bool {
+        self.show_task_numbers
     }
 
     fn focus(&mut self, focus: UiFocus) {
@@ -741,7 +747,7 @@ mod tests {
     use std::time::{Duration, Instant};
 
     use crate::{
-        config::{Config, TimerConfig},
+        config::{Config, TasksConfig, TimerConfig},
         timer::{SessionKind, TimerState},
     };
 
@@ -795,6 +801,19 @@ mod tests {
                 let _ = app.dispatch(Action::CycleSession);
             }
         }
+    }
+
+    #[test]
+    fn configured_task_numbering_is_available_to_the_ui() {
+        assert!(App::new().show_task_numbers());
+
+        let config = Config::with_tasks(
+            TimerConfig::default(),
+            TasksConfig::with_numbering(true, false),
+        )
+        .unwrap();
+
+        assert!(!App::from_config(&config).show_task_numbers());
     }
 
     #[test]

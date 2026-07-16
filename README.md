@@ -90,6 +90,7 @@ long_break_interval = 4
 
 [tasks]
 persist = true
+show_numbers = true
 ```
 
 To customize them, create `pomock/config.toml`
@@ -102,8 +103,6 @@ after every successful task change.
 The `tasks.toml` file lives under
 the platform's standard per-user application data directory
 (for example, `$XDG_DATA_HOME/pomock` or `~/.local/share/pomock` on Linux).
-Set `tasks.persist` to `false`
-to start with empty to-do and completed-task lists on every launch.
 
 ## License
 

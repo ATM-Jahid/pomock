@@ -106,25 +106,37 @@ impl Config {
     }
 }
 
-/// Controls whether task state crosses application restarts.
+/// Durable task behavior and presentation settings.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct TasksConfig {
     persist: bool,
+    show_numbers: bool,
 }
 
 impl TasksConfig {
     pub fn new(persist: bool) -> Self {
-        Self { persist }
+        Self::with_numbering(persist, true)
+    }
+
+    pub fn with_numbering(persist: bool, show_numbers: bool) -> Self {
+        Self {
+            persist,
+            show_numbers,
+        }
     }
 
     pub fn persist(&self) -> bool {
         self.persist
     }
+
+    pub fn show_numbers(&self) -> bool {
+        self.show_numbers
+    }
 }
 
 impl Default for TasksConfig {
     fn default() -> Self {
-        Self { persist: true }
+        Self::with_numbering(true, true)
     }
 }
 
@@ -320,12 +332,21 @@ struct StoredTimerConfig {
 #[serde(deny_unknown_fields)]
 struct StoredTasksConfig {
     persist: bool,
+    #[serde(default = "enabled")]
+    show_numbers: bool,
 }
 
 impl Default for StoredTasksConfig {
     fn default() -> Self {
-        Self { persist: true }
+        Self {
+            persist: true,
+            show_numbers: true,
+        }
     }
+}
+
+fn enabled() -> bool {
+    true
 }
 
 impl TryFrom<StoredConfig> for Config {
@@ -339,7 +360,7 @@ impl TryFrom<StoredConfig> for Config {
                 stored.timer.long_break_minutes,
                 stored.timer.long_break_interval,
             )?,
-            TasksConfig::new(stored.tasks.persist),
+            TasksConfig::with_numbering(stored.tasks.persist, stored.tasks.show_numbers),
         )
     }
 }
@@ -356,6 +377,7 @@ impl From<&Config> for StoredConfig {
             },
             tasks: StoredTasksConfig {
                 persist: config.tasks().persist(),
+                show_numbers: config.tasks().show_numbers(),
             },
         }
     }
@@ -390,6 +412,7 @@ mod tests {
         assert_eq!(config.timer().long_break_duration().as_secs(), 15 * 60);
         assert_eq!(config.timer().long_break_interval().get(), 4);
         assert!(config.tasks().persist());
+        assert!(config.tasks().show_numbers());
     }
 
     #[test]
@@ -404,7 +427,7 @@ mod tests {
         let path = temp_path("round-trip/config.toml");
         let config = Config::with_tasks(
             TimerConfig::new(50, 10, 30, 3).unwrap(),
-            TasksConfig::new(false),
+            TasksConfig::with_numbering(false, false),
         )
         .unwrap();
 
@@ -416,6 +439,7 @@ mod tests {
         assert!(contents.contains("focus_minutes = 50"));
         assert!(contents.contains("[tasks]"));
         assert!(contents.contains("persist = false"));
+        assert!(contents.contains("show_numbers = false"));
         fs::remove_dir_all(path.parent().unwrap()).unwrap();
     }
 
@@ -431,6 +455,23 @@ mod tests {
         let config = Config::load_from(&path).unwrap();
 
         assert!(config.tasks().persist());
+        assert!(config.tasks().show_numbers());
+        fs::remove_file(path).unwrap();
+    }
+
+    #[test]
+    fn existing_tasks_section_without_numbering_keeps_numbers_enabled() {
+        let path = temp_path("tasks-without-numbering.toml");
+        fs::write(
+            &path,
+            "[timer]\nfocus_minutes = 25\nshort_break_minutes = 5\nlong_break_minutes = 15\nlong_break_interval = 4\n\n[tasks]\npersist = false\n",
+        )
+        .unwrap();
+
+        let config = Config::load_from(&path).unwrap();
+
+        assert!(!config.tasks().persist());
+        assert!(config.tasks().show_numbers());
         fs::remove_file(path).unwrap();
     }
 

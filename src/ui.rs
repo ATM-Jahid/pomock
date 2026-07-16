@@ -87,7 +87,14 @@ pub fn draw(frame: &mut Frame, app: &mut App) {
     let todo_items: Vec<ListItem> = app
         .tasks()
         .pending()
-        .map(|task| ListItem::new(format!("  {}", task.description())))
+        .enumerate()
+        .map(|(index, task)| {
+            ListItem::new(task_label(
+                index,
+                task.description(),
+                app.show_task_numbers(),
+            ))
+        })
         .collect();
     let todo_is_empty = todo_items.is_empty();
     let todo = if todo_is_empty {
@@ -116,7 +123,14 @@ pub fn draw(frame: &mut Frame, app: &mut App) {
     let done_items: Vec<ListItem> = app
         .tasks()
         .completed()
-        .map(|task| ListItem::new(format!("  {}", task.description())))
+        .enumerate()
+        .map(|(index, task)| {
+            ListItem::new(task_label(
+                index,
+                task.description(),
+                app.show_task_numbers(),
+            ))
+        })
         .collect();
     let done_is_empty = done_items.is_empty();
     let done = if done_is_empty {
@@ -271,6 +285,14 @@ fn task_row_at(position: (u16, u16), area: Rect, offset: usize, len: usize) -> O
     (index < len).then_some(index)
 }
 
+fn task_label(index: usize, description: &str, show_numbers: bool) -> String {
+    if show_numbers {
+        format!("  {}. {description}", index + 1)
+    } else {
+        format!("  {description}")
+    }
+}
+
 fn controls_text(app: &App) -> String {
     if let Some(operation) = app.pending_confirmation() {
         let prompt = confirmation_prompt(operation);
@@ -417,6 +439,13 @@ mod tests {
 
         assert_eq!(task_row_at((11, 6), area, 4, 8), Some(4));
         assert_eq!(task_row_at((20, 8), area, 4, 8), Some(6));
+    }
+
+    #[test]
+    fn task_labels_can_show_or_hide_one_based_numbers() {
+        assert_eq!(task_label(0, "First", true), "  1. First");
+        assert_eq!(task_label(11, "Twelfth", true), "  12. Twelfth");
+        assert_eq!(task_label(0, "First", false), "  First");
     }
 
     #[test]
