@@ -34,6 +34,18 @@ impl TimerConfig {
         Duration::from_secs(self.focus_minutes * SECONDS_PER_MINUTE)
     }
 
+    pub fn focus_minutes(&self) -> u64 {
+        self.focus_minutes
+    }
+
+    pub fn short_break_minutes(&self) -> u64 {
+        self.short_break_minutes
+    }
+
+    pub fn long_break_minutes(&self) -> u64 {
+        self.long_break_minutes
+    }
+
     pub fn short_break_duration(&self) -> Duration {
         Duration::from_secs(self.short_break_minutes * SECONDS_PER_MINUTE)
     }

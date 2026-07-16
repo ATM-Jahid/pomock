@@ -7,9 +7,8 @@ and [Crossterm](https://github.com/crossterm-rs/crossterm).
 > [!IMPORTANT]
 > `pomock` is in early development.
 > The timer, persistent task lists,
-> and keyboard/mouse controls work today.
-> The settings UI and notifications are planned
-> but are not implemented yet.
+> keyboard/mouse controls, and settings UI work today.
+> Notifications are planned but are not implemented yet.
 
 ## Current features
 
@@ -19,6 +18,7 @@ and [Crossterm](https://github.com/crossterm-rs/crossterm).
 - Persistent task order and completion state.
 - Keyboard and mouse navigation.
 - TOML configuration for session durations, task behavior, and theme colors.
+- An in-app settings overlay for timer, task, theme, and key settings.
 
 The completed-focus count remains runtime-only and resets when `pomock` exits.
 
@@ -41,7 +41,23 @@ Controls are contextual to the focused box.
 - `H`, `J`, `K`, `L` — move focus
   between the clock, to-do, and completed-task boxes.
 - `q` — quit when not adding or editing a task.
+- `s` — open the settings overlay.
 Running or paused sessions ask for confirmation after 10 seconds of progress.
+
+### Settings
+
+- Up / Down or `j` / `k` — select a setting.
+- Left / Right or `h` / `l` — adjust a number, toggle, or color.
+- Enter or Space — edit a number, capture a key, toggle a value, or activate
+  Save/Cancel.
+- `s` — save settings and close the overlay.
+- Esc — cancel the current edit/capture, or close the overlay without saving.
+- Click a visible setting — select it; double-click to edit or activate it.
+
+Opening settings pauses a running timer.
+Canceling restores its prior activity.
+Pressing `s` again saves and closes settings.
+Saved changes are written immediately to `config.toml`.
 
 ### Clock
 

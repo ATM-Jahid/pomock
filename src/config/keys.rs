@@ -162,6 +162,24 @@ pub struct KeysConfig {
     pub(super) task_primary: KeyBindings,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum KeyAction {
+    FocusLeft,
+    FocusDown,
+    FocusUp,
+    FocusRight,
+    ListDown,
+    ListUp,
+    Quit,
+    ClockPrimary,
+    CycleSession,
+    ResetSession,
+    AddTask,
+    EditTask,
+    DeleteTask,
+    TaskPrimary,
+}
+
 impl KeysConfig {
     pub fn focus_left(&self) -> &[ConfigKey] {
         self.focus_left.as_slice()
@@ -204,6 +222,46 @@ impl KeysConfig {
     }
     pub fn task_primary(&self) -> &[ConfigKey] {
         self.task_primary.as_slice()
+    }
+
+    pub fn binding(&self, action: KeyAction) -> &[ConfigKey] {
+        match action {
+            KeyAction::FocusLeft => self.focus_left(),
+            KeyAction::FocusDown => self.focus_down(),
+            KeyAction::FocusUp => self.focus_up(),
+            KeyAction::FocusRight => self.focus_right(),
+            KeyAction::ListDown => self.list_down(),
+            KeyAction::ListUp => self.list_up(),
+            KeyAction::Quit => self.quit(),
+            KeyAction::ClockPrimary => self.clock_primary(),
+            KeyAction::CycleSession => self.cycle_session(),
+            KeyAction::ResetSession => self.reset_session(),
+            KeyAction::AddTask => self.add_task(),
+            KeyAction::EditTask => self.edit_task(),
+            KeyAction::DeleteTask => self.delete_task(),
+            KeyAction::TaskPrimary => self.task_primary(),
+        }
+    }
+
+    pub fn with_binding(mut self, action: KeyAction, key: ConfigKey) -> Self {
+        let binding = KeyBindings::one(key);
+        match action {
+            KeyAction::FocusLeft => self.focus_left = binding,
+            KeyAction::FocusDown => self.focus_down = binding,
+            KeyAction::FocusUp => self.focus_up = binding,
+            KeyAction::FocusRight => self.focus_right = binding,
+            KeyAction::ListDown => self.list_down = binding,
+            KeyAction::ListUp => self.list_up = binding,
+            KeyAction::Quit => self.quit = binding,
+            KeyAction::ClockPrimary => self.clock_primary = binding,
+            KeyAction::CycleSession => self.cycle_session = binding,
+            KeyAction::ResetSession => self.reset_session = binding,
+            KeyAction::AddTask => self.add_task = binding,
+            KeyAction::EditTask => self.edit_task = binding,
+            KeyAction::DeleteTask => self.delete_task = binding,
+            KeyAction::TaskPrimary => self.task_primary = binding,
+        }
+        self
     }
 
     pub(super) fn validate(&self) -> Result<(), ConfigValidationError> {

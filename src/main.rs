@@ -19,7 +19,7 @@ use std::time::{Duration, Instant};
 
 use pomock::{
     app::{App, AppOutcome, EditMode, TaskState},
-    config::Config,
+    config::{Config, ConfigError},
     input::map_key,
     persistence::{TaskPersistenceError, TaskStore},
     ui::{Theme, click_target, draw},
@@ -37,15 +37,25 @@ fn handle_mouse(app: &mut App, mouse: MouseEvent, area: Rect, now: Instant) -> A
 fn handle_outcome(
     outcome: AppOutcome,
     app: &App,
-    task_store: Option<&TaskStore>,
-) -> Result<bool, TaskPersistenceError> {
+    config: &mut Config,
+    task_store: &mut Option<TaskStore>,
+) -> Result<bool, RunError> {
     match outcome {
         AppOutcome::None => Ok(false),
         // Completion has no configured external effect yet. Notifications and
         // sound can be connected here without coupling them to App.
         AppOutcome::SessionCompleted(_) => Ok(false),
         AppOutcome::TasksChanged => {
-            if let Some(task_store) = task_store {
+            if let Some(task_store) = task_store.as_ref() {
+                task_store.save(&app.task_state())?;
+            }
+            Ok(false)
+        }
+        AppOutcome::SettingsChanged(updated) => {
+            updated.save()?;
+            *config = *updated;
+            *task_store = task_store_for_config(config)?;
+            if let Some(task_store) = task_store.as_ref() {
                 task_store.save(&app.task_state())?;
             }
             Ok(false)
@@ -77,12 +87,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let task_store = task_store_for_config(&config)?;
     let task_state = load_task_state(task_store.as_ref())?;
     let mut session = TerminalSession::start()?;
-    let run_result = run_app(
-        session.terminal_mut(),
-        &config,
-        task_store.as_ref(),
-        task_state,
-    );
+    let run_result = run_app(session.terminal_mut(), config, task_store, task_state);
     let restore_result = session.restore();
 
     Ok(combine_run_and_restore_results(run_result, restore_result)?)
@@ -91,6 +96,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 #[derive(Debug)]
 enum RunError {
     Terminal(io::Error),
+    Config(ConfigError),
     TaskPersistence(TaskPersistenceError),
     TerminalRestoration { run: Box<Self>, restore: io::Error },
 }
@@ -100,6 +106,7 @@ impl fmt::Display for RunError {
         match self {
             Self::Terminal(error) => error.fmt(formatter),
             Self::TaskPersistence(error) => error.fmt(formatter),
+            Self::Config(error) => error.fmt(formatter),
             Self::TerminalRestoration { run, restore } => {
                 write!(
                     formatter,
@@ -115,6 +122,7 @@ impl Error for RunError {
         match self {
             Self::Terminal(error) => Some(error),
             Self::TaskPersistence(error) => Some(error),
+            Self::Config(error) => Some(error),
             Self::TerminalRestoration { run, .. } => Some(run),
         }
     }
@@ -129,6 +137,12 @@ impl From<io::Error> for RunError {
 impl From<TaskPersistenceError> for RunError {
     fn from(error: TaskPersistenceError) -> Self {
         Self::TaskPersistence(error)
+    }
+}
+
+impl From<ConfigError> for RunError {
+    fn from(error: ConfigError) -> Self {
+        Self::Config(error)
     }
 }
 
@@ -252,31 +266,30 @@ fn combine_run_and_restore_results(
 
 fn run_app(
     terminal: &mut Terminal<CrosstermBackend<Stdout>>,
-    config: &Config,
-    task_store: Option<&TaskStore>,
+    mut config: Config,
+    mut task_store: Option<TaskStore>,
     task_state: TaskState,
 ) -> Result<(), RunError> {
-    let mut app = App::from_config_and_tasks(config, task_state);
-    let theme = Theme::from(config.theme());
+    let mut app = App::from_config_and_tasks(&config, task_state);
 
     let mut last_tick = Instant::now();
 
     loop {
         let now = Instant::now();
         let outcome = advance_timer(&mut app, &mut last_tick, now);
-        if handle_outcome(outcome, &app, task_store)? {
+        if handle_outcome(outcome, &app, &mut config, &mut task_store)? {
             break;
         }
 
         terminal.draw(|frame| {
-            draw(frame, &mut app, theme, config.keys());
+            draw(frame, &mut app, Theme::from(config.theme()), config.keys());
         })?;
 
         if event::poll(Duration::from_millis(100))? {
             let event = event::read()?;
             let now = Instant::now();
             let outcome = advance_timer(&mut app, &mut last_tick, now);
-            if handle_outcome(outcome, &app, task_store)? {
+            if handle_outcome(outcome, &app, &mut config, &mut task_store)? {
                 break;
             }
 
@@ -287,17 +300,18 @@ fn run_app(
                         app.edit_mode(),
                         app.ui_focus(),
                         app.is_confirmation_open(),
+                        app.settings_mode(),
                         config.keys(),
                     ) {
                         let outcome = app.dispatch(action);
-                        if handle_outcome(outcome, &app, task_store)? {
+                        if handle_outcome(outcome, &app, &mut config, &mut task_store)? {
                             break;
                         }
                     }
                 }
                 Event::Mouse(mouse) if app.edit_mode() == EditMode::Normal => {
                     let outcome = handle_mouse(&mut app, mouse, terminal.size()?.into(), now);
-                    if handle_outcome(outcome, &app, task_store)? {
+                    if handle_outcome(outcome, &app, &mut config, &mut task_store)? {
                         break;
                     }
                 }
@@ -383,8 +397,14 @@ mod tests {
         }
         let outcome = app.dispatch(Action::SubmitEdit);
 
-        assert!(!handle_outcome(outcome, &app, Some(&store)).unwrap());
-        assert_eq!(store.load().unwrap(), app.task_state());
+        let mut config = Config::default();
+        let mut task_store = Some(store);
+
+        assert!(!handle_outcome(outcome, &app, &mut config, &mut task_store).unwrap());
+        assert_eq!(
+            task_store.as_ref().unwrap().load().unwrap(),
+            app.task_state()
+        );
 
         fs::remove_file(path).unwrap();
     }
@@ -394,7 +414,7 @@ mod tests {
         let path = temp_path("disabled-tasks.toml");
         let store = TaskStore::at(&path);
         let config = Config::with_tasks(TimerConfig::default(), TasksConfig::new(false)).unwrap();
-        let disabled_store = task_store_for_config(&config).unwrap();
+        let mut disabled_store = task_store_for_config(&config).unwrap();
         assert!(disabled_store.is_none());
 
         let mut persisted_app = App::new();
@@ -418,7 +438,8 @@ mod tests {
         let _ = app.dispatch(Action::PushInput('x'));
         let outcome = app.dispatch(Action::SubmitEdit);
 
-        assert!(!handle_outcome(outcome, &app, disabled_store.as_ref()).unwrap());
+        let mut config = config;
+        assert!(!handle_outcome(outcome, &app, &mut config, &mut disabled_store).unwrap());
         assert_eq!(store.load().unwrap(), persisted);
 
         fs::remove_file(path).unwrap();

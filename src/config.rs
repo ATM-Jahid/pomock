@@ -12,9 +12,9 @@ mod tasks;
 mod theme;
 mod timer;
 
-pub use keys::{ConfigKey, KeysConfig};
+pub use keys::{ConfigKey, KeyAction, KeysConfig};
 pub use tasks::TasksConfig;
-pub use theme::{ThemeColor, ThemeConfig};
+pub use theme::{ThemeColor, ThemeConfig, ThemeRole};
 pub use timer::TimerConfig;
 
 #[cfg(test)]

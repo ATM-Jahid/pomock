@@ -69,6 +69,70 @@ impl ThemeConfig {
     pub fn completed_sessions(&self) -> ThemeColor {
         self.completed_sessions
     }
+
+    pub fn with_color(mut self, role: ThemeRole, color: ThemeColor) -> Self {
+        match role {
+            ThemeRole::FocusedBorder => self.focused_border = color,
+            ThemeRole::UnfocusedBorder => self.unfocused_border = color,
+            ThemeRole::TodoHighlight => self.todo_highlight = color,
+            ThemeRole::DoneHighlight => self.done_highlight = color,
+            ThemeRole::CompletedSessions => self.completed_sessions = color,
+        }
+        self
+    }
+
+    pub fn color(self, role: ThemeRole) -> ThemeColor {
+        match role {
+            ThemeRole::FocusedBorder => self.focused_border,
+            ThemeRole::UnfocusedBorder => self.unfocused_border,
+            ThemeRole::TodoHighlight => self.todo_highlight,
+            ThemeRole::DoneHighlight => self.done_highlight,
+            ThemeRole::CompletedSessions => self.completed_sessions,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ThemeRole {
+    FocusedBorder,
+    UnfocusedBorder,
+    TodoHighlight,
+    DoneHighlight,
+    CompletedSessions,
+}
+
+impl ThemeColor {
+    pub const ALL: [Self; 16] = [
+        Self::Black,
+        Self::Red,
+        Self::Green,
+        Self::Yellow,
+        Self::Blue,
+        Self::Magenta,
+        Self::Cyan,
+        Self::Gray,
+        Self::DarkGray,
+        Self::LightRed,
+        Self::LightGreen,
+        Self::LightYellow,
+        Self::LightBlue,
+        Self::LightMagenta,
+        Self::LightCyan,
+        Self::White,
+    ];
+
+    pub fn cycle(self, forward: bool) -> Self {
+        let index = Self::ALL
+            .iter()
+            .position(|color| *color == self)
+            .unwrap_or(0);
+        let next = if forward {
+            (index + 1) % Self::ALL.len()
+        } else {
+            (index + Self::ALL.len() - 1) % Self::ALL.len()
+        };
+        Self::ALL[next]
+    }
 }
 
 impl Default for ThemeConfig {

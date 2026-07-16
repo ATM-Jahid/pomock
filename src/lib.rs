@@ -15,6 +15,7 @@ pub mod config;
 mod display;
 pub mod input;
 pub mod persistence;
+mod settings;
 mod tasks;
 mod timer;
 pub mod ui;

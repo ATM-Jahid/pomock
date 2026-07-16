@@ -1,7 +1,7 @@
 use crossterm::event::KeyCode;
 
 use crate::{
-    app::{Action, Direction, EditMode, UiFocus},
+    app::{Action, Direction, EditMode, SettingsMode, UiFocus},
     config::{ConfigKey, KeysConfig},
 };
 
@@ -11,6 +11,7 @@ pub fn map_key(
     edit_mode: EditMode,
     focus: UiFocus,
     confirmation_open: bool,
+    settings_mode: SettingsMode,
     keys: &KeysConfig,
 ) -> Option<Action> {
     if confirmation_open {
@@ -29,6 +30,45 @@ pub fn map_key(
             KeyCode::Char(character) => Some(Action::PushInput(character)),
             _ => None,
         };
+    }
+
+    match settings_mode {
+        SettingsMode::EditingNumber => {
+            return match key {
+                KeyCode::Char('s') => Some(Action::SettingsSave),
+                KeyCode::Enter => Some(Action::SettingsSubmitInput),
+                KeyCode::Esc => Some(Action::SettingsCancel),
+                KeyCode::Backspace => Some(Action::SettingsPopInput),
+                KeyCode::Char(digit) if digit.is_ascii_digit() => {
+                    Some(Action::SettingsPushDigit(digit))
+                }
+                _ => None,
+            };
+        }
+        SettingsMode::CapturingKey => {
+            return match key {
+                KeyCode::Char('s') => Some(Action::SettingsSave),
+                KeyCode::Esc => Some(Action::SettingsCancel),
+                _ => config_key(key).map(Action::SettingsCaptureKey),
+            };
+        }
+        SettingsMode::Navigating => {
+            return match key {
+                KeyCode::Esc => Some(Action::SettingsCancel),
+                KeyCode::Char('s') => Some(Action::SettingsSave),
+                KeyCode::Enter | KeyCode::Char(' ') => Some(Action::SettingsActivate),
+                KeyCode::Up | KeyCode::Char('k') => Some(Action::SettingsMove(false)),
+                KeyCode::Down | KeyCode::Char('j') => Some(Action::SettingsMove(true)),
+                KeyCode::Left | KeyCode::Char('h') => Some(Action::SettingsAdjust(false)),
+                KeyCode::Right | KeyCode::Char('l') => Some(Action::SettingsAdjust(true)),
+                _ => None,
+            };
+        }
+        SettingsMode::Closed => {}
+    }
+
+    if key == KeyCode::Char('s') {
+        return Some(Action::OpenSettings);
     }
 
     if let Some(direction) = focus_direction(key, keys) {
@@ -54,6 +94,21 @@ pub fn map_key(
             Some(Action::PrimaryAction)
         }
         UiFocus::Todo | UiFocus::Done => row_direction(key, keys).map(Action::MoveSelection),
+        _ => None,
+    }
+}
+
+fn config_key(key: KeyCode) -> Option<ConfigKey> {
+    match key {
+        KeyCode::Char(' ') => Some(ConfigKey::Space),
+        KeyCode::Char(character) => Some(ConfigKey::Character(character)),
+        KeyCode::Enter => Some(ConfigKey::Enter),
+        KeyCode::Esc => Some(ConfigKey::Escape),
+        KeyCode::Backspace => Some(ConfigKey::Backspace),
+        KeyCode::Up => Some(ConfigKey::Up),
+        KeyCode::Down => Some(ConfigKey::Down),
+        KeyCode::Left => Some(ConfigKey::Left),
+        KeyCode::Right => Some(ConfigKey::Right),
         _ => None,
     }
 }
@@ -117,6 +172,7 @@ mod tests {
             edit_mode,
             focus,
             confirmation_open,
+            SettingsMode::Closed,
             &KeysConfig::default(),
         )
     }
@@ -236,6 +292,7 @@ mod tests {
                 EditMode::Normal,
                 UiFocus::Clock,
                 false,
+                SettingsMode::Closed,
                 &keys
             ),
             Some(Action::NavigateFocus(Direction::Left))
@@ -246,6 +303,7 @@ mod tests {
                 EditMode::Normal,
                 UiFocus::Clock,
                 false,
+                SettingsMode::Closed,
                 &keys
             ),
             Some(Action::PrimaryAction)
@@ -256,6 +314,7 @@ mod tests {
                 EditMode::Normal,
                 UiFocus::Clock,
                 false,
+                SettingsMode::Closed,
                 &keys
             ),
             Some(Action::CycleSession)
@@ -266,6 +325,7 @@ mod tests {
                 EditMode::Normal,
                 UiFocus::Clock,
                 false,
+                SettingsMode::Closed,
                 &keys
             ),
             None
@@ -282,13 +342,21 @@ mod tests {
                 EditMode::Normal,
                 UiFocus::Todo,
                 false,
+                SettingsMode::Closed,
                 &keys
             ),
             Some(Action::MoveSelection(Direction::Down))
         );
         for key in [KeyCode::Char('j'), KeyCode::Down] {
             assert_eq!(
-                map_key(key, EditMode::Normal, UiFocus::Todo, false, &keys),
+                map_key(
+                    key,
+                    EditMode::Normal,
+                    UiFocus::Todo,
+                    false,
+                    SettingsMode::Closed,
+                    &keys
+                ),
                 None
             );
         }
@@ -298,13 +366,21 @@ mod tests {
                 EditMode::Normal,
                 UiFocus::Done,
                 false,
+                SettingsMode::Closed,
                 &keys
             ),
             Some(Action::MoveSelection(Direction::Up))
         );
         for key in [KeyCode::Char('k'), KeyCode::Up] {
             assert_eq!(
-                map_key(key, EditMode::Normal, UiFocus::Done, false, &keys),
+                map_key(
+                    key,
+                    EditMode::Normal,
+                    UiFocus::Done,
+                    false,
+                    SettingsMode::Closed,
+                    &keys
+                ),
                 None
             );
         }
@@ -317,7 +393,14 @@ mod tests {
 
         for key in [KeyCode::Char('c'), KeyCode::Char('n')] {
             assert_eq!(
-                map_key(key, EditMode::Normal, UiFocus::Clock, false, &keys),
+                map_key(
+                    key,
+                    EditMode::Normal,
+                    UiFocus::Clock,
+                    false,
+                    SettingsMode::Closed,
+                    &keys
+                ),
                 Some(Action::CycleSession)
             );
         }
@@ -327,6 +410,7 @@ mod tests {
                 EditMode::Normal,
                 UiFocus::Done,
                 false,
+                SettingsMode::Closed,
                 &keys
             ),
             Some(Action::Quit)
@@ -344,6 +428,7 @@ mod tests {
                 EditMode::Adding,
                 UiFocus::Todo,
                 false,
+                SettingsMode::Closed,
                 &keys
             ),
             Some(Action::SubmitEdit)
@@ -354,9 +439,105 @@ mod tests {
                 EditMode::Normal,
                 UiFocus::Clock,
                 true,
+                SettingsMode::Closed,
                 &keys
             ),
             Some(Action::CancelPendingAction)
+        );
+    }
+
+    #[test]
+    fn settings_context_has_fixed_navigation_and_nested_editing_precedence() {
+        let keys = KeysConfig::default();
+        assert_eq!(
+            map_key(
+                KeyCode::Char('s'),
+                EditMode::Normal,
+                UiFocus::Clock,
+                false,
+                SettingsMode::Closed,
+                &keys
+            ),
+            Some(Action::OpenSettings)
+        );
+        assert_eq!(
+            map_key(
+                KeyCode::Char('s'),
+                EditMode::Normal,
+                UiFocus::Clock,
+                false,
+                SettingsMode::Navigating,
+                &keys
+            ),
+            Some(Action::SettingsSave)
+        );
+        assert_eq!(
+            map_key(
+                KeyCode::Down,
+                EditMode::Normal,
+                UiFocus::Clock,
+                false,
+                SettingsMode::Navigating,
+                &keys
+            ),
+            Some(Action::SettingsMove(true))
+        );
+        assert_eq!(
+            map_key(
+                KeyCode::Char('7'),
+                EditMode::Normal,
+                UiFocus::Clock,
+                false,
+                SettingsMode::EditingNumber,
+                &keys
+            ),
+            Some(Action::SettingsPushDigit('7'))
+        );
+        assert_eq!(
+            map_key(
+                KeyCode::Char('q'),
+                EditMode::Normal,
+                UiFocus::Clock,
+                false,
+                SettingsMode::CapturingKey,
+                &keys
+            ),
+            Some(Action::SettingsCaptureKey(ConfigKey::Character('q')))
+        );
+        assert_eq!(
+            map_key(
+                KeyCode::Esc,
+                EditMode::Normal,
+                UiFocus::Clock,
+                false,
+                SettingsMode::CapturingKey,
+                &keys
+            ),
+            Some(Action::SettingsCancel)
+        );
+
+        let keys: KeysConfig = toml::from_str("focus_left = \"s\"\n").unwrap();
+        assert_eq!(
+            map_key(
+                KeyCode::Char('s'),
+                EditMode::Normal,
+                UiFocus::Clock,
+                false,
+                SettingsMode::Closed,
+                &keys
+            ),
+            Some(Action::OpenSettings)
+        );
+        assert_eq!(
+            map_key(
+                KeyCode::Char('s'),
+                EditMode::Adding,
+                UiFocus::Todo,
+                false,
+                SettingsMode::Closed,
+                &keys
+            ),
+            Some(Action::PushInput('s'))
         );
     }
 }

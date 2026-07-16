@@ -2,7 +2,8 @@ use std::time::{Duration, Instant};
 
 use crate::{
     SessionKind,
-    config::Config,
+    config::{Config, ConfigKey},
+    settings::{SettingsOverlay, SettingsResult},
     tasks::{Task, TaskList},
     timer::{PomodoroTimer, TimerState},
 };
@@ -45,16 +46,27 @@ pub enum Action {
     CancelEdit,
     PushInput(char),
     PopInput,
+    OpenSettings,
+    SettingsMove(bool),
+    SettingsAdjust(bool),
+    SettingsActivate,
+    SettingsSave,
+    SettingsCancel,
+    SettingsPushDigit(char),
+    SettingsPopInput,
+    SettingsSubmitInput,
+    SettingsCaptureKey(ConfigKey),
 }
 
 /// A boundary-relevant result of applying an application transition.
 #[must_use]
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub enum AppOutcome {
     None,
     Quit,
     SessionCompleted(SessionKind),
     TasksChanged,
+    SettingsChanged(Box<Config>),
 }
 
 /// An opaque snapshot of durable task data for persistence adapters.
@@ -95,6 +107,14 @@ pub enum EditMode {
     Editing { task_index: usize },
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SettingsMode {
+    Closed,
+    Navigating,
+    EditingNumber,
+    CapturingKey,
+}
+
 /// A semantic mouse target produced by UI coordinate hit testing.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ClickTarget {
@@ -104,6 +124,7 @@ pub enum ClickTarget {
     TodoTask(usize),
     Done,
     DoneTask(usize),
+    SettingsRow(usize),
     Outside,
 }
 
@@ -115,10 +136,11 @@ pub(crate) enum TimerChange {
     StartSession(SessionKind),
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) enum ConfirmationOperation {
     Quit,
     TimerChange(TimerChange),
+    ApplySettings(Box<Config>),
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -127,7 +149,7 @@ enum PriorActivity {
     Paused,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 struct PendingConfirmation {
     operation: ConfirmationOperation,
     prior_activity: PriorActivity,
@@ -136,6 +158,7 @@ struct PendingConfirmation {
 /// Runtime application state and terminal-independent state transitions.
 #[derive(Debug)]
 pub struct App {
+    config: Config,
     timer: PomodoroTimer,
     tasks: TaskList,
     ui_focus: UiFocus,
@@ -148,6 +171,8 @@ pub struct App {
     last_click: Option<(ClickTarget, Instant)>,
     pending_confirmation: Option<PendingConfirmation>,
     show_task_numbers: bool,
+    settings: Option<SettingsOverlay>,
+    settings_prior_activity: Option<PriorActivity>,
 }
 
 impl App {
@@ -165,6 +190,7 @@ impl App {
     pub fn from_config_and_tasks(config: &Config, task_state: TaskState) -> Self {
         let timer = config.timer();
         Self {
+            config: config.clone(),
             timer: PomodoroTimer::new(
                 timer.focus_duration(),
                 timer.short_break_duration(),
@@ -188,6 +214,8 @@ impl App {
             last_click: None,
             pending_confirmation: None,
             show_task_numbers: config.tasks().show_numbers(),
+            settings: None,
+            settings_prior_activity: None,
         }
     }
 
@@ -220,6 +248,10 @@ impl App {
                 }
                 _ => AppOutcome::None,
             };
+        }
+
+        if self.settings.is_some() {
+            return self.dispatch_settings(action);
         }
 
         match action {
@@ -273,6 +305,16 @@ impl App {
             Action::CancelEdit => self.cancel_edit(),
             Action::PushInput(character) => self.push_input(character),
             Action::PopInput => self.pop_input(),
+            Action::OpenSettings => self.open_settings(),
+            Action::SettingsMove(_)
+            | Action::SettingsAdjust(_)
+            | Action::SettingsActivate
+            | Action::SettingsSave
+            | Action::SettingsCancel
+            | Action::SettingsPushDigit(_)
+            | Action::SettingsPopInput
+            | Action::SettingsSubmitInput
+            | Action::SettingsCaptureKey(_) => {}
         }
 
         AppOutcome::None
@@ -300,8 +342,27 @@ impl App {
         self.pending_confirmation.is_some()
     }
 
+    pub fn is_settings_open(&self) -> bool {
+        self.settings.is_some()
+    }
+
+    pub fn settings_mode(&self) -> SettingsMode {
+        match self.settings.as_ref() {
+            None => SettingsMode::Closed,
+            Some(settings) if settings.input().is_some() => SettingsMode::EditingNumber,
+            Some(settings) if settings.is_capturing_key() => SettingsMode::CapturingKey,
+            Some(_) => SettingsMode::Navigating,
+        }
+    }
+
+    pub(crate) fn settings(&self) -> Option<&SettingsOverlay> {
+        self.settings.as_ref()
+    }
+
     pub(crate) fn pending_confirmation(&self) -> Option<ConfirmationOperation> {
-        self.pending_confirmation.map(|pending| pending.operation)
+        self.pending_confirmation
+            .as_ref()
+            .map(|pending| pending.operation.clone())
     }
 
     pub(crate) fn input(&self) -> &str {
@@ -335,6 +396,98 @@ impl App {
 
     fn focus(&mut self, focus: UiFocus) {
         self.ui_focus = focus;
+    }
+
+    fn open_settings(&mut self) {
+        self.settings_prior_activity = match self.timer.state() {
+            TimerState::Running(_) => {
+                self.timer.pause();
+                Some(PriorActivity::Running)
+            }
+            TimerState::Paused(_) => Some(PriorActivity::Paused),
+            TimerState::Ready(_) => None,
+        };
+        self.settings = Some(SettingsOverlay::new(&self.config));
+        self.clear_pending_click();
+    }
+
+    fn dispatch_settings(&mut self, action: Action) -> AppOutcome {
+        let mut result = SettingsResult::Open;
+        {
+            let settings = self.settings.as_mut().expect("settings overlay is open");
+            match action {
+                Action::SettingsMove(down) => settings.move_selection(down),
+                Action::SettingsAdjust(forward) => settings.adjust(forward),
+                Action::SettingsActivate => result = settings.activate(),
+                Action::SettingsSave => result = settings.save(),
+                Action::SettingsPushDigit(digit) => settings.push_digit(digit),
+                Action::SettingsPopInput => settings.pop_input(),
+                Action::SettingsSubmitInput => settings.submit_input(),
+                Action::SettingsCaptureKey(key) => settings.capture_key(key),
+                Action::SettingsCancel => {
+                    if !settings.cancel_nested() {
+                        result = SettingsResult::Cancel;
+                    }
+                }
+                _ => {}
+            }
+        }
+        self.finish_settings_result(result)
+    }
+
+    fn finish_settings_result(&mut self, result: SettingsResult) -> AppOutcome {
+        match result {
+            SettingsResult::Open => AppOutcome::None,
+            SettingsResult::Cancel => {
+                self.settings = None;
+                self.restore_settings_activity();
+                self.clear_pending_click();
+                AppOutcome::None
+            }
+            SettingsResult::Save(config) => {
+                self.settings = None;
+                let timer_changed = config.timer() != self.config.timer();
+                if timer_changed && self.timer.progress() >= PROGRESS_CONFIRMATION_THRESHOLD {
+                    let prior_activity = self
+                        .settings_prior_activity
+                        .take()
+                        .unwrap_or(PriorActivity::Paused);
+                    self.pending_confirmation = Some(PendingConfirmation {
+                        operation: ConfirmationOperation::ApplySettings(config),
+                        prior_activity,
+                    });
+                    self.clear_pending_click();
+                    AppOutcome::None
+                } else {
+                    let outcome = self.apply_settings(*config);
+                    self.settings_prior_activity = None;
+                    outcome
+                }
+            }
+        }
+    }
+
+    fn restore_settings_activity(&mut self) {
+        if self.settings_prior_activity.take() == Some(PriorActivity::Running) {
+            self.timer.resume();
+        }
+    }
+
+    fn apply_settings(&mut self, config: Config) -> AppOutcome {
+        if config.timer() != self.config.timer() {
+            let timer = config.timer();
+            self.timer = PomodoroTimer::new(
+                timer.focus_duration(),
+                timer.short_break_duration(),
+                timer.long_break_duration(),
+                timer.long_break_interval(),
+            );
+        } else {
+            self.restore_settings_activity();
+        }
+        self.show_task_numbers = config.tasks().show_numbers();
+        self.config = config.clone();
+        AppOutcome::SettingsChanged(Box::new(config))
     }
 
     fn navigate_focus(&mut self, direction: Direction) {
@@ -471,6 +624,13 @@ impl App {
                 self.apply_timer_change(change);
                 AppOutcome::None
             }
+            Some(PendingConfirmation {
+                operation: ConfirmationOperation::ApplySettings(config),
+                ..
+            }) => {
+                self.settings_prior_activity = None;
+                self.apply_settings(*config)
+            }
             None => AppOutcome::None,
         };
         self.clear_pending_click();
@@ -557,6 +717,22 @@ impl App {
             return AppOutcome::None;
         }
 
+        if self.settings.is_some() {
+            let ClickTarget::SettingsRow(selection) = target else {
+                return AppOutcome::None;
+            };
+            let is_double = self.is_double_click(target, now);
+            if let Some(settings) = &mut self.settings {
+                settings.select(selection);
+            }
+            if is_double {
+                self.last_click = None;
+                return self.dispatch(Action::SettingsActivate);
+            }
+            self.last_click = Some((target, now));
+            return AppOutcome::None;
+        }
+
         let tasks_changed = match target {
             ClickTarget::Clock => {
                 self.focus(UiFocus::Clock);
@@ -615,6 +791,7 @@ impl App {
                 self.clear_pending_click();
                 false
             }
+            ClickTarget::SettingsRow(_) => false,
         };
 
         if tasks_changed {
@@ -632,7 +809,7 @@ impl App {
         let ClickTarget::SessionControl(session) = target else {
             return;
         };
-        let should_upgrade = self.pending_confirmation.is_some_and(|pending| {
+        let should_upgrade = self.pending_confirmation.as_ref().is_some_and(|pending| {
             pending.operation
                 == ConfirmationOperation::TimerChange(TimerChange::SelectSession(session))
                 && self.is_double_click(target, now)
@@ -661,6 +838,7 @@ impl App {
                 ClickTarget::SessionControl(_)
                 | ClickTarget::Todo
                 | ClickTarget::Done
+                | ClickTarget::SettingsRow(_)
                 | ClickTarget::Outside => {
                     unreachable!("only actionable targets are recorded")
                 }
@@ -753,7 +931,7 @@ mod tests {
 
     use super::{
         Action, App, AppOutcome, ClickTarget, ConfirmationOperation, Direction, EditMode,
-        TaskState, TimerChange, UiFocus,
+        SettingsMode, TaskState, TimerChange, UiFocus,
     };
 
     fn add_task(app: &mut App, description: &str) {
@@ -1617,5 +1795,71 @@ mod tests {
         let _ = app.handle_click_target(ClickTarget::Clock, first + Duration::from_millis(200));
 
         assert_eq!(app.timer().state(), TimerState::Ready(SessionKind::Focus));
+    }
+
+    #[test]
+    fn settings_pause_activity_and_cancel_restores_it() {
+        let mut app = App::new();
+        let _ = app.dispatch(Action::PrimaryAction);
+
+        assert_eq!(app.dispatch(Action::OpenSettings), AppOutcome::None);
+        assert_eq!(app.timer().state(), TimerState::Paused(SessionKind::Focus));
+        assert!(app.is_settings_open());
+
+        assert_eq!(app.dispatch(Action::SettingsCancel), AppOutcome::None);
+        assert_eq!(app.timer().state(), TimerState::Running(SessionKind::Focus));
+        assert!(!app.is_settings_open());
+    }
+
+    #[test]
+    fn settings_cancel_leaves_nested_editing_before_closing_overlay() {
+        let mut app = App::new();
+        let _ = app.dispatch(Action::OpenSettings);
+        let _ = app.dispatch(Action::SettingsActivate);
+
+        assert_eq!(app.settings_mode(), SettingsMode::EditingNumber);
+        assert_eq!(app.dispatch(Action::SettingsCancel), AppOutcome::None);
+        assert_eq!(app.settings_mode(), SettingsMode::Navigating);
+        assert_eq!(app.dispatch(Action::SettingsCancel), AppOutcome::None);
+        assert_eq!(app.settings_mode(), SettingsMode::Closed);
+    }
+
+    #[test]
+    fn applying_non_timer_settings_emits_config_and_restores_activity() {
+        let mut app = App::new();
+        let _ = app.dispatch(Action::PrimaryAction);
+        let _ = app.dispatch(Action::OpenSettings);
+        for _ in 0..4 {
+            let _ = app.dispatch(Action::SettingsMove(true));
+        }
+        let _ = app.dispatch(Action::SettingsActivate);
+        let outcome = app.dispatch(Action::SettingsSave);
+        let AppOutcome::SettingsChanged(config) = outcome else {
+            panic!("settings were not emitted")
+        };
+        assert!(!config.tasks().persist());
+        assert_eq!(app.timer().state(), TimerState::Running(SessionKind::Focus));
+    }
+
+    #[test]
+    fn timer_setting_changes_use_progress_confirmation_policy() {
+        let mut app = App::new();
+        let _ = app.dispatch(Action::PrimaryAction);
+        let _ = app.tick(Duration::from_secs(10));
+        let _ = app.dispatch(Action::OpenSettings);
+        let _ = app.dispatch(Action::SettingsActivate);
+        let _ = app.dispatch(Action::SettingsPopInput);
+        let _ = app.dispatch(Action::SettingsPopInput);
+        let _ = app.dispatch(Action::SettingsPushDigit('3'));
+        let _ = app.dispatch(Action::SettingsPushDigit('0'));
+        let _ = app.dispatch(Action::SettingsSubmitInput);
+        assert_eq!(app.dispatch(Action::SettingsSave), AppOutcome::None);
+        assert!(matches!(
+            app.pending_confirmation(),
+            Some(ConfirmationOperation::ApplySettings(_))
+        ));
+        assert_eq!(app.dispatch(Action::CancelPendingAction), AppOutcome::None);
+        assert_eq!(app.timer().state(), TimerState::Running(SessionKind::Focus));
+        assert_eq!(app.timer().progress(), Duration::from_secs(10));
     }
 }

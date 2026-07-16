@@ -2,13 +2,14 @@ use ratatui::{
     Frame,
     layout::{Alignment, Constraint, Direction as LayoutDirection, Layout, Rect},
     style::{Color, Modifier, Style},
-    widgets::{Block, Borders, List, ListItem, ListState, Paragraph},
+    widgets::{Block, Borders, Clear, List, ListItem, ListState, Paragraph},
 };
 
 use crate::{
     app::{App, ClickTarget, ConfirmationOperation, EditMode, TimerChange, UiFocus},
-    config::{ConfigKey, KeysConfig, ThemeColor, ThemeConfig},
+    config::{ConfigKey, KeyAction, KeysConfig, ThemeColor, ThemeConfig, ThemeRole},
     display::{format_big_duration, format_key, format_state},
+    settings::SettingField,
     timer::{SessionKind, TimerState},
 };
 
@@ -72,6 +73,9 @@ fn theme_color(color: ThemeColor) -> Color {
 
 /// Renders the complete application UI and synchronizes list scroll offsets.
 pub fn draw(frame: &mut Frame, app: &mut App, theme: Theme, keys: &KeysConfig) {
+    let theme = app
+        .settings()
+        .map_or(theme, |settings| Theme::from(settings.draft().theme()));
     let area = frame.area();
     let layout = ui_layout(area);
 
@@ -200,10 +204,18 @@ pub fn draw(frame: &mut Frame, app: &mut App, theme: Theme, keys: &KeysConfig) {
     frame.render_stateful_widget(done, layout.done, &mut done_state);
     frame.render_widget(controls, layout.controls);
     app.set_offsets(todo_state.offset(), done_state.offset());
+
+    if app.is_settings_open() {
+        draw_settings(frame, app, theme);
+    }
 }
 
 /// Translates terminal coordinates into a semantic application click target.
 pub fn click_target(area: Rect, position: (u16, u16), app: &App) -> ClickTarget {
+    if let Some(settings) = app.settings() {
+        return settings_row_at(area, position, settings.selection())
+            .map_or(ClickTarget::Outside, ClickTarget::SettingsRow);
+    }
     let layout = ui_layout(area);
     let point = position.into();
 
@@ -335,20 +347,20 @@ fn controls_text(app: &App, keys: &KeysConfig) -> String {
             let quit = format_key(first_key(keys.quit()));
             match app.ui_focus() {
                 UiFocus::Clock => format!(
-                    "[{focus_navigation}] box nav [{}] start/pause [{}] cycle session [{}] reset [{quit}] quit",
+                    "[{focus_navigation}] box nav [{}] start/pause [{}] cycle session [{}] reset [s] settings [{quit}] quit",
                     format_key(first_key(keys.clock_primary())),
                     format_key(first_key(keys.cycle_session())),
                     format_key(first_key(keys.reset_session())),
                 ),
                 UiFocus::Todo => format!(
-                    "[{focus_navigation}] box nav [{list_navigation}] list nav [{}] add [{}] edit [{}] delete [{}] complete [{quit}] quit",
+                    "[{focus_navigation}] box nav [{list_navigation}] list nav [{}] add [{}] edit [{}] delete [{}] complete [s] settings [{quit}] quit",
                     format_key(first_key(keys.add_task())),
                     format_key(first_key(keys.edit_task())),
                     format_key(first_key(keys.delete_task())),
                     format_key(first_key(keys.task_primary())),
                 ),
                 UiFocus::Done => format!(
-                    "[{focus_navigation}] box nav [{list_navigation}] list nav [{}] edit [{}] delete [{}] return [{quit}] quit",
+                    "[{focus_navigation}] box nav [{list_navigation}] list nav [{}] edit [{}] delete [{}] return [s] settings [{quit}] quit",
                     format_key(first_key(keys.edit_task())),
                     format_key(first_key(keys.delete_task())),
                     format_key(first_key(keys.task_primary())),
@@ -383,6 +395,213 @@ fn confirmation_prompt(operation: ConfirmationOperation) -> String {
                 session_label(session)
             ),
         },
+        ConfirmationOperation::ApplySettings(_) => {
+            "Apply timer settings and discard progress?".to_string()
+        }
+    }
+}
+
+fn settings_area(area: Rect) -> Rect {
+    let width = area.width.saturating_sub(4).min(72);
+    let height = area.height.saturating_sub(2).min(30);
+    Rect::new(
+        area.x + area.width.saturating_sub(width) / 2,
+        area.y + area.height.saturating_sub(height) / 2,
+        width,
+        height,
+    )
+}
+
+fn settings_parts(area: Rect) -> (Rect, Rect) {
+    let inner = Block::default()
+        .borders(Borders::ALL)
+        .inner(settings_area(area));
+    let chunks = Layout::default()
+        .direction(LayoutDirection::Vertical)
+        .constraints([Constraint::Min(1), Constraint::Length(2)])
+        .split(inner);
+    (chunks[0], chunks[1])
+}
+
+fn settings_offset(selection: usize, visible_rows: usize) -> usize {
+    if visible_rows == 0 {
+        0
+    } else {
+        selection.saturating_add(1).saturating_sub(visible_rows)
+    }
+}
+
+const SETTINGS_GROUPS: [(usize, &str); 4] =
+    [(0, "Timer"), (4, "Tasks"), (6, "Theme"), (11, "Keys")];
+
+fn settings_visual_row(selection: usize) -> usize {
+    selection
+        + SETTINGS_GROUPS
+            .iter()
+            .filter(|(first_field, _)| selection >= *first_field)
+            .count()
+}
+
+fn settings_field_row(visual_row: usize) -> Option<usize> {
+    let mut headings_before = 0;
+    for (group_index, (first_field, _)) in SETTINGS_GROUPS.iter().enumerate() {
+        let heading_row = first_field + group_index;
+        if visual_row == heading_row {
+            return None;
+        }
+        if visual_row > heading_row {
+            headings_before += 1;
+        }
+    }
+    let row = visual_row.saturating_sub(headings_before);
+    (row < SettingField::ALL.len()).then_some(row)
+}
+
+fn settings_row_at(area: Rect, position: (u16, u16), selection: usize) -> Option<usize> {
+    let (list, _) = settings_parts(area);
+    let point = position.into();
+    if !list.contains(point) {
+        return None;
+    }
+    let visible = usize::from(list.height);
+    let selected_row = settings_visual_row(selection);
+    let row = settings_offset(selected_row, visible) + usize::from(position.1 - list.y);
+    settings_field_row(row)
+}
+
+fn draw_settings(frame: &mut Frame, app: &App, theme: Theme) {
+    let settings = app.settings().expect("settings overlay is open");
+    let area = settings_area(frame.area());
+    let (list_area, footer_area) = settings_parts(frame.area());
+    frame.render_widget(Clear, area);
+    frame.render_widget(
+        Block::default()
+            .title("Settings")
+            .borders(Borders::ALL)
+            .border_style(Style::default().fg(theme.focused_border)),
+        area,
+    );
+
+    let mut items = Vec::with_capacity(SettingField::ALL.len() + SETTINGS_GROUPS.len());
+    for (index, field) in SettingField::ALL.iter().enumerate() {
+        if let Some((_, heading)) = SETTINGS_GROUPS
+            .iter()
+            .find(|(first_field, _)| *first_field == index)
+        {
+            items
+                .push(ListItem::new(*heading).style(Style::default().add_modifier(Modifier::BOLD)));
+        }
+        items.push(ListItem::new(setting_row(*field, settings)));
+    }
+    let selected_row = settings_visual_row(settings.selection());
+    let mut state = ListState::default().with_selected(Some(selected_row));
+    *state.offset_mut() = settings_offset(selected_row, usize::from(list_area.height));
+    frame.render_stateful_widget(
+        List::new(items).highlight_symbol("> ").highlight_style(
+            Style::default()
+                .fg(theme.todo_highlight)
+                .add_modifier(Modifier::BOLD),
+        ),
+        list_area,
+        &mut state,
+    );
+
+    let footer = if let Some(error) = settings.error() {
+        format!("{error}\n[Esc] back")
+    } else if settings.input().is_some() {
+        "Type a positive number  [Enter] apply  [s] save  [Esc] cancel".to_string()
+    } else if settings.is_capturing_key() {
+        "Press a key  [s] save  [Esc] cancel".to_string()
+    } else {
+        "[↑/↓ or j/k] select  [←/→] change  [Enter] edit  [s] save  [Esc] close".to_string()
+    };
+    frame.render_widget(
+        Paragraph::new(footer).alignment(Alignment::Center),
+        footer_area,
+    );
+}
+
+fn setting_row(field: SettingField, settings: &crate::settings::SettingsOverlay) -> String {
+    let config = settings.draft();
+    let (label, value) = match field {
+        SettingField::FocusMinutes => (
+            "  Focus minutes",
+            config.timer().focus_minutes().to_string(),
+        ),
+        SettingField::ShortBreakMinutes => (
+            "  Short break minutes",
+            config.timer().short_break_minutes().to_string(),
+        ),
+        SettingField::LongBreakMinutes => (
+            "  Long break minutes",
+            config.timer().long_break_minutes().to_string(),
+        ),
+        SettingField::LongBreakInterval => (
+            "  Long break interval",
+            config.timer().long_break_interval().to_string(),
+        ),
+        SettingField::PersistTasks => ("  Persist", on_off(config.tasks().persist()).to_string()),
+        SettingField::ShowTaskNumbers => (
+            "  Show numbers",
+            on_off(config.tasks().show_numbers()).to_string(),
+        ),
+        SettingField::Theme(role) => (
+            theme_role_label(role),
+            format!("{:?}", config.theme().color(role)),
+        ),
+        SettingField::Key(action) => (
+            key_action_label(action),
+            config
+                .keys()
+                .binding(action)
+                .iter()
+                .map(|key| format_key(*key))
+                .collect::<Vec<_>>()
+                .join("/"),
+        ),
+    };
+    let value = if settings.field() == field {
+        settings.input().map_or(value, |input| format!("{input}_"))
+    } else {
+        value
+    };
+    if value.is_empty() {
+        label.to_string()
+    } else {
+        format!("{label}: {value}")
+    }
+}
+
+fn on_off(value: bool) -> &'static str {
+    if value { "on" } else { "off" }
+}
+
+fn theme_role_label(role: ThemeRole) -> &'static str {
+    match role {
+        ThemeRole::FocusedBorder => "  Focused border",
+        ThemeRole::UnfocusedBorder => "  Unfocused border",
+        ThemeRole::TodoHighlight => "  To-do highlight",
+        ThemeRole::DoneHighlight => "  Done highlight",
+        ThemeRole::CompletedSessions => "  Completed sessions",
+    }
+}
+
+fn key_action_label(action: KeyAction) -> &'static str {
+    match action {
+        KeyAction::FocusLeft => "  Focus left",
+        KeyAction::FocusDown => "  Focus down",
+        KeyAction::FocusUp => "  Focus up",
+        KeyAction::FocusRight => "  Focus right",
+        KeyAction::ListDown => "  List down",
+        KeyAction::ListUp => "  List up",
+        KeyAction::Quit => "  Quit",
+        KeyAction::ClockPrimary => "  Clock primary",
+        KeyAction::CycleSession => "  Cycle session",
+        KeyAction::ResetSession => "  Reset session",
+        KeyAction::AddTask => "  Add task",
+        KeyAction::EditTask => "  Edit task",
+        KeyAction::DeleteTask => "  Delete task",
+        KeyAction::TaskPrimary => "  Task primary",
     }
 }
 
@@ -434,6 +653,8 @@ mod tests {
 
         assert!(help.contains("[H/J/K/L] box nav"));
         assert!(help.contains("[c] cycle session"));
+        assert!(help.contains("[s] settings"));
+        assert!(!help.contains("F2"));
         assert!(!help.contains("[n] next"));
     }
 
@@ -627,6 +848,59 @@ mod tests {
             assert_eq!(
                 click_target(area, (control.x, control.y), &app),
                 ClickTarget::SessionControl(session)
+            );
+        }
+    }
+
+    #[test]
+    fn settings_hit_testing_uses_the_visible_scrolled_rows() {
+        let mut app = App::new();
+        let _ = app.dispatch(Action::OpenSettings);
+        for _ in 0..25 {
+            let _ = app.dispatch(Action::SettingsMove(true));
+        }
+        let area = Rect::new(0, 0, 80, 24);
+        let (list, _) = settings_parts(area);
+        let selected_row = settings_visual_row(24);
+        let first_visible = settings_offset(selected_row, usize::from(list.height));
+        let expected = settings_field_row(first_visible).unwrap();
+
+        assert_eq!(
+            click_target(area, (list.x, list.y), &app),
+            ClickTarget::SettingsRow(expected)
+        );
+        assert_eq!(click_target(area, (0, 0), &app), ClickTarget::Outside);
+    }
+
+    #[test]
+    fn settings_groups_have_one_heading_and_indented_option_rows() {
+        let mut app = App::new();
+        let _ = app.dispatch(Action::OpenSettings);
+        let settings = app.settings().unwrap();
+
+        assert_eq!(
+            theme_role_label(ThemeRole::FocusedBorder),
+            "  Focused border"
+        );
+        assert!(
+            !setting_row(SettingField::Theme(ThemeRole::FocusedBorder), settings)
+                .contains("Theme /")
+        );
+        assert!(!setting_row(SettingField::FocusMinutes, settings).contains("Timer /"));
+        assert!(!setting_row(SettingField::PersistTasks, settings).contains("Tasks /"));
+        assert!(!setting_row(SettingField::Key(KeyAction::FocusLeft), settings).contains("Keys /"));
+
+        let area = Rect::new(0, 0, 80, 24);
+        let (list, _) = settings_parts(area);
+        for (group_index, (first_field, _)) in SETTINGS_GROUPS.iter().enumerate() {
+            let heading_row = first_field + group_index;
+            assert_eq!(
+                click_target(area, (list.x, list.y + heading_row as u16), &app),
+                ClickTarget::Outside
+            );
+            assert_eq!(
+                click_target(area, (list.x, list.y + heading_row as u16 + 1), &app),
+                ClickTarget::SettingsRow(*first_field)
             );
         }
     }
