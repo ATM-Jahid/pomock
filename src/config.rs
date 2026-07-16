@@ -16,18 +16,32 @@ const SECONDS_PER_MINUTE: u64 = 60;
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct Config {
     timer: TimerConfig,
+    tasks: TasksConfig,
 }
 
 impl Config {
     /// Creates and validates configuration expressed in whole minutes.
     pub fn new(timer: TimerConfig) -> Result<Self, ConfigValidationError> {
+        Self::with_tasks(timer, TasksConfig::default())
+    }
+
+    /// Creates and validates configuration with explicit task settings.
+    pub fn with_tasks(
+        timer: TimerConfig,
+        tasks: TasksConfig,
+    ) -> Result<Self, ConfigValidationError> {
         timer.validate()?;
-        Ok(Self { timer })
+        Ok(Self { timer, tasks })
     }
 
     /// Returns the validated timer settings.
     pub fn timer(&self) -> &TimerConfig {
         &self.timer
+    }
+
+    /// Returns the durable task settings.
+    pub fn tasks(&self) -> &TasksConfig {
+        &self.tasks
     }
 
     /// Returns the platform-appropriate per-user configuration path.
@@ -89,6 +103,28 @@ impl Config {
             path: path.to_owned(),
             source,
         })
+    }
+}
+
+/// Controls whether task state crosses application restarts.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct TasksConfig {
+    persist: bool,
+}
+
+impl TasksConfig {
+    pub fn new(persist: bool) -> Self {
+        Self { persist }
+    }
+
+    pub fn persist(&self) -> bool {
+        self.persist
+    }
+}
+
+impl Default for TasksConfig {
+    fn default() -> Self {
+        Self { persist: true }
     }
 }
 
@@ -267,6 +303,8 @@ impl Error for ConfigError {
 #[serde(deny_unknown_fields)]
 struct StoredConfig {
     timer: StoredTimerConfig,
+    #[serde(default)]
+    tasks: StoredTasksConfig,
 }
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -278,16 +316,31 @@ struct StoredTimerConfig {
     long_break_interval: u32,
 }
 
+#[derive(Debug, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct StoredTasksConfig {
+    persist: bool,
+}
+
+impl Default for StoredTasksConfig {
+    fn default() -> Self {
+        Self { persist: true }
+    }
+}
+
 impl TryFrom<StoredConfig> for Config {
     type Error = ConfigValidationError;
 
     fn try_from(stored: StoredConfig) -> Result<Self, Self::Error> {
-        Self::new(TimerConfig::new(
-            stored.timer.focus_minutes,
-            stored.timer.short_break_minutes,
-            stored.timer.long_break_minutes,
-            stored.timer.long_break_interval,
-        )?)
+        Self::with_tasks(
+            TimerConfig::new(
+                stored.timer.focus_minutes,
+                stored.timer.short_break_minutes,
+                stored.timer.long_break_minutes,
+                stored.timer.long_break_interval,
+            )?,
+            TasksConfig::new(stored.tasks.persist),
+        )
     }
 }
 
@@ -301,6 +354,9 @@ impl From<&Config> for StoredConfig {
                 long_break_minutes: timer.long_break_minutes,
                 long_break_interval: timer.long_break_interval,
             },
+            tasks: StoredTasksConfig {
+                persist: config.tasks().persist(),
+            },
         }
     }
 }
@@ -313,7 +369,7 @@ mod tests {
         sync::atomic::{AtomicU64, Ordering},
     };
 
-    use super::{Config, ConfigError, ConfigValidationError, TimerConfig};
+    use super::{Config, ConfigError, ConfigValidationError, TasksConfig, TimerConfig};
 
     static NEXT_TEMP_PATH: AtomicU64 = AtomicU64::new(0);
 
@@ -333,6 +389,7 @@ mod tests {
         assert_eq!(config.timer().short_break_duration().as_secs(), 5 * 60);
         assert_eq!(config.timer().long_break_duration().as_secs(), 15 * 60);
         assert_eq!(config.timer().long_break_interval().get(), 4);
+        assert!(config.tasks().persist());
     }
 
     #[test]
@@ -345,7 +402,11 @@ mod tests {
     #[test]
     fn saves_and_loads_a_valid_toml_round_trip() {
         let path = temp_path("round-trip/config.toml");
-        let config = Config::new(TimerConfig::new(50, 10, 30, 3).unwrap()).unwrap();
+        let config = Config::with_tasks(
+            TimerConfig::new(50, 10, 30, 3).unwrap(),
+            TasksConfig::new(false),
+        )
+        .unwrap();
 
         config.save_to(&path).unwrap();
         assert_eq!(Config::load_from(&path).unwrap(), config);
@@ -353,7 +414,24 @@ mod tests {
         let contents = fs::read_to_string(&path).unwrap();
         assert!(contents.contains("[timer]"));
         assert!(contents.contains("focus_minutes = 50"));
+        assert!(contents.contains("[tasks]"));
+        assert!(contents.contains("persist = false"));
         fs::remove_dir_all(path.parent().unwrap()).unwrap();
+    }
+
+    #[test]
+    fn existing_config_without_tasks_section_keeps_persistence_enabled() {
+        let path = temp_path("legacy.toml");
+        fs::write(
+            &path,
+            "[timer]\nfocus_minutes = 25\nshort_break_minutes = 5\nlong_break_minutes = 15\nlong_break_interval = 4\n",
+        )
+        .unwrap();
+
+        let config = Config::load_from(&path).unwrap();
+
+        assert!(config.tasks().persist());
+        fs::remove_file(path).unwrap();
     }
 
     #[test]

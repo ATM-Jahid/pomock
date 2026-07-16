@@ -5,19 +5,34 @@ pub struct Task {
 }
 
 impl Task {
+    pub(crate) fn new(description: String, completed: bool) -> Self {
+        Self {
+            description,
+            completed,
+        }
+    }
+
     pub fn description(&self) -> &str {
         &self.description
     }
+
+    pub(crate) fn is_completed(&self) -> bool {
+        self.completed
+    }
 }
 
-#[derive(Debug, Default)]
+#[derive(Debug, Clone, Default)]
 pub struct TaskList {
     tasks: Vec<Task>,
 }
 
 impl TaskList {
-    pub fn new() -> Self {
-        Self::default()
+    pub(crate) fn from_tasks(tasks: Vec<Task>) -> Self {
+        Self { tasks }
+    }
+
+    pub(crate) fn all(&self) -> impl Iterator<Item = &Task> {
+        self.tasks.iter()
     }
 
     pub fn add(&mut self, description: String) {
@@ -25,10 +40,7 @@ impl TaskList {
             return;
         }
 
-        self.tasks.push(Task {
-            description,
-            completed: false,
-        });
+        self.tasks.push(Task::new(description, false));
     }
 
     pub fn edit(&mut self, index: usize, description: String) -> bool {
@@ -100,7 +112,7 @@ mod tests {
 
     #[test]
     fn new_task_list_is_empty() {
-        let tasks = TaskList::new();
+        let tasks = TaskList::default();
 
         assert_eq!(tasks.pending().count(), 0);
         assert_eq!(tasks.completed().count(), 0);
@@ -108,7 +120,7 @@ mod tests {
 
     #[test]
     fn add_creates_a_pending_task() {
-        let mut tasks = TaskList::new();
+        let mut tasks = TaskList::default();
 
         tasks.add("Write Hello".to_string());
 
@@ -119,7 +131,7 @@ mod tests {
 
     #[test]
     fn add_ignores_blank_descriptions() {
-        let mut tasks = TaskList::new();
+        let mut tasks = TaskList::default();
 
         tasks.add("   ".to_string());
 
@@ -128,7 +140,7 @@ mod tests {
 
     #[test]
     fn edit_changes_a_task_description() {
-        let mut tasks = TaskList::new();
+        let mut tasks = TaskList::default();
         tasks.add("Learn Rust".to_string());
 
         assert!(tasks.edit(0, "Build pomock".to_string()));
@@ -141,14 +153,14 @@ mod tests {
 
     #[test]
     fn edit_rejects_an_unknown_index() {
-        let mut tasks = TaskList::new();
+        let mut tasks = TaskList::default();
 
         assert!(!tasks.edit(0, "Missing".to_string()));
     }
 
     #[test]
     fn edit_rejects_a_blank_description() {
-        let mut tasks = TaskList::new();
+        let mut tasks = TaskList::default();
         tasks.add("Keep me".to_string());
 
         assert!(!tasks.edit(0, " ".to_string()));
@@ -157,7 +169,7 @@ mod tests {
 
     #[test]
     fn complete_moves_a_task_to_completed() {
-        let mut tasks = TaskList::new();
+        let mut tasks = TaskList::default();
         tasks.add("Finish session".to_string());
 
         assert!(tasks.complete(0));
@@ -168,7 +180,7 @@ mod tests {
 
     #[test]
     fn uncomplete_moves_a_task_back_to_pending() {
-        let mut tasks = TaskList::new();
+        let mut tasks = TaskList::default();
         tasks.add("Finish session".to_string());
         tasks.complete(0);
 
@@ -180,7 +192,7 @@ mod tests {
 
     #[test]
     fn completing_an_unknown_index_returns_false() {
-        let mut tasks = TaskList::new();
+        let mut tasks = TaskList::default();
 
         assert!(!tasks.complete(0));
         assert!(!tasks.uncomplete(0));
@@ -188,7 +200,7 @@ mod tests {
 
     #[test]
     fn delete_removes_a_task() {
-        let mut tasks = TaskList::new();
+        let mut tasks = TaskList::default();
         tasks.add("Keep".to_string());
         tasks.add("Delete".to_string());
 
@@ -202,7 +214,7 @@ mod tests {
 
     #[test]
     fn pending_indices_refer_to_positions_in_the_full_list() {
-        let mut tasks = TaskList::new();
+        let mut tasks = TaskList::default();
         tasks.add("Completed first".to_string());
         tasks.add("Pending second".to_string());
         tasks.complete(0);
@@ -216,7 +228,7 @@ mod tests {
 
     #[test]
     fn completed_indices_refer_to_position_in_the_full_list() {
-        let mut tasks = TaskList::new();
+        let mut tasks = TaskList::default();
         tasks.add("Pending first".to_string());
         tasks.add("Completed second".to_string());
         tasks.complete(1);

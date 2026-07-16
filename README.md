@@ -6,9 +6,9 @@ and [Crossterm](https://github.com/crossterm-rs/crossterm).
 
 > [!IMPORTANT]
 > `pomock` is in early development.
-> The timer, in-memory task workflow, keyboard controls,
-> and mouse controls work today.
-> Task persistence, settings UI, and notifications are planned
+> The timer, persistent task lists,
+> and keyboard/mouse controls work today.
+> The settings UI and notifications are planned
 > but are not implemented yet.
 
 ## Current features
@@ -16,10 +16,11 @@ and [Crossterm](https://github.com/crossterm-rs/crossterm).
 - Focus and break countdown sessions
   with start, pause, resume, reset, and cycle-session controls.
 - Editable to-do and completed-task lists.
+- Persistent task order and completion state.
 - Keyboard and mouse navigation.
 - TOML configuration for session durations and the long-break interval.
 
-Tasks and the completed-focus count currently reset when `pomock` exits.
+The completed-focus count remains runtime-only and resets when `pomock` exits.
 
 ## Run from source
 
@@ -86,12 +87,23 @@ focus_minutes = 25
 short_break_minutes = 5
 long_break_minutes = 15
 long_break_interval = 4
+
+[tasks]
+persist = true
 ```
 
 To customize them, create `pomock/config.toml`
 in your platform's standard user configuration directory
 (for example, `$XDG_CONFIG_HOME` or `~/.config` on Linux).
 All duration values and `long_break_interval` must be greater than zero.
+
+By default, `pomock` saves task descriptions, order, and completion state
+after every successful task change.
+The `tasks.toml` file lives under
+the platform's standard per-user application data directory
+(for example, `$XDG_DATA_HOME/pomock` or `~/.local/share/pomock` on Linux).
+Set `tasks.persist` to `false`
+to start with empty to-do and completed-task lists on every launch.
 
 ## License
 

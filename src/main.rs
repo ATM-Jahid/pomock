@@ -1,4 +1,8 @@
-use std::io::{self, Stdout};
+use std::{
+    error::Error,
+    fmt,
+    io::{self, Stdout},
+};
 
 use crossterm::{
     event::{
@@ -14,29 +18,48 @@ use ratatui::{Terminal, backend::CrosstermBackend, layout::Rect};
 use std::time::{Duration, Instant};
 
 use pomock::{
-    app::{App, AppOutcome, EditMode},
+    app::{App, AppOutcome, EditMode, TaskState},
     config::Config,
     input::map_key,
+    persistence::{TaskPersistenceError, TaskStore},
     ui::{click_target, draw},
 };
 
-fn handle_mouse(app: &mut App, mouse: MouseEvent, area: Rect, now: Instant) {
+fn handle_mouse(app: &mut App, mouse: MouseEvent, area: Rect, now: Instant) -> AppOutcome {
     if mouse.kind != MouseEventKind::Down(MouseButton::Left) {
-        return;
+        return AppOutcome::None;
     }
 
     let target = click_target(area, (mouse.column, mouse.row), app);
-    app.handle_click_target(target, now);
+    app.handle_click_target(target, now)
 }
 
-fn handle_outcome(outcome: AppOutcome) -> bool {
+fn handle_outcome(
+    outcome: AppOutcome,
+    app: &App,
+    task_store: Option<&TaskStore>,
+) -> Result<bool, TaskPersistenceError> {
     match outcome {
-        AppOutcome::None => false,
+        AppOutcome::None => Ok(false),
         // Completion has no configured external effect yet. Notifications and
         // sound can be connected here without coupling them to App.
-        AppOutcome::SessionCompleted(_) => false,
-        AppOutcome::Quit => true,
+        AppOutcome::SessionCompleted(_) => Ok(false),
+        AppOutcome::TasksChanged => {
+            if let Some(task_store) = task_store {
+                task_store.save(&app.task_state())?;
+            }
+            Ok(false)
+        }
+        AppOutcome::Quit => Ok(true),
     }
+}
+
+fn task_store_for_config(config: &Config) -> Result<Option<TaskStore>, TaskPersistenceError> {
+    config.tasks().persist().then(TaskStore::user).transpose()
+}
+
+fn load_task_state(task_store: Option<&TaskStore>) -> Result<TaskState, TaskPersistenceError> {
+    task_store.map_or_else(|| Ok(TaskState::default()), TaskStore::load)
 }
 
 fn should_handle_key_event(kind: KeyEventKind) -> bool {
@@ -51,11 +74,62 @@ fn advance_timer(app: &mut App, last_tick: &mut Instant, now: Instant) -> AppOut
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     let config = Config::load()?;
+    let task_store = task_store_for_config(&config)?;
+    let task_state = load_task_state(task_store.as_ref())?;
     let mut session = TerminalSession::start()?;
-    let run_result = run_app(session.terminal_mut(), &config);
+    let run_result = run_app(
+        session.terminal_mut(),
+        &config,
+        task_store.as_ref(),
+        task_state,
+    );
     let restore_result = session.restore();
 
     Ok(combine_run_and_restore_results(run_result, restore_result)?)
+}
+
+#[derive(Debug)]
+enum RunError {
+    Terminal(io::Error),
+    TaskPersistence(TaskPersistenceError),
+    TerminalRestoration { run: Box<Self>, restore: io::Error },
+}
+
+impl fmt::Display for RunError {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::Terminal(error) => error.fmt(formatter),
+            Self::TaskPersistence(error) => error.fmt(formatter),
+            Self::TerminalRestoration { run, restore } => {
+                write!(
+                    formatter,
+                    "{run}; terminal restoration also failed: {restore}"
+                )
+            }
+        }
+    }
+}
+
+impl Error for RunError {
+    fn source(&self) -> Option<&(dyn Error + 'static)> {
+        match self {
+            Self::Terminal(error) => Some(error),
+            Self::TaskPersistence(error) => Some(error),
+            Self::TerminalRestoration { run, .. } => Some(run),
+        }
+    }
+}
+
+impl From<io::Error> for RunError {
+    fn from(error: io::Error) -> Self {
+        Self::Terminal(error)
+    }
+}
+
+impl From<TaskPersistenceError> for RunError {
+    fn from(error: TaskPersistenceError) -> Self {
+        Self::TaskPersistence(error)
+    }
 }
 
 struct TerminalSession {
@@ -162,30 +236,34 @@ fn record_error(first_error: &mut Option<io::Error>, result: io::Result<()>) {
 }
 
 fn combine_run_and_restore_results(
-    run_result: io::Result<()>,
+    run_result: Result<(), RunError>,
     restore_result: io::Result<()>,
-) -> io::Result<()> {
+) -> Result<(), RunError> {
     match (run_result, restore_result) {
         (Ok(()), Ok(())) => Ok(()),
-        (Err(error), Ok(())) | (Ok(()), Err(error)) => Err(error),
-        (Err(run_error), Err(restore_error)) => Err(io::Error::new(
-            run_error.kind(),
-            format!("{run_error}; terminal restoration also failed: {restore_error}"),
-        )),
+        (Err(error), Ok(())) => Err(error),
+        (Ok(()), Err(error)) => Err(RunError::Terminal(error)),
+        (Err(run), Err(restore)) => Err(RunError::TerminalRestoration {
+            run: Box::new(run),
+            restore,
+        }),
     }
 }
 
 fn run_app(
     terminal: &mut Terminal<CrosstermBackend<Stdout>>,
     config: &Config,
-) -> std::io::Result<()> {
-    let mut app = App::from_config(config);
+    task_store: Option<&TaskStore>,
+    task_state: TaskState,
+) -> Result<(), RunError> {
+    let mut app = App::from_config_and_tasks(config, task_state);
 
     let mut last_tick = Instant::now();
 
     loop {
         let now = Instant::now();
-        if handle_outcome(advance_timer(&mut app, &mut last_tick, now)) {
+        let outcome = advance_timer(&mut app, &mut last_tick, now);
+        if handle_outcome(outcome, &app, task_store)? {
             break;
         }
 
@@ -196,7 +274,8 @@ fn run_app(
         if event::poll(Duration::from_millis(100))? {
             let event = event::read()?;
             let now = Instant::now();
-            if handle_outcome(advance_timer(&mut app, &mut last_tick, now)) {
+            let outcome = advance_timer(&mut app, &mut last_tick, now);
+            if handle_outcome(outcome, &app, task_store)? {
                 break;
             }
 
@@ -207,13 +286,18 @@ fn run_app(
                         app.edit_mode(),
                         app.ui_focus(),
                         app.is_confirmation_open(),
-                    ) && handle_outcome(app.dispatch(action))
-                    {
-                        break;
+                    ) {
+                        let outcome = app.dispatch(action);
+                        if handle_outcome(outcome, &app, task_store)? {
+                            break;
+                        }
                     }
                 }
                 Event::Mouse(mouse) if app.edit_mode() == EditMode::Normal => {
-                    handle_mouse(&mut app, mouse, terminal.size()?.into(), now);
+                    let outcome = handle_mouse(&mut app, mouse, terminal.size()?.into(), now);
+                    if handle_outcome(outcome, &app, task_store)? {
+                        break;
+                    }
                 }
                 _ => {}
             }
@@ -225,8 +309,27 @@ fn run_app(
 
 #[cfg(test)]
 mod tests {
+    use std::{
+        fs,
+        path::PathBuf,
+        sync::atomic::{AtomicU64, Ordering},
+    };
+
     use super::*;
-    use pomock::app::Action;
+    use pomock::{
+        app::{Action, Direction},
+        config::{TasksConfig, TimerConfig},
+    };
+
+    static NEXT_TEMP_PATH: AtomicU64 = AtomicU64::new(0);
+
+    fn temp_path(name: &str) -> PathBuf {
+        let unique = NEXT_TEMP_PATH.fetch_add(1, Ordering::Relaxed);
+        std::env::temp_dir().join(format!(
+            "pomock-main-test-{}-{unique}-{name}",
+            std::process::id()
+        ))
+    }
 
     #[test]
     fn key_releases_are_ignored_while_presses_and_repeats_are_handled() {
@@ -267,12 +370,69 @@ mod tests {
     }
 
     #[test]
+    fn task_change_outcomes_are_saved_at_the_boundary() {
+        let path = temp_path("tasks.toml");
+        let store = TaskStore::at(&path);
+        let mut app = App::new();
+        let _ = app.dispatch(Action::NavigateFocus(Direction::Down));
+        let _ = app.dispatch(Action::BeginAdd);
+        for character in "Persist me".chars() {
+            let _ = app.dispatch(Action::PushInput(character));
+        }
+        let outcome = app.dispatch(Action::SubmitEdit);
+
+        assert!(!handle_outcome(outcome, &app, Some(&store)).unwrap());
+        assert_eq!(store.load().unwrap(), app.task_state());
+
+        fs::remove_file(path).unwrap();
+    }
+
+    #[test]
+    fn disabled_task_persistence_starts_empty_and_does_not_save_changes() {
+        let path = temp_path("disabled-tasks.toml");
+        let store = TaskStore::at(&path);
+        let config = Config::with_tasks(TimerConfig::default(), TasksConfig::new(false)).unwrap();
+        let disabled_store = task_store_for_config(&config).unwrap();
+        assert!(disabled_store.is_none());
+
+        let mut persisted_app = App::new();
+        let _ = persisted_app.dispatch(Action::NavigateFocus(Direction::Down));
+        let _ = persisted_app.dispatch(Action::BeginAdd);
+        for character in "Keep on disk".chars() {
+            let _ = persisted_app.dispatch(Action::PushInput(character));
+        }
+        let _ = persisted_app.dispatch(Action::SubmitEdit);
+        let persisted = persisted_app.task_state();
+        store.save(&persisted).unwrap();
+
+        assert_eq!(
+            load_task_state(disabled_store.as_ref()).unwrap(),
+            TaskState::default()
+        );
+
+        let mut app = App::new();
+        let _ = app.dispatch(Action::NavigateFocus(Direction::Down));
+        let _ = app.dispatch(Action::BeginAdd);
+        let _ = app.dispatch(Action::PushInput('x'));
+        let outcome = app.dispatch(Action::SubmitEdit);
+
+        assert!(!handle_outcome(outcome, &app, disabled_store.as_ref()).unwrap());
+        assert_eq!(store.load().unwrap(), persisted);
+
+        fs::remove_file(path).unwrap();
+    }
+
+    #[test]
     fn run_error_is_preserved_when_restoration_succeeds() {
         let run_error = io::Error::new(io::ErrorKind::BrokenPipe, "run failed");
 
-        let error = combine_run_and_restore_results(Err(run_error), Ok(())).unwrap_err();
+        let error = combine_run_and_restore_results(Err(RunError::Terminal(run_error)), Ok(()))
+            .unwrap_err();
 
-        assert_eq!(error.kind(), io::ErrorKind::BrokenPipe);
+        assert!(matches!(
+            error,
+            RunError::Terminal(ref error) if error.kind() == io::ErrorKind::BrokenPipe
+        ));
         assert_eq!(error.to_string(), "run failed");
     }
 
@@ -282,6 +442,7 @@ mod tests {
 
         let error = combine_run_and_restore_results(Ok(()), Err(restore_error)).unwrap_err();
 
+        assert!(matches!(error, RunError::Terminal(_)));
         assert_eq!(error.to_string(), "restore failed");
     }
 
@@ -291,9 +452,10 @@ mod tests {
         let restore_error = io::Error::other("restore failed");
 
         let error =
-            combine_run_and_restore_results(Err(run_error), Err(restore_error)).unwrap_err();
+            combine_run_and_restore_results(Err(RunError::Terminal(run_error)), Err(restore_error))
+                .unwrap_err();
 
-        assert_eq!(error.kind(), io::ErrorKind::BrokenPipe);
+        assert!(matches!(error, RunError::TerminalRestoration { .. }));
         assert_eq!(
             error.to_string(),
             "run failed; terminal restoration also failed: restore failed"
