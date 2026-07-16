@@ -98,6 +98,22 @@ unfocused_border = "dark_gray"
 todo_highlight = "yellow"
 done_highlight = "green"
 completed_sessions = "green"
+
+[keys]
+focus_left = "H"
+focus_down = "J"
+focus_up = "K"
+focus_right = "L"
+list_down = ["j", "down"]
+list_up = ["k", "up"]
+quit = "q"
+clock_primary = "space"
+cycle_session = "c"
+reset_session = "r"
+add_task = "a"
+edit_task = "e"
+delete_task = "x"
+task_primary = "space"
 ```
 
 To customize them, create `pomock/config.toml`
@@ -115,6 +131,12 @@ The `[theme]` section is optional, and individual omitted roles keep their
 defaults. Colors use portable terminal names: `black`, `red`, `green`,
 `yellow`, `blue`, `magenta`, `cyan`, `gray`, `dark_gray`, the `light_` variants
 of red through cyan, and `white`.
+
+The `[keys]` section is also optional.
+Each binding is either a single key or an ordered list of keys;
+the controls text shows only the first key.
+A key is one printable character or one of
+`space`, `enter`, `esc`, `backspace`, `up`, `down`, `left`, and `right`.
 
 ## License
 

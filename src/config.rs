@@ -7,7 +7,7 @@ use std::{
 };
 
 use directories::ProjectDirs;
-use serde::{Deserialize, Serialize};
+use serde::{Deserialize, Deserializer, Serialize, Serializer, de};
 
 const CONFIG_FILE_NAME: &str = "config.toml";
 const SECONDS_PER_MINUTE: u64 = 60;
@@ -18,6 +18,7 @@ pub struct Config {
     timer: TimerConfig,
     tasks: TasksConfig,
     theme: ThemeConfig,
+    keys: KeysConfig,
 }
 
 impl Config {
@@ -40,11 +41,23 @@ impl Config {
         tasks: TasksConfig,
         theme: ThemeConfig,
     ) -> Result<Self, ConfigValidationError> {
+        Self::with_settings(timer, tasks, theme, KeysConfig::default())
+    }
+
+    /// Creates and validates all durable application settings.
+    pub fn with_settings(
+        timer: TimerConfig,
+        tasks: TasksConfig,
+        theme: ThemeConfig,
+        keys: KeysConfig,
+    ) -> Result<Self, ConfigValidationError> {
         timer.validate()?;
+        keys.validate()?;
         Ok(Self {
             timer,
             tasks,
             theme,
+            keys,
         })
     }
 
@@ -61,6 +74,11 @@ impl Config {
     /// Returns the semantic UI theme settings.
     pub fn theme(&self) -> &ThemeConfig {
         &self.theme
+    }
+
+    /// Returns the contextual normal-mode key bindings.
+    pub fn keys(&self) -> &KeysConfig {
+        &self.keys
     }
 
     /// Returns the platform-appropriate per-user configuration path.
@@ -242,6 +260,294 @@ impl Default for ThemeConfig {
     }
 }
 
+/// A terminal-independent physical key accepted by configurable commands.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ConfigKey {
+    Character(char),
+    Space,
+    Enter,
+    Escape,
+    Backspace,
+    Up,
+    Down,
+    Left,
+    Right,
+}
+
+impl ConfigKey {
+    fn stored_name(self) -> String {
+        match self {
+            Self::Character(character) => character.to_string(),
+            Self::Space => "space".to_string(),
+            Self::Enter => "enter".to_string(),
+            Self::Escape => "esc".to_string(),
+            Self::Backspace => "backspace".to_string(),
+            Self::Up => "up".to_string(),
+            Self::Down => "down".to_string(),
+            Self::Left => "left".to_string(),
+            Self::Right => "right".to_string(),
+        }
+    }
+
+    fn from_stored_name(value: &str) -> Result<Self, String> {
+        match value {
+            "space" => Ok(Self::Space),
+            "enter" => Ok(Self::Enter),
+            "esc" => Ok(Self::Escape),
+            "backspace" => Ok(Self::Backspace),
+            "up" => Ok(Self::Up),
+            "down" => Ok(Self::Down),
+            "left" => Ok(Self::Left),
+            "right" => Ok(Self::Right),
+            _ => {
+                let mut characters = value.chars();
+                match (characters.next(), characters.next()) {
+                    (Some(character), None) if !character.is_control() && character != ' ' => {
+                        Ok(Self::Character(character))
+                    }
+                    _ => Err(format!(
+                        "key must be one printable character or one of: space, enter, esc, backspace, up, down, left, right; found {value:?}"
+                    )),
+                }
+            }
+        }
+    }
+}
+
+impl Serialize for ConfigKey {
+    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
+    where
+        S: Serializer,
+    {
+        serializer.serialize_str(&self.stored_name())
+    }
+}
+
+impl<'de> Deserialize<'de> for ConfigKey {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        let value = String::deserialize(deserializer)?;
+        Self::from_stored_name(&value).map_err(de::Error::custom)
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct KeyBindings(Vec<ConfigKey>);
+
+impl KeyBindings {
+    fn one(key: ConfigKey) -> Self {
+        Self(vec![key])
+    }
+
+    fn as_slice(&self) -> &[ConfigKey] {
+        &self.0
+    }
+}
+
+impl Serialize for KeyBindings {
+    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
+    where
+        S: Serializer,
+    {
+        if let [key] = self.0.as_slice() {
+            key.serialize(serializer)
+        } else {
+            self.0.serialize(serializer)
+        }
+    }
+}
+
+impl<'de> Deserialize<'de> for KeyBindings {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        struct KeyBindingsVisitor;
+
+        impl<'de> de::Visitor<'de> for KeyBindingsVisitor {
+            type Value = KeyBindings;
+
+            fn expecting(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+                formatter.write_str("a key name or a list of key names")
+            }
+
+            fn visit_str<E>(self, value: &str) -> Result<Self::Value, E>
+            where
+                E: de::Error,
+            {
+                ConfigKey::from_stored_name(value)
+                    .map(KeyBindings::one)
+                    .map_err(E::custom)
+            }
+
+            fn visit_seq<A>(self, mut sequence: A) -> Result<Self::Value, A::Error>
+            where
+                A: de::SeqAccess<'de>,
+            {
+                let mut keys = Vec::with_capacity(sequence.size_hint().unwrap_or(0));
+                while let Some(key) = sequence.next_element()? {
+                    keys.push(key);
+                }
+                Ok(KeyBindings(keys))
+            }
+        }
+
+        deserializer.deserialize_any(KeyBindingsVisitor)
+    }
+}
+
+/// Durable normal-mode key bindings. Editing and confirmation keys are fixed.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(default, deny_unknown_fields)]
+pub struct KeysConfig {
+    focus_left: KeyBindings,
+    focus_down: KeyBindings,
+    focus_up: KeyBindings,
+    focus_right: KeyBindings,
+    list_down: KeyBindings,
+    list_up: KeyBindings,
+    quit: KeyBindings,
+    clock_primary: KeyBindings,
+    cycle_session: KeyBindings,
+    reset_session: KeyBindings,
+    add_task: KeyBindings,
+    edit_task: KeyBindings,
+    delete_task: KeyBindings,
+    task_primary: KeyBindings,
+}
+
+impl KeysConfig {
+    pub fn focus_left(&self) -> &[ConfigKey] {
+        self.focus_left.as_slice()
+    }
+    pub fn focus_down(&self) -> &[ConfigKey] {
+        self.focus_down.as_slice()
+    }
+    pub fn focus_up(&self) -> &[ConfigKey] {
+        self.focus_up.as_slice()
+    }
+    pub fn focus_right(&self) -> &[ConfigKey] {
+        self.focus_right.as_slice()
+    }
+    pub fn list_down(&self) -> &[ConfigKey] {
+        self.list_down.as_slice()
+    }
+    pub fn list_up(&self) -> &[ConfigKey] {
+        self.list_up.as_slice()
+    }
+    pub fn quit(&self) -> &[ConfigKey] {
+        self.quit.as_slice()
+    }
+    pub fn clock_primary(&self) -> &[ConfigKey] {
+        self.clock_primary.as_slice()
+    }
+    pub fn cycle_session(&self) -> &[ConfigKey] {
+        self.cycle_session.as_slice()
+    }
+    pub fn reset_session(&self) -> &[ConfigKey] {
+        self.reset_session.as_slice()
+    }
+    pub fn add_task(&self) -> &[ConfigKey] {
+        self.add_task.as_slice()
+    }
+    pub fn edit_task(&self) -> &[ConfigKey] {
+        self.edit_task.as_slice()
+    }
+    pub fn delete_task(&self) -> &[ConfigKey] {
+        self.delete_task.as_slice()
+    }
+    pub fn task_primary(&self) -> &[ConfigKey] {
+        self.task_primary.as_slice()
+    }
+
+    fn validate(&self) -> Result<(), ConfigValidationError> {
+        let bindings = [
+            ("focus_left", self.focus_left()),
+            ("focus_down", self.focus_down()),
+            ("focus_up", self.focus_up()),
+            ("focus_right", self.focus_right()),
+            ("quit", self.quit()),
+            ("clock_primary", self.clock_primary()),
+            ("cycle_session", self.cycle_session()),
+            ("reset_session", self.reset_session()),
+            ("list_down", self.list_down()),
+            ("list_up", self.list_up()),
+            ("add_task", self.add_task()),
+            ("edit_task", self.edit_task()),
+            ("delete_task", self.delete_task()),
+            ("task_primary", self.task_primary()),
+        ];
+        for (field, keys) in bindings {
+            if keys.is_empty() {
+                return Err(ConfigValidationError::EmptyKeyBindings { field });
+            }
+        }
+
+        let global = binding_entries(&bindings[..5]);
+        validate_unique_bindings(&global)?;
+
+        let clock = binding_entries(&bindings[5..8]);
+        validate_context_bindings(&global, &clock)?;
+
+        let tasks = binding_entries(&bindings[8..]);
+        validate_context_bindings(&global, &tasks)
+    }
+}
+
+impl Default for KeysConfig {
+    fn default() -> Self {
+        Self {
+            focus_left: KeyBindings::one(ConfigKey::Character('H')),
+            focus_down: KeyBindings::one(ConfigKey::Character('J')),
+            focus_up: KeyBindings::one(ConfigKey::Character('K')),
+            focus_right: KeyBindings::one(ConfigKey::Character('L')),
+            list_down: KeyBindings(vec![ConfigKey::Character('j'), ConfigKey::Down]),
+            list_up: KeyBindings(vec![ConfigKey::Character('k'), ConfigKey::Up]),
+            quit: KeyBindings::one(ConfigKey::Character('q')),
+            clock_primary: KeyBindings::one(ConfigKey::Space),
+            cycle_session: KeyBindings::one(ConfigKey::Character('c')),
+            reset_session: KeyBindings::one(ConfigKey::Character('r')),
+            add_task: KeyBindings::one(ConfigKey::Character('a')),
+            edit_task: KeyBindings::one(ConfigKey::Character('e')),
+            delete_task: KeyBindings::one(ConfigKey::Character('x')),
+            task_primary: KeyBindings::one(ConfigKey::Space),
+        }
+    }
+}
+
+type BindingEntry = (&'static str, ConfigKey, &'static str);
+
+fn binding_entries(bindings: &[(&'static str, &[ConfigKey])]) -> Vec<BindingEntry> {
+    bindings
+        .iter()
+        .flat_map(|(field, keys)| keys.iter().map(|key| (*field, *key, *field)))
+        .collect()
+}
+
+fn validate_context_bindings(
+    global: &[BindingEntry],
+    contextual: &[BindingEntry],
+) -> Result<(), ConfigValidationError> {
+    let combined = global.iter().chain(contextual).copied().collect::<Vec<_>>();
+    validate_unique_bindings(&combined)
+}
+
+fn validate_unique_bindings(bindings: &[BindingEntry]) -> Result<(), ConfigValidationError> {
+    for (index, (first_field, first_key, first_action)) in bindings.iter().enumerate() {
+        for (second_field, second_key, second_action) in &bindings[index + 1..] {
+            if first_key == second_key && first_action != second_action {
+                return Err(ConfigValidationError::ConflictingKeys {
+                    first: first_field,
+                    second: second_field,
+                });
+            }
+        }
+    }
+    Ok(())
+}
+
 /// Timer values as presented in the user configuration file.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct TimerConfig {
@@ -320,9 +626,20 @@ impl Default for TimerConfig {
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum ConfigValidationError {
-    ZeroDuration { field: &'static str },
-    DurationOverflow { field: &'static str },
+    ZeroDuration {
+        field: &'static str,
+    },
+    DurationOverflow {
+        field: &'static str,
+    },
     ZeroLongBreakInterval,
+    EmptyKeyBindings {
+        field: &'static str,
+    },
+    ConflictingKeys {
+        first: &'static str,
+        second: &'static str,
+    },
 }
 
 impl fmt::Display for ConfigValidationError {
@@ -332,6 +649,12 @@ impl fmt::Display for ConfigValidationError {
             Self::DurationOverflow { field } => write!(formatter, "{field} is too large"),
             Self::ZeroLongBreakInterval => {
                 formatter.write_str("long_break_interval must be greater than zero")
+            }
+            Self::EmptyKeyBindings { field } => {
+                write!(formatter, "keys.{field} must contain at least one key")
+            }
+            Self::ConflictingKeys { first, second } => {
+                write!(formatter, "keys.{first} conflicts with keys.{second}")
             }
         }
     }
@@ -421,6 +744,8 @@ struct StoredConfig {
     tasks: StoredTasksConfig,
     #[serde(default)]
     theme: ThemeConfig,
+    #[serde(default)]
+    keys: KeysConfig,
 }
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -457,7 +782,7 @@ impl TryFrom<StoredConfig> for Config {
     type Error = ConfigValidationError;
 
     fn try_from(stored: StoredConfig) -> Result<Self, Self::Error> {
-        Self::with_tasks_and_theme(
+        Self::with_settings(
             TimerConfig::new(
                 stored.timer.focus_minutes,
                 stored.timer.short_break_minutes,
@@ -466,6 +791,7 @@ impl TryFrom<StoredConfig> for Config {
             )?,
             TasksConfig::with_numbering(stored.tasks.persist, stored.tasks.show_numbers),
             stored.theme,
+            stored.keys,
         )
     }
 }
@@ -485,6 +811,7 @@ impl From<&Config> for StoredConfig {
                 show_numbers: config.tasks().show_numbers(),
             },
             theme: *config.theme(),
+            keys: config.keys().clone(),
         }
     }
 }
@@ -498,8 +825,8 @@ mod tests {
     };
 
     use super::{
-        Config, ConfigError, ConfigValidationError, TasksConfig, ThemeColor, ThemeConfig,
-        TimerConfig,
+        Config, ConfigError, ConfigKey, ConfigValidationError, KeyBindings, KeysConfig,
+        TasksConfig, ThemeColor, ThemeConfig, TimerConfig,
     };
 
     static NEXT_TEMP_PATH: AtomicU64 = AtomicU64::new(0);
@@ -523,6 +850,15 @@ mod tests {
         assert!(config.tasks().persist());
         assert!(config.tasks().show_numbers());
         assert_eq!(config.theme(), &ThemeConfig::default());
+        assert_eq!(config.keys(), &KeysConfig::default());
+        assert_eq!(
+            config.keys().list_down(),
+            [ConfigKey::Character('j'), ConfigKey::Down]
+        );
+        assert_eq!(
+            config.keys().list_up(),
+            [ConfigKey::Character('k'), ConfigKey::Up]
+        );
     }
 
     #[test]
@@ -535,7 +871,7 @@ mod tests {
     #[test]
     fn saves_and_loads_a_valid_toml_round_trip() {
         let path = temp_path("round-trip/config.toml");
-        let config = Config::with_tasks_and_theme(
+        let config = Config::with_settings(
             TimerConfig::new(50, 10, 30, 3).unwrap(),
             TasksConfig::with_numbering(false, false),
             ThemeConfig::new(
@@ -545,6 +881,11 @@ mod tests {
                 ThemeColor::LightGreen,
                 ThemeColor::Cyan,
             ),
+            KeysConfig {
+                clock_primary: KeyBindings::one(ConfigKey::Enter),
+                cycle_session: KeyBindings::one(ConfigKey::Character('n')),
+                ..KeysConfig::default()
+            },
         )
         .unwrap();
 
@@ -559,6 +900,9 @@ mod tests {
         assert!(contents.contains("show_numbers = false"));
         assert!(contents.contains("[theme]"));
         assert!(contents.contains("focused_border = \"light_blue\""));
+        assert!(contents.contains("[keys]"));
+        assert!(contents.contains("clock_primary = \"enter\""));
+        assert!(contents.contains("cycle_session = \"n\""));
         fs::remove_dir_all(path.parent().unwrap()).unwrap();
     }
 
@@ -576,7 +920,142 @@ mod tests {
         assert!(config.tasks().persist());
         assert!(config.tasks().show_numbers());
         assert_eq!(config.theme(), &ThemeConfig::default());
+        assert_eq!(config.keys(), &KeysConfig::default());
         fs::remove_file(path).unwrap();
+    }
+
+    #[test]
+    fn partial_keys_use_defaults_for_unspecified_commands() {
+        let path = temp_path("partial-keys.toml");
+        fs::write(
+            &path,
+            "[timer]\nfocus_minutes = 25\nshort_break_minutes = 5\nlong_break_minutes = 15\nlong_break_interval = 4\n\n[keys]\ncycle_session = \"n\"\nclock_primary = \"enter\"\n",
+        )
+        .unwrap();
+
+        let config = Config::load_from(&path).unwrap();
+
+        assert_eq!(config.keys().cycle_session(), [ConfigKey::Character('n')]);
+        assert_eq!(config.keys().clock_primary(), [ConfigKey::Enter]);
+        assert_eq!(config.keys().quit(), [ConfigKey::Character('q')]);
+
+        fs::remove_file(path).unwrap();
+    }
+
+    #[test]
+    fn keys_accept_ordered_lists_and_single_values() {
+        let path = temp_path("multiple-keys.toml");
+        fs::write(
+            &path,
+            "[timer]\nfocus_minutes = 25\nshort_break_minutes = 5\nlong_break_minutes = 15\nlong_break_interval = 4\n\n[keys]\nlist_down = [\"j\", \"down\"]\nlist_up = [\"k\", \"up\"]\nquit = \"q\"\n",
+        )
+        .unwrap();
+
+        let config = Config::load_from(&path).unwrap();
+
+        assert_eq!(
+            config.keys().list_down(),
+            [ConfigKey::Character('j'), ConfigKey::Down]
+        );
+        assert_eq!(
+            config.keys().list_up(),
+            [ConfigKey::Character('k'), ConfigKey::Up]
+        );
+        assert_eq!(config.keys().quit(), [ConfigKey::Character('q')]);
+
+        config.save_to(&path).unwrap();
+        let contents = fs::read_to_string(&path).unwrap();
+        assert!(contents.contains("list_down = [\n    \"j\",\n    \"down\",\n]"));
+        assert!(contents.contains("quit = \"q\""));
+        fs::remove_file(path).unwrap();
+    }
+
+    #[test]
+    fn empty_key_lists_are_rejected_with_the_field_path() {
+        let path = temp_path("empty-keys.toml");
+        fs::write(
+            &path,
+            "[timer]\nfocus_minutes = 25\nshort_break_minutes = 5\nlong_break_minutes = 15\nlong_break_interval = 4\n\n[keys]\nquit = []\n",
+        )
+        .unwrap();
+
+        let error = Config::load_from(&path).unwrap_err();
+
+        assert!(matches!(error, ConfigError::Validation { .. }));
+        assert!(error.to_string().contains("keys.quit"));
+        assert!(error.to_string().contains("at least one key"));
+        fs::remove_file(path).unwrap();
+    }
+
+    #[test]
+    fn conflicts_are_detected_in_secondary_keys() {
+        let path = temp_path("conflicting-secondary-key.toml");
+        fs::write(
+            &path,
+            "[timer]\nfocus_minutes = 25\nshort_break_minutes = 5\nlong_break_minutes = 15\nlong_break_interval = 4\n\n[keys]\ncycle_session = [\"c\", \"q\"]\n",
+        )
+        .unwrap();
+
+        let error = Config::load_from(&path).unwrap_err();
+
+        assert!(matches!(error, ConfigError::Validation { .. }));
+        assert!(error.to_string().contains("keys.quit"));
+        assert!(error.to_string().contains("keys.cycle_session"));
+        fs::remove_file(path).unwrap();
+    }
+
+    #[test]
+    fn invalid_key_name_reports_its_path_and_supported_forms() {
+        let path = temp_path("invalid-key.toml");
+        fs::write(
+            &path,
+            "[timer]\nfocus_minutes = 25\nshort_break_minutes = 5\nlong_break_minutes = 15\nlong_break_interval = 4\n\n[keys]\ncycle_session = \"page_down\"\n",
+        )
+        .unwrap();
+
+        let error = Config::load_from(&path).unwrap_err();
+
+        assert!(matches!(error, ConfigError::Parse { .. }));
+        assert!(error.to_string().contains(path.to_str().unwrap()));
+        assert!(error.to_string().contains("page_down"));
+        assert!(error.to_string().contains("one printable character"));
+        fs::remove_file(path).unwrap();
+    }
+
+    #[test]
+    fn conflicting_contextual_keys_report_both_fields_and_path() {
+        let path = temp_path("conflicting-keys.toml");
+        fs::write(
+            &path,
+            "[timer]\nfocus_minutes = 25\nshort_break_minutes = 5\nlong_break_minutes = 15\nlong_break_interval = 4\n\n[keys]\ncycle_session = \"q\"\n",
+        )
+        .unwrap();
+
+        let error = Config::load_from(&path).unwrap_err();
+
+        assert!(matches!(error, ConfigError::Validation { .. }));
+        assert!(error.to_string().contains(path.to_str().unwrap()));
+        assert!(error.to_string().contains("keys.quit"));
+        assert!(error.to_string().contains("keys.cycle_session"));
+        fs::remove_file(path).unwrap();
+    }
+
+    #[test]
+    fn same_key_is_allowed_for_commands_in_disjoint_contexts() {
+        let keys = KeysConfig {
+            cycle_session: KeyBindings::one(ConfigKey::Character('a')),
+            ..KeysConfig::default()
+        };
+
+        assert!(
+            Config::with_settings(
+                TimerConfig::default(),
+                TasksConfig::default(),
+                ThemeConfig::default(),
+                keys,
+            )
+            .is_ok()
+        );
     }
 
     #[test]

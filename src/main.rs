@@ -269,7 +269,7 @@ fn run_app(
         }
 
         terminal.draw(|frame| {
-            draw(frame, &mut app, theme);
+            draw(frame, &mut app, theme, config.keys());
         })?;
 
         if event::poll(Duration::from_millis(100))? {
@@ -287,6 +287,7 @@ fn run_app(
                         app.edit_mode(),
                         app.ui_focus(),
                         app.is_confirmation_open(),
+                        config.keys(),
                     ) {
                         let outcome = app.dispatch(action);
                         if handle_outcome(outcome, &app, task_store)? {

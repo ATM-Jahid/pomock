@@ -1,6 +1,9 @@
 use std::time::Duration;
 
-use crate::timer::{SessionKind, TimerState};
+use crate::{
+    config::ConfigKey,
+    timer::{SessionKind, TimerState},
+};
 
 const BIG_GLYPH_HEIGHT: usize = 5;
 const BIG_ON: &str = "██";
@@ -29,6 +32,20 @@ pub fn format_state(state: TimerState) -> &'static str {
         TimerState::Paused(SessionKind::Focus) => "Focus paused",
         TimerState::Paused(SessionKind::ShortBreak) => "Short break paused",
         TimerState::Paused(SessionKind::LongBreak) => "Long break paused",
+    }
+}
+
+pub fn format_key(key: ConfigKey) -> String {
+    match key {
+        ConfigKey::Character(character) => character.to_string(),
+        ConfigKey::Space => "space".to_string(),
+        ConfigKey::Enter => "Enter".to_string(),
+        ConfigKey::Escape => "Esc".to_string(),
+        ConfigKey::Backspace => "Backspace".to_string(),
+        ConfigKey::Up => "↑".to_string(),
+        ConfigKey::Down => "↓".to_string(),
+        ConfigKey::Left => "←".to_string(),
+        ConfigKey::Right => "→".to_string(),
     }
 }
 
@@ -144,5 +161,14 @@ mod tests {
             format_state(TimerState::Paused(SessionKind::LongBreak)),
             "Long break paused"
         );
+    }
+
+    #[test]
+    fn formats_configurable_key_labels_for_help_text() {
+        assert_eq!(format_key(ConfigKey::Character('n')), "n");
+        assert_eq!(format_key(ConfigKey::Space), "space");
+        assert_eq!(format_key(ConfigKey::Enter), "Enter");
+        assert_eq!(format_key(ConfigKey::Escape), "Esc");
+        assert_eq!(format_key(ConfigKey::Down), "↓");
     }
 }

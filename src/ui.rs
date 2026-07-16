@@ -7,8 +7,8 @@ use ratatui::{
 
 use crate::{
     app::{App, ClickTarget, ConfirmationOperation, EditMode, TimerChange, UiFocus},
-    config::{ThemeColor, ThemeConfig},
-    display::{format_big_duration, format_state},
+    config::{ConfigKey, KeysConfig, ThemeColor, ThemeConfig},
+    display::{format_big_duration, format_key, format_state},
     timer::{SessionKind, TimerState},
 };
 
@@ -71,7 +71,7 @@ fn theme_color(color: ThemeColor) -> Color {
 }
 
 /// Renders the complete application UI and synchronizes list scroll offsets.
-pub fn draw(frame: &mut Frame, app: &mut App, theme: Theme) {
+pub fn draw(frame: &mut Frame, app: &mut App, theme: Theme, keys: &KeysConfig) {
     let area = frame.area();
     let layout = ui_layout(area);
 
@@ -103,7 +103,7 @@ pub fn draw(frame: &mut Frame, app: &mut App, theme: Theme) {
         (SessionKind::LongBreak, "Long break"),
     ];
 
-    let controls = Paragraph::new(controls_text(app)).alignment(Alignment::Center);
+    let controls = Paragraph::new(controls_text(app, keys)).alignment(Alignment::Center);
 
     let todo_items: Vec<ListItem> = app
         .tasks()
@@ -314,7 +314,7 @@ fn task_label(index: usize, description: &str, show_numbers: bool) -> String {
     }
 }
 
-fn controls_text(app: &App) -> String {
+fn controls_text(app: &App, keys: &KeysConfig) -> String {
     if let Some(operation) = app.pending_confirmation() {
         let prompt = confirmation_prompt(operation);
         return format!("{prompt} [y/Enter] confirm [n/Esc] cancel");
@@ -323,19 +323,50 @@ fn controls_text(app: &App) -> String {
     match app.edit_mode() {
         EditMode::Adding => format!("Add task: {}_", app.input()),
         EditMode::Editing { .. } => format!("Edit task: {}_", app.input()),
-        EditMode::Normal => match app.ui_focus() {
-            UiFocus::Clock => {
-                "[HJKL] box nav [space] start/pause [c] cycle session [r] reset [q] quit"
-            }
-            UiFocus::Todo => {
-                "[HJKL] box nav [jk/↓↑] list nav [a] add [e] edit [x] delete [space] complete [q] quit"
-            }
-            UiFocus::Done => {
-                "[HJKL] box nav [jk/↓↑] list nav [e] edit [x] delete [space] return [q] quit"
+        EditMode::Normal => {
+            let focus_navigation = key_labels(&[
+                first_key(keys.focus_left()),
+                first_key(keys.focus_down()),
+                first_key(keys.focus_up()),
+                first_key(keys.focus_right()),
+            ]);
+            let list_navigation =
+                key_labels(&[first_key(keys.list_down()), first_key(keys.list_up())]);
+            let quit = format_key(first_key(keys.quit()));
+            match app.ui_focus() {
+                UiFocus::Clock => format!(
+                    "[{focus_navigation}] box nav [{}] start/pause [{}] cycle session [{}] reset [{quit}] quit",
+                    format_key(first_key(keys.clock_primary())),
+                    format_key(first_key(keys.cycle_session())),
+                    format_key(first_key(keys.reset_session())),
+                ),
+                UiFocus::Todo => format!(
+                    "[{focus_navigation}] box nav [{list_navigation}] list nav [{}] add [{}] edit [{}] delete [{}] complete [{quit}] quit",
+                    format_key(first_key(keys.add_task())),
+                    format_key(first_key(keys.edit_task())),
+                    format_key(first_key(keys.delete_task())),
+                    format_key(first_key(keys.task_primary())),
+                ),
+                UiFocus::Done => format!(
+                    "[{focus_navigation}] box nav [{list_navigation}] list nav [{}] edit [{}] delete [{}] return [{quit}] quit",
+                    format_key(first_key(keys.edit_task())),
+                    format_key(first_key(keys.delete_task())),
+                    format_key(first_key(keys.task_primary())),
+                ),
             }
         }
-        .to_string(),
     }
+}
+
+fn first_key(keys: &[ConfigKey]) -> ConfigKey {
+    keys[0]
+}
+
+fn key_labels(keys: &[ConfigKey]) -> String {
+    keys.iter()
+        .map(|key| format_key(*key))
+        .collect::<Vec<_>>()
+        .join("/")
 }
 
 fn confirmation_prompt(operation: ConfirmationOperation) -> String {
@@ -397,9 +428,25 @@ mod tests {
     #[test]
     fn clock_legend_describes_cycle_session_control() {
         let app = App::new();
+        let keys = KeysConfig::default();
 
-        assert!(controls_text(&app).contains("[c] cycle session"));
-        assert!(!controls_text(&app).contains("[n] next"));
+        let help = controls_text(&app, &keys);
+
+        assert!(help.contains("[H/J/K/L] box nav"));
+        assert!(help.contains("[c] cycle session"));
+        assert!(!help.contains("[n] next"));
+    }
+
+    #[test]
+    fn task_legend_shows_only_the_first_default_list_keys() {
+        let mut app = App::new();
+        let _ = app.dispatch(Action::NavigateFocus(Direction::Down));
+
+        let help = controls_text(&app, &KeysConfig::default());
+
+        assert!(help.contains("[j/k] list nav"));
+        assert!(!help.contains('↓'));
+        assert!(!help.contains('↑'));
     }
 
     #[test]
@@ -422,6 +469,38 @@ mod tests {
     }
 
     #[test]
+    fn normal_mode_help_uses_configured_key_labels() {
+        let app = App::new();
+        let keys: KeysConfig = toml::from_str(
+            "focus_left = \"left\"\nclock_primary = \"enter\"\ncycle_session = \"n\"\n",
+        )
+        .unwrap();
+
+        let help = controls_text(&app, &keys);
+
+        assert!(help.contains("[←/J/K/L] box nav"));
+        assert!(help.contains("[Enter] start/pause"));
+        assert!(help.contains("[n] cycle session"));
+        assert!(!help.contains("[c] cycle session"));
+    }
+
+    #[test]
+    fn normal_mode_help_uses_only_the_first_key_for_each_action() {
+        let app = App::new();
+        let keys: KeysConfig = toml::from_str(
+            "clock_primary = [\"enter\", \"space\"]\ncycle_session = [\"n\", \"c\"]\n",
+        )
+        .unwrap();
+
+        let help = controls_text(&app, &keys);
+
+        assert!(help.contains("[Enter] start/pause"));
+        assert!(help.contains("[n] cycle session"));
+        assert!(!help.contains("space"));
+        assert!(!help.contains("[c] cycle session"));
+    }
+
+    #[test]
     fn cycle_confirmation_describes_progress_loss() {
         let mut app = App::new();
         let _ = app.dispatch(Action::PrimaryAction);
@@ -429,7 +508,7 @@ mod tests {
         let _ = app.dispatch(Action::CycleSession);
 
         assert_eq!(
-            controls_text(&app),
+            controls_text(&app, &KeysConfig::default()),
             "Discard progress and cycle session? [y/Enter] confirm [n/Esc] cancel"
         );
     }
@@ -442,7 +521,7 @@ mod tests {
         let _ = app.dispatch(Action::Quit);
 
         assert_eq!(
-            controls_text(&app),
+            controls_text(&app, &KeysConfig::default()),
             "Quit and discard progress? [y/Enter] confirm [n/Esc] cancel"
         );
     }
