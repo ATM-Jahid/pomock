@@ -6,9 +6,6 @@ and [Crossterm](https://github.com/crossterm-rs/crossterm).
 
 > [!IMPORTANT]
 > `pomock` is in early development.
-> The timer, persistent task lists,
-> keyboard/mouse controls, and settings UI work today.
-> Notifications are planned but are not implemented yet.
 
 ## Current features
 
@@ -17,6 +14,7 @@ and [Crossterm](https://github.com/crossterm-rs/crossterm).
 - Editable to-do and completed-task lists.
 - Persistent task order and completion state.
 - Keyboard and mouse navigation.
+- Native desktop notifications when a session completes.
 - TOML configuration for session durations, task behavior, and theme colors.
 - An in-app settings overlay for timer, task, theme, and key settings.
 

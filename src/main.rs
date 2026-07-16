@@ -21,6 +21,7 @@ use pomock::{
     app::{App, AppOutcome, EditMode, TaskState},
     config::{Config, ConfigError},
     input::map_key,
+    notification::{DesktopNotifier, Notifier},
     persistence::{TaskPersistenceError, TaskStore},
     ui::{Theme, click_target, draw},
 };
@@ -39,12 +40,14 @@ fn handle_outcome(
     app: &App,
     config: &mut Config,
     task_store: &mut Option<TaskStore>,
+    notifier: &mut impl Notifier,
 ) -> Result<bool, RunError> {
     match outcome {
         AppOutcome::None => Ok(false),
-        // Completion has no configured external effect yet. Notifications and
-        // sound can be connected here without coupling them to App.
-        AppOutcome::SessionCompleted(_) => Ok(false),
+        AppOutcome::SessionCompleted(session) => {
+            notifier.session_completed(session);
+            Ok(false)
+        }
         AppOutcome::TasksChanged => {
             if let Some(task_store) = task_store.as_ref() {
                 task_store.save(&app.task_state())?;
@@ -271,13 +274,14 @@ fn run_app(
     task_state: TaskState,
 ) -> Result<(), RunError> {
     let mut app = App::from_config_and_tasks(&config, task_state);
+    let mut notifier = DesktopNotifier;
 
     let mut last_tick = Instant::now();
 
     loop {
         let now = Instant::now();
         let outcome = advance_timer(&mut app, &mut last_tick, now);
-        if handle_outcome(outcome, &app, &mut config, &mut task_store)? {
+        if handle_outcome(outcome, &app, &mut config, &mut task_store, &mut notifier)? {
             break;
         }
 
@@ -289,7 +293,7 @@ fn run_app(
             let event = event::read()?;
             let now = Instant::now();
             let outcome = advance_timer(&mut app, &mut last_tick, now);
-            if handle_outcome(outcome, &app, &mut config, &mut task_store)? {
+            if handle_outcome(outcome, &app, &mut config, &mut task_store, &mut notifier)? {
                 break;
             }
 
@@ -304,14 +308,20 @@ fn run_app(
                         config.keys(),
                     ) {
                         let outcome = app.dispatch(action);
-                        if handle_outcome(outcome, &app, &mut config, &mut task_store)? {
+                        if handle_outcome(
+                            outcome,
+                            &app,
+                            &mut config,
+                            &mut task_store,
+                            &mut notifier,
+                        )? {
                             break;
                         }
                     }
                 }
                 Event::Mouse(mouse) if app.edit_mode() == EditMode::Normal => {
                     let outcome = handle_mouse(&mut app, mouse, terminal.size()?.into(), now);
-                    if handle_outcome(outcome, &app, &mut config, &mut task_store)? {
+                    if handle_outcome(outcome, &app, &mut config, &mut task_store, &mut notifier)? {
                         break;
                     }
                 }
@@ -338,6 +348,17 @@ mod tests {
     };
 
     static NEXT_TEMP_PATH: AtomicU64 = AtomicU64::new(0);
+
+    #[derive(Default)]
+    struct RecordingNotifier {
+        completions: Vec<pomock::SessionKind>,
+    }
+
+    impl Notifier for RecordingNotifier {
+        fn session_completed(&mut self, session: pomock::SessionKind) {
+            self.completions.push(session);
+        }
+    }
 
     fn temp_path(name: &str) -> PathBuf {
         let unique = NEXT_TEMP_PATH.fetch_add(1, Ordering::Relaxed);
@@ -399,8 +420,12 @@ mod tests {
 
         let mut config = Config::default();
         let mut task_store = Some(store);
+        let mut notifier = RecordingNotifier::default();
 
-        assert!(!handle_outcome(outcome, &app, &mut config, &mut task_store).unwrap());
+        assert!(
+            !handle_outcome(outcome, &app, &mut config, &mut task_store, &mut notifier,).unwrap()
+        );
+        assert!(notifier.completions.is_empty());
         assert_eq!(
             task_store.as_ref().unwrap().load().unwrap(),
             app.task_state()
@@ -439,10 +464,52 @@ mod tests {
         let outcome = app.dispatch(Action::SubmitEdit);
 
         let mut config = config;
-        assert!(!handle_outcome(outcome, &app, &mut config, &mut disabled_store).unwrap());
+        let mut notifier = RecordingNotifier::default();
+        assert!(
+            !handle_outcome(
+                outcome,
+                &app,
+                &mut config,
+                &mut disabled_store,
+                &mut notifier,
+            )
+            .unwrap()
+        );
         assert_eq!(store.load().unwrap(), persisted);
 
         fs::remove_file(path).unwrap();
+    }
+
+    #[test]
+    fn completion_outcomes_notify_exactly_once() {
+        let app = App::new();
+        let mut config = Config::default();
+        let mut task_store = None;
+        let mut notifier = RecordingNotifier::default();
+
+        assert!(
+            !handle_outcome(
+                AppOutcome::SessionCompleted(pomock::SessionKind::Focus),
+                &app,
+                &mut config,
+                &mut task_store,
+                &mut notifier,
+            )
+            .unwrap()
+        );
+        assert_eq!(notifier.completions, [pomock::SessionKind::Focus]);
+
+        assert!(
+            !handle_outcome(
+                AppOutcome::None,
+                &app,
+                &mut config,
+                &mut task_store,
+                &mut notifier,
+            )
+            .unwrap()
+        );
+        assert_eq!(notifier.completions, [pomock::SessionKind::Focus]);
     }
 
     #[test]

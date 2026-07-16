@@ -14,6 +14,7 @@ pub mod app;
 pub mod config;
 mod display;
 pub mod input;
+pub mod notification;
 pub mod persistence;
 mod settings;
 mod tasks;
