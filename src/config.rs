@@ -17,6 +17,7 @@ const SECONDS_PER_MINUTE: u64 = 60;
 pub struct Config {
     timer: TimerConfig,
     tasks: TasksConfig,
+    theme: ThemeConfig,
 }
 
 impl Config {
@@ -30,8 +31,21 @@ impl Config {
         timer: TimerConfig,
         tasks: TasksConfig,
     ) -> Result<Self, ConfigValidationError> {
+        Self::with_tasks_and_theme(timer, tasks, ThemeConfig::default())
+    }
+
+    /// Creates and validates configuration with explicit task and theme settings.
+    pub fn with_tasks_and_theme(
+        timer: TimerConfig,
+        tasks: TasksConfig,
+        theme: ThemeConfig,
+    ) -> Result<Self, ConfigValidationError> {
         timer.validate()?;
-        Ok(Self { timer, tasks })
+        Ok(Self {
+            timer,
+            tasks,
+            theme,
+        })
     }
 
     /// Returns the validated timer settings.
@@ -42,6 +56,11 @@ impl Config {
     /// Returns the durable task settings.
     pub fn tasks(&self) -> &TasksConfig {
         &self.tasks
+    }
+
+    /// Returns the semantic UI theme settings.
+    pub fn theme(&self) -> &ThemeConfig {
+        &self.theme
     }
 
     /// Returns the platform-appropriate per-user configuration path.
@@ -137,6 +156,89 @@ impl TasksConfig {
 impl Default for TasksConfig {
     fn default() -> Self {
         Self::with_numbering(true, true)
+    }
+}
+
+/// A portable named terminal color accepted by the shared configuration.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ThemeColor {
+    Black,
+    Red,
+    Green,
+    Yellow,
+    Blue,
+    Magenta,
+    Cyan,
+    Gray,
+    DarkGray,
+    LightRed,
+    LightGreen,
+    LightYellow,
+    LightBlue,
+    LightMagenta,
+    LightCyan,
+    White,
+}
+
+/// Durable colors assigned to semantic presentation roles.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(default, deny_unknown_fields)]
+pub struct ThemeConfig {
+    focused_border: ThemeColor,
+    unfocused_border: ThemeColor,
+    todo_highlight: ThemeColor,
+    done_highlight: ThemeColor,
+    completed_sessions: ThemeColor,
+}
+
+impl ThemeConfig {
+    pub fn new(
+        focused_border: ThemeColor,
+        unfocused_border: ThemeColor,
+        todo_highlight: ThemeColor,
+        done_highlight: ThemeColor,
+        completed_sessions: ThemeColor,
+    ) -> Self {
+        Self {
+            focused_border,
+            unfocused_border,
+            todo_highlight,
+            done_highlight,
+            completed_sessions,
+        }
+    }
+
+    pub fn focused_border(&self) -> ThemeColor {
+        self.focused_border
+    }
+
+    pub fn unfocused_border(&self) -> ThemeColor {
+        self.unfocused_border
+    }
+
+    pub fn todo_highlight(&self) -> ThemeColor {
+        self.todo_highlight
+    }
+
+    pub fn done_highlight(&self) -> ThemeColor {
+        self.done_highlight
+    }
+
+    pub fn completed_sessions(&self) -> ThemeColor {
+        self.completed_sessions
+    }
+}
+
+impl Default for ThemeConfig {
+    fn default() -> Self {
+        Self::new(
+            ThemeColor::Yellow,
+            ThemeColor::DarkGray,
+            ThemeColor::Yellow,
+            ThemeColor::Green,
+            ThemeColor::Green,
+        )
     }
 }
 
@@ -317,6 +419,8 @@ struct StoredConfig {
     timer: StoredTimerConfig,
     #[serde(default)]
     tasks: StoredTasksConfig,
+    #[serde(default)]
+    theme: ThemeConfig,
 }
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -353,7 +457,7 @@ impl TryFrom<StoredConfig> for Config {
     type Error = ConfigValidationError;
 
     fn try_from(stored: StoredConfig) -> Result<Self, Self::Error> {
-        Self::with_tasks(
+        Self::with_tasks_and_theme(
             TimerConfig::new(
                 stored.timer.focus_minutes,
                 stored.timer.short_break_minutes,
@@ -361,6 +465,7 @@ impl TryFrom<StoredConfig> for Config {
                 stored.timer.long_break_interval,
             )?,
             TasksConfig::with_numbering(stored.tasks.persist, stored.tasks.show_numbers),
+            stored.theme,
         )
     }
 }
@@ -379,6 +484,7 @@ impl From<&Config> for StoredConfig {
                 persist: config.tasks().persist(),
                 show_numbers: config.tasks().show_numbers(),
             },
+            theme: *config.theme(),
         }
     }
 }
@@ -391,7 +497,10 @@ mod tests {
         sync::atomic::{AtomicU64, Ordering},
     };
 
-    use super::{Config, ConfigError, ConfigValidationError, TasksConfig, TimerConfig};
+    use super::{
+        Config, ConfigError, ConfigValidationError, TasksConfig, ThemeColor, ThemeConfig,
+        TimerConfig,
+    };
 
     static NEXT_TEMP_PATH: AtomicU64 = AtomicU64::new(0);
 
@@ -413,6 +522,7 @@ mod tests {
         assert_eq!(config.timer().long_break_interval().get(), 4);
         assert!(config.tasks().persist());
         assert!(config.tasks().show_numbers());
+        assert_eq!(config.theme(), &ThemeConfig::default());
     }
 
     #[test]
@@ -425,9 +535,16 @@ mod tests {
     #[test]
     fn saves_and_loads_a_valid_toml_round_trip() {
         let path = temp_path("round-trip/config.toml");
-        let config = Config::with_tasks(
+        let config = Config::with_tasks_and_theme(
             TimerConfig::new(50, 10, 30, 3).unwrap(),
             TasksConfig::with_numbering(false, false),
+            ThemeConfig::new(
+                ThemeColor::LightBlue,
+                ThemeColor::Black,
+                ThemeColor::LightYellow,
+                ThemeColor::LightGreen,
+                ThemeColor::Cyan,
+            ),
         )
         .unwrap();
 
@@ -440,6 +557,8 @@ mod tests {
         assert!(contents.contains("[tasks]"));
         assert!(contents.contains("persist = false"));
         assert!(contents.contains("show_numbers = false"));
+        assert!(contents.contains("[theme]"));
+        assert!(contents.contains("focused_border = \"light_blue\""));
         fs::remove_dir_all(path.parent().unwrap()).unwrap();
     }
 
@@ -456,6 +575,41 @@ mod tests {
 
         assert!(config.tasks().persist());
         assert!(config.tasks().show_numbers());
+        assert_eq!(config.theme(), &ThemeConfig::default());
+        fs::remove_file(path).unwrap();
+    }
+
+    #[test]
+    fn partial_theme_uses_defaults_for_unspecified_roles() {
+        let path = temp_path("partial-theme.toml");
+        fs::write(
+            &path,
+            "[timer]\nfocus_minutes = 25\nshort_break_minutes = 5\nlong_break_minutes = 15\nlong_break_interval = 4\n\n[theme]\nfocused_border = \"light_cyan\"\n",
+        )
+        .unwrap();
+
+        let config = Config::load_from(&path).unwrap();
+
+        assert_eq!(config.theme().focused_border(), ThemeColor::LightCyan);
+        assert_eq!(config.theme().unfocused_border(), ThemeColor::DarkGray);
+        assert_eq!(config.theme().done_highlight(), ThemeColor::Green);
+        fs::remove_file(path).unwrap();
+    }
+
+    #[test]
+    fn unsupported_theme_color_reports_its_path_and_allowed_values() {
+        let path = temp_path("invalid-theme.toml");
+        fs::write(
+            &path,
+            "[timer]\nfocus_minutes = 25\nshort_break_minutes = 5\nlong_break_minutes = 15\nlong_break_interval = 4\n\n[theme]\nfocused_border = \"orange\"\nunfocused_border = \"dark_gray\"\ntodo_highlight = \"yellow\"\ndone_highlight = \"green\"\ncompleted_sessions = \"green\"\n",
+        )
+        .unwrap();
+
+        let error = Config::load_from(&path).unwrap_err();
+
+        assert!(matches!(error, ConfigError::Parse { .. }));
+        assert!(error.to_string().contains(path.to_str().unwrap()));
+        assert!(error.to_string().contains("orange"));
         fs::remove_file(path).unwrap();
     }
 

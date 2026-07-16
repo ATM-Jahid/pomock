@@ -18,7 +18,7 @@ and [Crossterm](https://github.com/crossterm-rs/crossterm).
 - Editable to-do and completed-task lists.
 - Persistent task order and completion state.
 - Keyboard and mouse navigation.
-- TOML configuration for session durations and the long-break interval.
+- TOML configuration for session durations, task behavior, and theme colors.
 
 The completed-focus count remains runtime-only and resets when `pomock` exits.
 
@@ -91,6 +91,13 @@ long_break_interval = 4
 [tasks]
 persist = true
 show_numbers = true
+
+[theme]
+focused_border = "yellow"
+unfocused_border = "dark_gray"
+todo_highlight = "yellow"
+done_highlight = "green"
+completed_sessions = "green"
 ```
 
 To customize them, create `pomock/config.toml`
@@ -103,6 +110,11 @@ after every successful task change.
 The `tasks.toml` file lives under
 the platform's standard per-user application data directory
 (for example, `$XDG_DATA_HOME/pomock` or `~/.local/share/pomock` on Linux).
+
+The `[theme]` section is optional, and individual omitted roles keep their
+defaults. Colors use portable terminal names: `black`, `red`, `green`,
+`yellow`, `blue`, `magenta`, `cyan`, `gray`, `dark_gray`, the `light_` variants
+of red through cyan, and `white`.
 
 ## License
 

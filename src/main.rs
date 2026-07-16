@@ -22,7 +22,7 @@ use pomock::{
     config::Config,
     input::map_key,
     persistence::{TaskPersistenceError, TaskStore},
-    ui::{click_target, draw},
+    ui::{Theme, click_target, draw},
 };
 
 fn handle_mouse(app: &mut App, mouse: MouseEvent, area: Rect, now: Instant) -> AppOutcome {
@@ -257,6 +257,7 @@ fn run_app(
     task_state: TaskState,
 ) -> Result<(), RunError> {
     let mut app = App::from_config_and_tasks(config, task_state);
+    let theme = Theme::from(config.theme());
 
     let mut last_tick = Instant::now();
 
@@ -268,7 +269,7 @@ fn run_app(
         }
 
         terminal.draw(|frame| {
-            draw(frame, &mut app);
+            draw(frame, &mut app, theme);
         })?;
 
         if event::poll(Duration::from_millis(100))? {

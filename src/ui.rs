@@ -7,6 +7,7 @@ use ratatui::{
 
 use crate::{
     app::{App, ClickTarget, ConfirmationOperation, EditMode, TimerChange, UiFocus},
+    config::{ThemeColor, ThemeConfig},
     display::{format_big_duration, format_state},
     timer::{SessionKind, TimerState},
 };
@@ -28,7 +29,7 @@ struct ClockLayout {
 }
 
 #[derive(Debug, Clone, Copy)]
-struct Theme {
+pub struct Theme {
     focused_border: Color,
     unfocused_border: Color,
     todo_highlight: Color,
@@ -36,21 +37,41 @@ struct Theme {
     completed_sessions: Color,
 }
 
-impl Default for Theme {
-    fn default() -> Self {
+impl From<&ThemeConfig> for Theme {
+    fn from(config: &ThemeConfig) -> Self {
         Self {
-            focused_border: Color::Yellow,
-            unfocused_border: Color::DarkGray,
-            todo_highlight: Color::Yellow,
-            done_highlight: Color::Green,
-            completed_sessions: Color::Green,
+            focused_border: theme_color(config.focused_border()),
+            unfocused_border: theme_color(config.unfocused_border()),
+            todo_highlight: theme_color(config.todo_highlight()),
+            done_highlight: theme_color(config.done_highlight()),
+            completed_sessions: theme_color(config.completed_sessions()),
         }
     }
 }
 
+fn theme_color(color: ThemeColor) -> Color {
+    match color {
+        ThemeColor::Black => Color::Black,
+        ThemeColor::Red => Color::Red,
+        ThemeColor::Green => Color::Green,
+        ThemeColor::Yellow => Color::Yellow,
+        ThemeColor::Blue => Color::Blue,
+        ThemeColor::Magenta => Color::Magenta,
+        ThemeColor::Cyan => Color::Cyan,
+        ThemeColor::Gray => Color::Gray,
+        ThemeColor::DarkGray => Color::DarkGray,
+        ThemeColor::LightRed => Color::LightRed,
+        ThemeColor::LightGreen => Color::LightGreen,
+        ThemeColor::LightYellow => Color::LightYellow,
+        ThemeColor::LightBlue => Color::LightBlue,
+        ThemeColor::LightMagenta => Color::LightMagenta,
+        ThemeColor::LightCyan => Color::LightCyan,
+        ThemeColor::White => Color::White,
+    }
+}
+
 /// Renders the complete application UI and synchronizes list scroll offsets.
-pub fn draw(frame: &mut Frame, app: &mut App) {
-    let theme = Theme::default();
+pub fn draw(frame: &mut Frame, app: &mut App, theme: Theme) {
     let area = frame.area();
     let layout = ui_layout(area);
 
@@ -379,6 +400,25 @@ mod tests {
 
         assert!(controls_text(&app).contains("[c] cycle session"));
         assert!(!controls_text(&app).contains("[n] next"));
+    }
+
+    #[test]
+    fn configured_colors_map_to_their_semantic_theme_roles() {
+        let config = ThemeConfig::new(
+            ThemeColor::LightBlue,
+            ThemeColor::Black,
+            ThemeColor::LightYellow,
+            ThemeColor::LightGreen,
+            ThemeColor::Cyan,
+        );
+
+        let theme = Theme::from(&config);
+
+        assert_eq!(theme.focused_border, Color::LightBlue);
+        assert_eq!(theme.unfocused_border, Color::Black);
+        assert_eq!(theme.todo_highlight, Color::LightYellow);
+        assert_eq!(theme.done_highlight, Color::LightGreen);
+        assert_eq!(theme.completed_sessions, Color::Cyan);
     }
 
     #[test]
