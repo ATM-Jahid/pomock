@@ -23,6 +23,7 @@ use pomock::{
     input::map_key,
     notification::{DesktopNotifier, Notifier},
     persistence::{TaskPersistenceError, TaskStore},
+    sound::{FileSoundPlayer, SoundPlayer},
     ui::{Theme, click_target, draw},
 };
 
@@ -41,11 +42,15 @@ fn handle_outcome(
     config: &mut Config,
     task_store: &mut Option<TaskStore>,
     notifier: &mut impl Notifier,
+    sound_player: &mut impl SoundPlayer,
 ) -> Result<bool, RunError> {
     match outcome {
         AppOutcome::None => Ok(false),
         AppOutcome::SessionCompleted(session) => {
             notifier.session_completed(session);
+            if let Some(file) = config.sound().resolved_file() {
+                sound_player.play(file);
+            }
             Ok(false)
         }
         AppOutcome::TasksChanged => {
@@ -275,13 +280,21 @@ fn run_app(
 ) -> Result<(), RunError> {
     let mut app = App::from_config_and_tasks(&config, task_state);
     let mut notifier = DesktopNotifier;
+    let mut sound_player = FileSoundPlayer::default();
 
     let mut last_tick = Instant::now();
 
     loop {
         let now = Instant::now();
         let outcome = advance_timer(&mut app, &mut last_tick, now);
-        if handle_outcome(outcome, &app, &mut config, &mut task_store, &mut notifier)? {
+        if handle_outcome(
+            outcome,
+            &app,
+            &mut config,
+            &mut task_store,
+            &mut notifier,
+            &mut sound_player,
+        )? {
             break;
         }
 
@@ -293,7 +306,14 @@ fn run_app(
             let event = event::read()?;
             let now = Instant::now();
             let outcome = advance_timer(&mut app, &mut last_tick, now);
-            if handle_outcome(outcome, &app, &mut config, &mut task_store, &mut notifier)? {
+            if handle_outcome(
+                outcome,
+                &app,
+                &mut config,
+                &mut task_store,
+                &mut notifier,
+                &mut sound_player,
+            )? {
                 break;
             }
 
@@ -314,6 +334,7 @@ fn run_app(
                             &mut config,
                             &mut task_store,
                             &mut notifier,
+                            &mut sound_player,
                         )? {
                             break;
                         }
@@ -321,7 +342,14 @@ fn run_app(
                 }
                 Event::Mouse(mouse) if app.edit_mode() == EditMode::Normal => {
                     let outcome = handle_mouse(&mut app, mouse, terminal.size()?.into(), now);
-                    if handle_outcome(outcome, &app, &mut config, &mut task_store, &mut notifier)? {
+                    if handle_outcome(
+                        outcome,
+                        &app,
+                        &mut config,
+                        &mut task_store,
+                        &mut notifier,
+                        &mut sound_player,
+                    )? {
                         break;
                     }
                 }
@@ -357,6 +385,17 @@ mod tests {
     impl Notifier for RecordingNotifier {
         fn session_completed(&mut self, session: pomock::SessionKind) {
             self.completions.push(session);
+        }
+    }
+
+    #[derive(Default)]
+    struct RecordingSoundPlayer {
+        files: Vec<PathBuf>,
+    }
+
+    impl SoundPlayer for RecordingSoundPlayer {
+        fn play(&mut self, file: &std::path::Path) {
+            self.files.push(file.to_owned());
         }
     }
 
@@ -421,11 +460,21 @@ mod tests {
         let mut config = Config::default();
         let mut task_store = Some(store);
         let mut notifier = RecordingNotifier::default();
+        let mut sound_player = RecordingSoundPlayer::default();
 
         assert!(
-            !handle_outcome(outcome, &app, &mut config, &mut task_store, &mut notifier,).unwrap()
+            !handle_outcome(
+                outcome,
+                &app,
+                &mut config,
+                &mut task_store,
+                &mut notifier,
+                &mut sound_player,
+            )
+            .unwrap()
         );
         assert!(notifier.completions.is_empty());
+        assert!(sound_player.files.is_empty());
         assert_eq!(
             task_store.as_ref().unwrap().load().unwrap(),
             app.task_state()
@@ -465,6 +514,7 @@ mod tests {
 
         let mut config = config;
         let mut notifier = RecordingNotifier::default();
+        let mut sound_player = RecordingSoundPlayer::default();
         assert!(
             !handle_outcome(
                 outcome,
@@ -472,6 +522,7 @@ mod tests {
                 &mut config,
                 &mut disabled_store,
                 &mut notifier,
+                &mut sound_player,
             )
             .unwrap()
         );
@@ -481,11 +532,15 @@ mod tests {
     }
 
     #[test]
-    fn completion_outcomes_notify_exactly_once() {
+    fn completion_outcomes_notify_and_play_the_configured_sound_exactly_once() {
         let app = App::new();
-        let mut config = Config::default();
+        let sound_file = temp_path("custom-completion.mp3");
+        let mut config = Config::default()
+            .with_sound(pomock::config::SoundConfig::new(sound_file.clone()))
+            .unwrap();
         let mut task_store = None;
         let mut notifier = RecordingNotifier::default();
+        let mut sound_player = RecordingSoundPlayer::default();
 
         assert!(
             !handle_outcome(
@@ -494,10 +549,12 @@ mod tests {
                 &mut config,
                 &mut task_store,
                 &mut notifier,
+                &mut sound_player,
             )
             .unwrap()
         );
         assert_eq!(notifier.completions, [pomock::SessionKind::Focus]);
+        assert_eq!(sound_player.files, [sound_file]);
 
         assert!(
             !handle_outcome(
@@ -506,10 +563,12 @@ mod tests {
                 &mut config,
                 &mut task_store,
                 &mut notifier,
+                &mut sound_player,
             )
             .unwrap()
         );
         assert_eq!(notifier.completions, [pomock::SessionKind::Focus]);
+        assert_eq!(sound_player.files.len(), 1);
     }
 
     #[test]

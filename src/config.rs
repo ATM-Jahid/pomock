@@ -8,11 +8,13 @@ use directories::ProjectDirs;
 use serde::{Deserialize, Serialize};
 
 mod keys;
+mod sound;
 mod tasks;
 mod theme;
 mod timer;
 
 pub use keys::{ConfigKey, KeyAction, KeysConfig};
+pub use sound::SoundConfig;
 pub use tasks::TasksConfig;
 pub use theme::{ThemeColor, ThemeConfig, ThemeRole};
 pub use timer::TimerConfig;
@@ -29,6 +31,7 @@ pub struct Config {
     tasks: TasksConfig,
     theme: ThemeConfig,
     keys: KeysConfig,
+    sound: SoundConfig,
 }
 
 impl Config {
@@ -61,13 +64,25 @@ impl Config {
         theme: ThemeConfig,
         keys: KeysConfig,
     ) -> Result<Self, ConfigValidationError> {
+        Self::with_all_settings(timer, tasks, theme, keys, SoundConfig::default())
+    }
+
+    pub(crate) fn with_all_settings(
+        timer: TimerConfig,
+        tasks: TasksConfig,
+        theme: ThemeConfig,
+        keys: KeysConfig,
+        mut sound: SoundConfig,
+    ) -> Result<Self, ConfigValidationError> {
         timer.validate()?;
         keys.validate()?;
+        sound.validate()?;
         Ok(Self {
             timer,
             tasks,
             theme,
             keys,
+            sound,
         })
     }
 
@@ -89,6 +104,18 @@ impl Config {
     /// Returns the contextual normal-mode key bindings.
     pub fn keys(&self) -> &KeysConfig {
         &self.keys
+    }
+
+    /// Returns the optional file-backed completion sound settings.
+    pub fn sound(&self) -> &SoundConfig {
+        &self.sound
+    }
+
+    /// Replaces the optional completion sound settings.
+    pub fn with_sound(mut self, mut sound: SoundConfig) -> Result<Self, ConfigValidationError> {
+        sound.validate()?;
+        self.sound = sound;
+        Ok(self)
     }
 
     /// Returns the platform-appropriate per-user configuration path.
@@ -169,6 +196,10 @@ pub enum ConfigValidationError {
         first: &'static str,
         second: &'static str,
     },
+    RelativeSoundPath {
+        path: PathBuf,
+    },
+    HomeDirectoryUnavailable,
 }
 
 impl fmt::Display for ConfigValidationError {
@@ -185,6 +216,13 @@ impl fmt::Display for ConfigValidationError {
             Self::ConflictingKeys { first, second } => {
                 write!(formatter, "keys.{first} conflicts with keys.{second}")
             }
+            Self::RelativeSoundPath { path } => write!(
+                formatter,
+                "sound.file must be an absolute path or start with ~/; got {}",
+                path.display()
+            ),
+            Self::HomeDirectoryUnavailable => formatter
+                .write_str("could not expand sound.file because the home directory is unavailable"),
         }
     }
 }
@@ -275,6 +313,8 @@ struct StoredConfig {
     theme: ThemeConfig,
     #[serde(default)]
     keys: KeysConfig,
+    #[serde(default)]
+    sound: SoundConfig,
 }
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -311,7 +351,7 @@ impl TryFrom<StoredConfig> for Config {
     type Error = ConfigValidationError;
 
     fn try_from(stored: StoredConfig) -> Result<Self, Self::Error> {
-        Self::with_settings(
+        Self::with_all_settings(
             TimerConfig::new(
                 stored.timer.focus_minutes,
                 stored.timer.short_break_minutes,
@@ -321,6 +361,7 @@ impl TryFrom<StoredConfig> for Config {
             TasksConfig::with_numbering(stored.tasks.persist, stored.tasks.show_numbers),
             stored.theme,
             stored.keys,
+            stored.sound,
         )
     }
 }
@@ -341,6 +382,7 @@ impl From<&Config> for StoredConfig {
             },
             theme: *config.theme(),
             keys: config.keys().clone(),
+            sound: config.sound().clone(),
         }
     }
 }
@@ -355,7 +397,7 @@ mod tests {
 
     use super::{
         Config, ConfigError, ConfigKey, ConfigValidationError, KeyBindings, KeysConfig,
-        TasksConfig, ThemeColor, ThemeConfig, TimerConfig,
+        SoundConfig, TasksConfig, ThemeColor, ThemeConfig, TimerConfig,
     };
 
     static NEXT_TEMP_PATH: AtomicU64 = AtomicU64::new(0);
@@ -380,6 +422,7 @@ mod tests {
         assert!(config.tasks().show_numbers());
         assert_eq!(config.theme(), &ThemeConfig::default());
         assert_eq!(config.keys(), &KeysConfig::default());
+        assert_eq!(config.sound(), &SoundConfig::default());
         assert_eq!(
             config.keys().list_down(),
             [ConfigKey::Character('j'), ConfigKey::Down]
@@ -395,6 +438,63 @@ mod tests {
         let path = temp_path("missing.toml");
 
         assert_eq!(Config::load_from(path).unwrap(), Config::default());
+    }
+
+    #[test]
+    fn sound_file_round_trips_and_is_disabled_when_omitted() {
+        let path = temp_path("sound/config.toml");
+        let sound_file = PathBuf::from("~/sounds/session-complete.mp3");
+        let config = Config::default()
+            .with_sound(SoundConfig::new(&sound_file))
+            .unwrap();
+
+        config.save_to(&path).unwrap();
+
+        assert_eq!(Config::load_from(&path).unwrap(), config);
+        assert_eq!(
+            config.sound().resolved_file(),
+            Some(
+                directories::UserDirs::new()
+                    .unwrap()
+                    .home_dir()
+                    .join("sounds/session-complete.mp3")
+                    .as_path()
+            )
+        );
+        let contents = fs::read_to_string(&path).unwrap();
+        assert!(contents.contains("[sound]"));
+        assert!(contents.contains("file = \"~/sounds/session-complete.mp3\""));
+
+        fs::remove_dir_all(path.parent().unwrap()).unwrap();
+    }
+
+    #[test]
+    fn absolute_sound_paths_pass_through_unchanged() {
+        let sound_file = temp_path("absolute-sound.wav");
+        let config = Config::default()
+            .with_sound(SoundConfig::new(&sound_file))
+            .unwrap();
+
+        assert_eq!(config.sound().file(), Some(sound_file.as_path()));
+        assert_eq!(config.sound().resolved_file(), Some(sound_file.as_path()));
+    }
+
+    #[test]
+    fn other_relative_sound_paths_are_rejected_with_the_config_path() {
+        let path = temp_path("relative-sound.toml");
+        fs::write(
+            &path,
+            "[timer]\nfocus_minutes = 25\nshort_break_minutes = 5\nlong_break_minutes = 15\nlong_break_interval = 4\n\n[sound]\nfile = \"sounds/done.wav\"\n",
+        )
+        .unwrap();
+
+        let error = Config::load_from(&path).unwrap_err();
+
+        assert!(matches!(error, ConfigError::Validation { .. }));
+        assert!(error.to_string().contains(path.to_str().unwrap()));
+        assert!(error.to_string().contains("absolute path or start with ~/"));
+        assert!(error.to_string().contains("sounds/done.wav"));
+        fs::remove_file(path).unwrap();
     }
 
     #[test]

@@ -15,6 +15,7 @@ and [Crossterm](https://github.com/crossterm-rs/crossterm).
 - Persistent task order and completion state.
 - Keyboard and mouse navigation.
 - Native desktop notifications when a session completes.
+- A user-selected sound file when a session completes.
 - TOML configuration for session durations, task behavior, and theme colors.
 - An in-app settings overlay for timer, task, theme, and key settings.
 
@@ -129,6 +130,21 @@ edit_task = "e"
 delete_task = "x"
 task_primary = "space"
 ```
+
+Sound is disabled by default. To play a custom file whenever any session
+completes, add its path:
+
+```toml
+[sound]
+file = "~/Music/session-complete.mp3"
+```
+
+Playback uses the system's default audio output and supports common formats,
+including WAV, MP3, FLAC, Ogg Vorbis, and AAC.
+An unreadable or unsupported file, or an unavailable audio device,
+is ignored so the timer keeps running.
+Paths beginning with `~/` are expanded from the current user's home directory.
+Absolute paths are also accepted, but relative paths are not.
 
 To customize them, create `pomock/config.toml`
 in your platform's standard user configuration directory

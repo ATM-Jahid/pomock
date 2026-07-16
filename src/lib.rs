@@ -17,6 +17,7 @@ pub mod input;
 pub mod notification;
 pub mod persistence;
 mod settings;
+pub mod sound;
 mod tasks;
 mod timer;
 pub mod ui;

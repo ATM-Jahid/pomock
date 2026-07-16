@@ -230,11 +230,12 @@ impl SettingsOverlay {
             return;
         };
         let keys = self.draft.keys().clone().with_binding(action, key);
-        match Config::with_settings(
+        match Config::with_all_settings(
             self.draft.timer().to_owned(),
             *self.draft.tasks(),
             *self.draft.theme(),
             keys,
+            self.draft.sound().clone(),
         ) {
             Ok(config) => {
                 self.draft = config;
@@ -323,7 +324,7 @@ impl SettingsOverlay {
         theme: crate::config::ThemeConfig,
         keys: crate::config::KeysConfig,
     ) {
-        match Config::with_settings(timer, tasks, theme, keys) {
+        match Config::with_all_settings(timer, tasks, theme, keys, self.draft.sound().clone()) {
             Ok(config) => {
                 self.draft = config;
                 self.error = None;
@@ -336,7 +337,7 @@ impl SettingsOverlay {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::config::{ThemeColor, ThemeRole};
+    use crate::config::{SoundConfig, ThemeColor, ThemeRole};
 
     #[test]
     fn numeric_edits_are_validated_before_updating_the_draft() {
@@ -358,6 +359,19 @@ mod tests {
 
         assert_eq!(settings.draft().timer().focus_minutes(), 40);
         assert!(settings.error().is_none());
+    }
+
+    #[test]
+    fn editing_other_settings_preserves_the_completion_sound() {
+        let sound_file = std::env::current_dir().unwrap().join("custom.wav");
+        let config = Config::default()
+            .with_sound(SoundConfig::new(&sound_file))
+            .unwrap();
+        let mut settings = SettingsOverlay::new(&config);
+
+        settings.set_tasks(false, false);
+
+        assert_eq!(settings.draft().sound().file(), Some(sound_file.as_path()));
     }
 
     #[test]
