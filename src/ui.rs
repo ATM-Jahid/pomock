@@ -7,7 +7,7 @@ use ratatui::{
 };
 
 use crate::{
-    app::{App, ClickTarget, ConfirmationOperation, EditMode, TimerChange, UiFocus},
+    app::{App, ClickTarget, ConfirmationOperation, EditMode, ScrollTarget, TimerChange, UiFocus},
     config::{ConfigKey, KeyAction, KeysConfig, ThemeColor, ThemeConfig, ThemeRole},
     display::{format_big_duration, format_key, format_state},
     settings::SettingField,
@@ -247,6 +247,27 @@ pub fn click_target(area: Rect, position: (u16, u16), app: &App) -> ClickTarget 
         .map_or(ClickTarget::Done, ClickTarget::DoneTask)
     } else {
         ClickTarget::Outside
+    }
+}
+
+/// Identifies the list under a mouse-wheel/touchpad scroll event.
+pub fn scroll_target(area: Rect, position: (u16, u16), app: &App) -> Option<ScrollTarget> {
+    let point = position.into();
+    if let Some(settings) = app.settings() {
+        let footer = settings_footer(settings);
+        let (list, _) = settings_parts(area, &footer);
+        return list.contains(point).then_some(ScrollTarget::Settings);
+    }
+
+    let controls_text = controls_text(app, app.input_keys());
+    let controls_text = wrap_help(&controls_text, inner_width(area));
+    let layout = ui_layout(area, text_height(&controls_text));
+    if layout.todo.contains(point) {
+        Some(ScrollTarget::Todo)
+    } else if layout.done.contains(point) {
+        Some(ScrollTarget::Done)
+    } else {
+        None
     }
 }
 
@@ -498,11 +519,16 @@ fn settings_parts(area: Rect, footer_text: &str) -> (Rect, Rect) {
     let footer_height = text_height(&wrap_help(footer_text, inner.width)).min(inner.height);
     let chunks = Layout::default()
         .direction(LayoutDirection::Vertical)
-        .constraints([Constraint::Min(1), Constraint::Length(footer_height)])
+        .constraints([
+            Constraint::Min(1),
+            Constraint::Length(1),
+            Constraint::Length(footer_height),
+        ])
         .split(inner);
-    (chunks[0], chunks[1])
+    (chunks[0], chunks[2])
 }
 
+#[cfg(test)]
 fn settings_offset(selection: usize, visible_rows: usize) -> usize {
     if visible_rows == 0 {
         0
@@ -526,6 +552,16 @@ fn settings_visual_row(selection: usize) -> usize {
             .iter()
             .filter(|(first_field, _)| selection >= *first_field)
             .count()
+}
+
+fn settings_scroll_anchor(selection: usize) -> usize {
+    SETTINGS_GROUPS
+        .iter()
+        .enumerate()
+        .find_map(|(group_index, (first_field, _))| {
+            (*first_field == selection).then_some(first_field + group_index)
+        })
+        .unwrap_or_else(|| settings_visual_row(selection))
 }
 
 fn settings_field_row(visual_row: usize) -> Option<usize> {
@@ -554,13 +590,11 @@ fn settings_row_at(
     if !list.contains(point) {
         return None;
     }
-    let visible = usize::from(list.height);
-    let selected_row = settings_visual_row(settings.selection());
-    let row = settings_offset(selected_row, visible) + usize::from(position.1 - list.y);
+    let row = settings.offset() + usize::from(position.1 - list.y);
     settings_field_row(row)
 }
 
-fn draw_settings(frame: &mut Frame, app: &App, theme: Theme) {
+fn draw_settings(frame: &mut Frame, app: &mut App, theme: Theme) {
     let settings = app.settings().expect("settings overlay is open");
     let area = settings_area(frame.area());
     let footer = settings_footer(settings);
@@ -587,7 +621,9 @@ fn draw_settings(frame: &mut Frame, app: &App, theme: Theme) {
     }
     let selected_row = settings_visual_row(settings.selection());
     let mut state = ListState::default().with_selected(Some(selected_row));
-    *state.offset_mut() = settings_offset(selected_row, usize::from(list_area.height));
+    *state.offset_mut() = settings
+        .offset()
+        .min(settings_scroll_anchor(settings.selection()));
     frame.render_stateful_widget(
         List::new(items).highlight_symbol("> ").highlight_style(
             Style::default()
@@ -597,6 +633,7 @@ fn draw_settings(frame: &mut Frame, app: &App, theme: Theme) {
         list_area,
         &mut state,
     );
+    app.set_settings_offset(state.offset());
 
     let footer = wrap_help(&footer, footer_area.width);
     frame.render_widget(
@@ -1031,6 +1068,41 @@ mod tests {
     }
 
     #[test]
+    fn scroll_hit_testing_uses_task_boxes_and_settings_list() {
+        let mut app = App::new();
+        add_task(&mut app, "First");
+        let area = Rect::new(0, 0, 80, 24);
+        let help = controls_text(&app, app.input_keys());
+        let layout = ui_layout(area, text_height(&wrap_help(&help, inner_width(area))));
+
+        assert_eq!(
+            scroll_target(area, (layout.todo.x, layout.todo.y), &app),
+            Some(ScrollTarget::Todo)
+        );
+        assert_eq!(
+            scroll_target(area, (layout.done.x, layout.done.y), &app),
+            Some(ScrollTarget::Done)
+        );
+        assert_eq!(
+            scroll_target(area, (layout.clock.x, layout.clock.y), &app),
+            None
+        );
+
+        let _ = app.dispatch(Action::OpenSettings);
+        let settings = app.settings().unwrap();
+        let footer = settings_footer(settings);
+        let (list, footer_area) = settings_parts(area, &footer);
+        assert_eq!(
+            scroll_target(area, (list.x, list.y), &app),
+            Some(ScrollTarget::Settings)
+        );
+        assert_eq!(
+            scroll_target(area, (footer_area.x, footer_area.y), &app),
+            None
+        );
+    }
+
+    #[test]
     fn click_translation_maps_all_visible_session_controls() {
         let app = App::new();
         let area = Rect::new(0, 0, 80, 24);
@@ -1063,12 +1135,42 @@ mod tests {
         let selected_row = settings_visual_row(25);
         let first_visible = settings_offset(selected_row, usize::from(list.height));
         let expected = settings_field_row(first_visible).unwrap();
+        app.set_settings_offset(first_visible);
 
         assert_eq!(
             click_target(area, (list.x, list.y), &app),
             ClickTarget::SettingsRow(expected)
         );
         assert_eq!(click_target(area, (0, 0), &app), ClickTarget::Outside);
+    }
+
+    #[test]
+    fn settings_click_keeps_the_existing_viewport_when_row_is_already_visible() {
+        let mut app = App::new();
+        let _ = app.dispatch(Action::OpenSettings);
+        let area = Rect::new(0, 0, 80, 24);
+        let footer = settings_footer(app.settings().unwrap());
+        let (list, _) = settings_parts(area, &footer);
+        let offset = settings_visual_row(25).saturating_sub(usize::from(list.height)) + 1;
+        app.set_settings_offset(offset);
+
+        let clicked = settings_field_row(offset + 2).unwrap();
+        assert_eq!(
+            click_target(area, (list.x, list.y + 2), &app),
+            ClickTarget::SettingsRow(clicked)
+        );
+        let _ =
+            app.handle_click_target(ClickTarget::SettingsRow(clicked), std::time::Instant::now());
+        assert_eq!(app.settings().unwrap().selection(), clicked);
+        assert_eq!(app.settings().unwrap().offset(), offset);
+    }
+
+    #[test]
+    fn settings_group_first_fields_scroll_with_their_heading() {
+        assert_eq!(settings_scroll_anchor(0), 0);
+        assert_eq!(settings_scroll_anchor(4), 5);
+        assert_eq!(settings_scroll_anchor(5), 7);
+        assert_eq!(settings_scroll_anchor(1), settings_visual_row(1));
     }
 
     #[test]
@@ -1133,6 +1235,19 @@ mod tests {
                 .lines()
                 .all(|line| Line::from(line).width() <= usize::from(footer_area.width))
         );
+    }
+
+    #[test]
+    fn settings_overlay_separates_list_from_help_footer() {
+        let mut app = App::new();
+        let _ = app.dispatch(Action::OpenSettings);
+        let settings = app.settings().unwrap();
+        let area = Rect::new(0, 0, 80, 24);
+        let footer = settings_footer(settings);
+
+        let (list, footer_area) = settings_parts(area, &footer);
+
+        assert_eq!(footer_area.y, list.bottom() + 1);
     }
 
     #[test]

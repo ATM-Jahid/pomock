@@ -56,6 +56,15 @@ pub enum Action {
     SettingsPopInput,
     SettingsSubmitInput,
     SettingsCaptureKey(ConfigKey),
+    Scroll(ScrollTarget, Direction),
+}
+
+/// A list that can be scrolled by a pointing device.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ScrollTarget {
+    Todo,
+    Done,
+    Settings,
 }
 
 /// A boundary-relevant result of applying an application transition.
@@ -272,6 +281,17 @@ impl App {
                 );
             }
             Action::NavigateFocus(direction) => self.navigate_focus(direction),
+            Action::Scroll(target, direction) => match target {
+                ScrollTarget::Todo => {
+                    self.focus(UiFocus::Todo);
+                    self.move_todo_selection(direction);
+                }
+                ScrollTarget::Done => {
+                    self.focus(UiFocus::Done);
+                    self.move_done_selection(direction);
+                }
+                ScrollTarget::Settings => {}
+            },
             Action::MoveSelection(direction) => match self.ui_focus {
                 UiFocus::Clock => {}
                 UiFocus::Todo => self.move_todo_selection(direction),
@@ -408,6 +428,12 @@ impl App {
         self.settings.as_ref()
     }
 
+    pub(crate) fn set_settings_offset(&mut self, offset: usize) {
+        if let Some(settings) = &mut self.settings {
+            settings.set_offset(offset);
+        }
+    }
+
     /// Returns the active keys, including changes accepted in the settings overlay.
     pub fn input_keys(&self) -> &crate::config::KeysConfig {
         self.settings
@@ -465,6 +491,12 @@ impl App {
             let settings = self.settings.as_mut().expect("settings overlay is open");
             match action {
                 Action::SettingsMove(down) => settings.move_selection(down),
+                Action::Scroll(ScrollTarget::Settings, Direction::Down) => {
+                    settings.move_selection(true)
+                }
+                Action::Scroll(ScrollTarget::Settings, Direction::Up) => {
+                    settings.move_selection(false)
+                }
                 Action::SettingsAdjust(forward) => settings.adjust(forward),
                 Action::SettingsActivate => settings.activate(),
                 Action::SettingsClose => {
@@ -946,7 +978,7 @@ mod tests {
 
     use super::{
         Action, App, AppOutcome, ClickTarget, ConfirmationOperation, Direction, EditMode,
-        FocusAudioAction, SettingsMode, TaskState, TimerChange, UiFocus,
+        FocusAudioAction, ScrollTarget, SettingsMode, TaskState, TimerChange, UiFocus,
     };
 
     fn add_task(app: &mut App, description: &str) {
@@ -1317,6 +1349,38 @@ mod tests {
         assert_eq!(app.todo_selection(), 1);
         let _ = app.dispatch(Action::MoveSelection(Direction::Up));
         assert_eq!(app.todo_selection(), 0);
+    }
+
+    #[test]
+    fn scrolling_task_lists_focuses_the_target_and_moves_its_selection() {
+        let mut app = App::new();
+        add_task(&mut app, "First");
+        add_task(&mut app, "Second");
+
+        let _ = app.dispatch(Action::Scroll(ScrollTarget::Todo, Direction::Down));
+        assert_eq!(app.ui_focus(), UiFocus::Todo);
+        assert_eq!(app.todo_selection(), 1);
+
+        let _ = app.dispatch(Action::Scroll(ScrollTarget::Todo, Direction::Up));
+        assert_eq!(app.todo_selection(), 0);
+        let _ = app.dispatch(Action::Scroll(ScrollTarget::Done, Direction::Down));
+        assert_eq!(app.ui_focus(), UiFocus::Done);
+        assert_eq!(app.done_selection(), 0);
+    }
+
+    #[test]
+    fn scrolling_settings_moves_selection_but_is_locked_during_editing() {
+        let mut app = App::new();
+        let _ = app.dispatch(Action::OpenSettings);
+
+        let _ = app.dispatch(Action::Scroll(ScrollTarget::Settings, Direction::Down));
+        assert_eq!(app.settings().unwrap().selection(), 1);
+        let _ = app.dispatch(Action::Scroll(ScrollTarget::Settings, Direction::Up));
+        assert_eq!(app.settings().unwrap().selection(), 0);
+
+        let _ = app.dispatch(Action::SettingsActivate);
+        let _ = app.dispatch(Action::Scroll(ScrollTarget::Settings, Direction::Down));
+        assert_eq!(app.settings().unwrap().selection(), 0);
     }
 
     #[test]

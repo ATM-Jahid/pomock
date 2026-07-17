@@ -80,6 +80,7 @@ impl SettingField {
 pub(crate) struct SettingsOverlay {
     config: Config,
     selection: usize,
+    offset: usize,
     input: Option<String>,
     capturing_key: bool,
     error: Option<String>,
@@ -90,6 +91,7 @@ impl SettingsOverlay {
         Self {
             config: config.clone(),
             selection: 0,
+            offset: 0,
             input: None,
             capturing_key: false,
             error: None,
@@ -102,6 +104,14 @@ impl SettingsOverlay {
 
     pub(crate) fn selection(&self) -> usize {
         self.selection
+    }
+
+    pub(crate) fn offset(&self) -> usize {
+        self.offset
+    }
+
+    pub(crate) fn set_offset(&mut self, offset: usize) {
+        self.offset = offset;
     }
 
     pub(crate) fn field(&self) -> SettingField {

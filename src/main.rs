@@ -18,22 +18,34 @@ use ratatui::{Terminal, backend::CrosstermBackend, layout::Rect};
 use std::time::{Duration, Instant};
 
 use pomock::{
-    app::{App, AppOutcome, EditMode, FocusAudioAction, TaskState},
+    app::{Action, App, AppOutcome, Direction, EditMode, FocusAudioAction, TaskState},
     config::{Config, ConfigError},
     input::map_key,
     notification::{DesktopNotifier, Notifier},
     persistence::{TaskPersistenceError, TaskStore},
     sound::{FileSoundPlayer, SoundPlayer},
-    ui::{Theme, click_target, draw},
+    ui::{Theme, click_target, draw, scroll_target},
 };
 
 fn handle_mouse(app: &mut App, mouse: MouseEvent, area: Rect, now: Instant) -> AppOutcome {
-    if mouse.kind != MouseEventKind::Down(MouseButton::Left) {
-        return AppOutcome::None;
+    match mouse.kind {
+        MouseEventKind::Down(MouseButton::Left) => {
+            let target = click_target(area, (mouse.column, mouse.row), app);
+            app.handle_click_target(target, now)
+        }
+        MouseEventKind::ScrollUp | MouseEventKind::ScrollDown => {
+            let Some(target) = scroll_target(area, (mouse.column, mouse.row), app) else {
+                return AppOutcome::None;
+            };
+            let direction = if mouse.kind == MouseEventKind::ScrollUp {
+                Direction::Up
+            } else {
+                Direction::Down
+            };
+            app.dispatch(Action::Scroll(target, direction))
+        }
+        _ => AppOutcome::None,
     }
-
-    let target = click_target(area, (mouse.column, mouse.row), app);
-    app.handle_click_target(target, now)
 }
 
 fn handle_outcome(
