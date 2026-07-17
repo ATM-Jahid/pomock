@@ -36,7 +36,9 @@ pub struct Theme {
     unfocused_border: Color,
     todo_highlight: Color,
     done_highlight: Color,
-    completed_sessions: Color,
+    focus: Color,
+    short_break: Color,
+    long_break: Color,
 }
 
 impl From<&ThemeConfig> for Theme {
@@ -46,7 +48,19 @@ impl From<&ThemeConfig> for Theme {
             unfocused_border: theme_color(config.unfocused_border()),
             todo_highlight: theme_color(config.todo_highlight()),
             done_highlight: theme_color(config.done_highlight()),
-            completed_sessions: theme_color(config.completed_sessions()),
+            focus: theme_color(config.focus()),
+            short_break: theme_color(config.short_break()),
+            long_break: theme_color(config.long_break()),
+        }
+    }
+}
+
+impl Theme {
+    fn session(self, session: SessionKind) -> Color {
+        match session {
+            SessionKind::Focus => self.focus,
+            SessionKind::ShortBreak => self.short_break,
+            SessionKind::LongBreak => self.long_break,
         }
     }
 }
@@ -93,18 +107,17 @@ pub fn draw(frame: &mut Frame, app: &mut App, theme: Theme, keys: &KeysConfig) {
     let state = Paragraph::new(format_state(app.timer().state())).alignment(Alignment::Center);
     let remaining = Paragraph::new(format_big_duration(app.timer().remaining()))
         .alignment(Alignment::Center)
-        .style(Style::default().add_modifier(Modifier::BOLD));
+        .style(
+            Style::default()
+                .fg(theme.session(current_session(app.timer().state())))
+                .add_modifier(Modifier::BOLD),
+        );
     let completed_sessions = Paragraph::new(format!(
         "Focus sessions completed: {}",
         app.timer().completed_focus_sessions()
     ))
-    .alignment(Alignment::Center)
-    .style(Style::default().fg(theme.completed_sessions));
-    let current_session = match app.timer().state() {
-        TimerState::Ready(session) | TimerState::Running(session) | TimerState::Paused(session) => {
-            session
-        }
-    };
+    .alignment(Alignment::Center);
+    let current_session = current_session(app.timer().state());
     let session_controls = [
         (SessionKind::Focus, "Focus"),
         (SessionKind::ShortBreak, "Short break"),
@@ -192,11 +205,7 @@ pub fn draw(frame: &mut Frame, app: &mut App, theme: Theme, keys: &KeysConfig) {
         .into_iter()
         .zip(clock_layout.session_controls)
     {
-        let style = if session == current_session {
-            Style::default().add_modifier(Modifier::REVERSED)
-        } else {
-            Style::default()
-        };
+        let style = session_button_style(session, current_session, theme);
         frame.render_widget(
             Paragraph::new(format!("[ {label} ]"))
                 .alignment(Alignment::Center)
@@ -211,6 +220,24 @@ pub fn draw(frame: &mut Frame, app: &mut App, theme: Theme, keys: &KeysConfig) {
 
     if app.is_settings_open() {
         draw_settings(frame, app, theme);
+    }
+}
+
+fn current_session(state: TimerState) -> SessionKind {
+    match state {
+        TimerState::Ready(session) | TimerState::Running(session) | TimerState::Paused(session) => {
+            session
+        }
+    }
+}
+
+fn session_button_style(session: SessionKind, current: SessionKind, theme: Theme) -> Style {
+    if session == current {
+        Style::default()
+            .fg(theme.session(session))
+            .add_modifier(Modifier::REVERSED)
+    } else {
+        Style::default()
     }
 }
 
@@ -276,9 +303,13 @@ fn clock_layout(area: Rect) -> ClockLayout {
     let chunks = Layout::default()
         .direction(LayoutDirection::Vertical)
         .constraints([
+            Constraint::Fill(1),
             Constraint::Length(1),
-            Constraint::Min(1),
             Constraint::Length(1),
+            Constraint::Length(5),
+            Constraint::Length(1),
+            Constraint::Length(1),
+            Constraint::Fill(1),
             Constraint::Length(1),
         ])
         .split(inner);
@@ -289,12 +320,12 @@ fn clock_layout(area: Rect) -> ClockLayout {
             Constraint::Ratio(1, 3),
             Constraint::Ratio(1, 3),
         ])
-        .split(chunks[3]);
+        .split(chunks[7]);
 
     ClockLayout {
-        state: chunks[0],
-        remaining: chunks[1],
-        completed_sessions: chunks[2],
+        state: chunks[1],
+        remaining: chunks[3],
+        completed_sessions: chunks[5],
         session_controls: [controls[0], controls[1], controls[2]],
     }
 }
@@ -752,7 +783,9 @@ fn theme_role_label(role: ThemeRole) -> &'static str {
         ThemeRole::UnfocusedBorder => "  Unfocused border",
         ThemeRole::TodoHighlight => "  To-do highlight",
         ThemeRole::DoneHighlight => "  Done highlight",
-        ThemeRole::CompletedSessions => "  Completed sessions",
+        ThemeRole::Focus => "  Focus session",
+        ThemeRole::ShortBreak => "  Short break session",
+        ThemeRole::LongBreak => "  Long break session",
     }
 }
 
@@ -800,6 +833,8 @@ fn focused_block(title: &str, focused: bool, theme: Theme) -> Block<'_> {
 #[cfg(test)]
 mod tests {
     use std::time::Duration;
+
+    use ratatui::{Terminal, backend::TestBackend};
 
     use crate::app::{Action, Direction};
 
@@ -882,14 +917,56 @@ mod tests {
     }
 
     #[test]
+    fn clock_content_is_centered_with_equal_internal_gaps() {
+        let layout = clock_layout(Rect::new(0, 0, 80, 18));
+
+        assert_eq!(layout.remaining.height, 5);
+        assert_eq!(layout.remaining.y, layout.state.y + layout.state.height + 1);
+        assert_eq!(
+            layout.completed_sessions.y,
+            layout.remaining.y + layout.remaining.height + 1
+        );
+
+        let top_padding = layout.state.y - 1;
+        let bottom_padding = layout.session_controls[0].y
+            - (layout.completed_sessions.y + layout.completed_sessions.height);
+        assert_eq!(top_padding, bottom_padding);
+    }
+
+    #[test]
+    fn completed_focus_count_uses_normal_terminal_text_color() {
+        let mut app = App::new();
+        let keys = KeysConfig::default();
+        let theme = Theme::from(&ThemeConfig::default());
+        let area = Rect::new(0, 0, 80, 24);
+        let help = wrap_help(&controls_text(&app, &keys), inner_width(area));
+        let completed_area =
+            clock_layout(ui_layout(area, text_height(&help)).clock).completed_sessions;
+        let text = "Focus sessions completed: 0";
+        let text_x = completed_area.x + (completed_area.width - text.len() as u16) / 2;
+        let mut terminal = Terminal::new(TestBackend::new(area.width, area.height)).unwrap();
+
+        terminal
+            .draw(|frame| draw(frame, &mut app, theme, &keys))
+            .unwrap();
+
+        let buffer = terminal.backend().buffer();
+        for x in text_x..text_x + text.len() as u16 {
+            assert_eq!(buffer[(x, completed_area.y)].fg, Color::Reset);
+        }
+    }
+
+    #[test]
     fn configured_colors_map_to_their_semantic_theme_roles() {
         let config = ThemeConfig::new(
             ThemeColor::LightBlue,
             ThemeColor::Black,
             ThemeColor::LightYellow,
             ThemeColor::LightGreen,
-            ThemeColor::Cyan,
-        );
+        )
+        .with_color(ThemeRole::Focus, ThemeColor::Red)
+        .with_color(ThemeRole::ShortBreak, ThemeColor::Blue)
+        .with_color(ThemeRole::LongBreak, ThemeColor::Magenta);
 
         let theme = Theme::from(&config);
 
@@ -897,7 +974,21 @@ mod tests {
         assert_eq!(theme.unfocused_border, Color::Black);
         assert_eq!(theme.todo_highlight, Color::LightYellow);
         assert_eq!(theme.done_highlight, Color::LightGreen);
-        assert_eq!(theme.completed_sessions, Color::Cyan);
+        assert_eq!(theme.session(SessionKind::Focus), Color::Red);
+        assert_eq!(theme.session(SessionKind::ShortBreak), Color::Blue);
+        assert_eq!(theme.session(SessionKind::LongBreak), Color::Magenta);
+    }
+
+    #[test]
+    fn only_the_current_session_button_uses_its_session_color() {
+        let theme = Theme::from(&ThemeConfig::default());
+
+        let current = session_button_style(SessionKind::Focus, SessionKind::Focus, theme);
+        let inactive = session_button_style(SessionKind::ShortBreak, SessionKind::Focus, theme);
+
+        assert_eq!(current.fg, Some(Color::LightRed));
+        assert!(current.add_modifier.contains(Modifier::REVERSED));
+        assert_eq!(inactive, Style::default());
     }
 
     #[test]

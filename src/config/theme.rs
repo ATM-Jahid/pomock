@@ -32,7 +32,9 @@ pub struct ThemeConfig {
     unfocused_border: ThemeColor,
     todo_highlight: ThemeColor,
     done_highlight: ThemeColor,
-    completed_sessions: ThemeColor,
+    focus: ThemeColor,
+    short_break: ThemeColor,
+    long_break: ThemeColor,
 }
 
 impl ThemeConfig {
@@ -41,14 +43,15 @@ impl ThemeConfig {
         unfocused_border: ThemeColor,
         todo_highlight: ThemeColor,
         done_highlight: ThemeColor,
-        completed_sessions: ThemeColor,
     ) -> Self {
         Self {
             focused_border,
             unfocused_border,
             todo_highlight,
             done_highlight,
-            completed_sessions,
+            focus: ThemeColor::Magenta,
+            short_break: ThemeColor::Cyan,
+            long_break: ThemeColor::Green,
         }
     }
 
@@ -68,8 +71,16 @@ impl ThemeConfig {
         self.done_highlight
     }
 
-    pub fn completed_sessions(&self) -> ThemeColor {
-        self.completed_sessions
+    pub fn focus(&self) -> ThemeColor {
+        self.focus
+    }
+
+    pub fn short_break(&self) -> ThemeColor {
+        self.short_break
+    }
+
+    pub fn long_break(&self) -> ThemeColor {
+        self.long_break
     }
 
     pub fn with_color(mut self, role: ThemeRole, color: ThemeColor) -> Self {
@@ -78,7 +89,9 @@ impl ThemeConfig {
             ThemeRole::UnfocusedBorder => self.unfocused_border = color,
             ThemeRole::TodoHighlight => self.todo_highlight = color,
             ThemeRole::DoneHighlight => self.done_highlight = color,
-            ThemeRole::CompletedSessions => self.completed_sessions = color,
+            ThemeRole::Focus => self.focus = color,
+            ThemeRole::ShortBreak => self.short_break = color,
+            ThemeRole::LongBreak => self.long_break = color,
         }
         self
     }
@@ -89,7 +102,9 @@ impl ThemeConfig {
             ThemeRole::UnfocusedBorder => self.unfocused_border,
             ThemeRole::TodoHighlight => self.todo_highlight,
             ThemeRole::DoneHighlight => self.done_highlight,
-            ThemeRole::CompletedSessions => self.completed_sessions,
+            ThemeRole::Focus => self.focus,
+            ThemeRole::ShortBreak => self.short_break,
+            ThemeRole::LongBreak => self.long_break,
         }
     }
 }
@@ -100,7 +115,9 @@ pub enum ThemeRole {
     UnfocusedBorder,
     TodoHighlight,
     DoneHighlight,
-    CompletedSessions,
+    Focus,
+    ShortBreak,
+    LongBreak,
 }
 
 impl ThemeColor {
@@ -219,10 +236,9 @@ impl<'de> Deserialize<'de> for ThemeColor {
 impl Default for ThemeConfig {
     fn default() -> Self {
         Self::new(
-            ThemeColor::Yellow,
+            ThemeColor::LightRed,
             ThemeColor::DarkGray,
-            ThemeColor::Yellow,
-            ThemeColor::Green,
+            ThemeColor::Red,
             ThemeColor::Green,
         )
     }
@@ -231,6 +247,15 @@ impl Default for ThemeConfig {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn default_session_colors_are_distinct_semantic_roles() {
+        let theme = ThemeConfig::default();
+
+        assert_eq!(theme.focus(), ThemeColor::LightRed);
+        assert_eq!(theme.short_break(), ThemeColor::Cyan);
+        assert_eq!(theme.long_break(), ThemeColor::Green);
+    }
 
     #[test]
     fn named_and_hex_colors_round_trip_through_toml() {
@@ -244,6 +269,19 @@ mod tests {
                 color
             );
         }
+    }
+
+    #[test]
+    fn session_colors_round_trip_through_toml() {
+        let theme = ThemeConfig::default()
+            .with_color(ThemeRole::Focus, ThemeColor::Magenta)
+            .with_color(ThemeRole::ShortBreak, ThemeColor::LightBlue)
+            .with_color(ThemeRole::LongBreak, ThemeColor::Rgb(1, 2, 3));
+
+        let stored = toml::to_string(&theme).unwrap();
+        let loaded: ThemeConfig = toml::from_str(&stored).unwrap();
+
+        assert_eq!(loaded, theme);
     }
 
     #[test]

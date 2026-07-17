@@ -45,20 +45,6 @@ Controls are contextual to the focused box.
   Running or paused sessions ask for confirmation after 10 seconds of progress.
 - `s` or `Esc` — open the settings overlay.
 
-### Settings
-
-- Up / Down or `j` / `k` — select a setting.
-- Left / Right or `h` / `l` — adjust a number, toggle, or color.
-- Enter or Space — edit the selected field.
-  Enter applies an entered value;
-  pressing a valid key applies a captured binding.
-  Both return to navigation.
-- The configured Settings key — close the overlay while navigating it.
-- Esc — cancel the current edit or key capture before it is accepted.
-- Click a visible setting — select it; double-click to edit or activate it.
-
-Every accepted change takes effect and is written immediately to `config.toml`.
-
 ### Clock
 
 - `Space` — start a ready session, pause or resume an active session.
@@ -82,6 +68,20 @@ Every accepted change takes effect and is written immediately to `config.toml`.
 While adding or editing, type normally, press Enter to submit,
 or press Esc to cancel.
 Mouse input is ignored until text entry finishes.
+
+### Settings
+
+- Up / Down or `j` / `k` — select a setting.
+- Left / Right or `h` / `l` — adjust a number, toggle, or color.
+- Enter or Space — edit the selected field.
+  Enter applies an entered value;
+  pressing a valid key applies a captured binding.
+  Both return to navigation.
+- The configured Settings key — close the overlay while navigating it.
+- Esc — cancel the current edit or key capture before it is accepted.
+- Click a visible setting — select it; double-click to edit or activate it.
+
+Every accepted change takes effect and is written immediately to `config.toml`.
 
 ## Configuration
 
@@ -109,11 +109,13 @@ persist = true
 show_numbers = true
 
 [theme]
-focused_border = "yellow"
+focused_border = "light_red"
 unfocused_border = "dark_gray"
-todo_highlight = "yellow"
+todo_highlight = "red"
 done_highlight = "green"
-completed_sessions = "green"
+focus = "magenta"
+short_break = "cyan"
+long_break = "green"
 
 [keys]
 focus_left = "H"

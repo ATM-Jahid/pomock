@@ -23,7 +23,7 @@ pub(crate) enum SettingField {
 }
 
 impl SettingField {
-    pub(crate) const ALL: [Self; 31] = [
+    pub(crate) const ALL: [Self; 33] = [
         Self::FocusMinutes,
         Self::ShortBreakMinutes,
         Self::LongBreakMinutes,
@@ -54,7 +54,9 @@ impl SettingField {
         Self::Theme(ThemeRole::UnfocusedBorder),
         Self::Theme(ThemeRole::TodoHighlight),
         Self::Theme(ThemeRole::DoneHighlight),
-        Self::Theme(ThemeRole::CompletedSessions),
+        Self::Theme(ThemeRole::Focus),
+        Self::Theme(ThemeRole::ShortBreak),
+        Self::Theme(ThemeRole::LongBreak),
     ];
 
     fn is_number(self) -> bool {
@@ -612,6 +614,10 @@ mod tests {
             original.theme().color(ThemeRole::FocusedBorder),
             ThemeColor::Yellow
         );
+
+        select(&mut settings, SettingField::Theme(ThemeRole::Focus));
+        settings.adjust(true);
+        assert_eq!(settings.config().theme().focus(), ThemeColor::LightGreen);
     }
 
     #[test]
@@ -711,10 +717,7 @@ mod tests {
     fn selection_is_clamped_and_locked_during_nested_editing() {
         let mut settings = SettingsOverlay::new(&Config::default());
         settings.select(usize::MAX);
-        assert_eq!(
-            settings.field(),
-            SettingField::Theme(ThemeRole::CompletedSessions)
-        );
+        assert_eq!(settings.field(), SettingField::Theme(ThemeRole::LongBreak));
         settings.select(0);
         settings.activate();
         settings.move_selection(true);

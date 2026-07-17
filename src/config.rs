@@ -652,7 +652,6 @@ mod tests {
                 ThemeColor::Black,
                 ThemeColor::LightYellow,
                 ThemeColor::LightGreen,
-                ThemeColor::Cyan,
             ),
             KeysConfig {
                 clock_primary: KeyBindings::one(ConfigKey::Enter),
@@ -673,6 +672,7 @@ mod tests {
         assert!(contents.contains("show_numbers = false"));
         assert!(contents.contains("[theme]"));
         assert!(contents.contains("focused_border = \"light_blue\""));
+        assert!(!contents.contains("completed_sessions"));
         assert!(contents.contains("[keys]"));
         assert!(contents.contains("clock_primary = \"enter\""));
         assert!(contents.contains("cycle_session = \"n\""));
@@ -960,7 +960,7 @@ mod tests {
         let path = temp_path("invalid-theme.toml");
         fs::write(
             &path,
-            "[timer]\nfocus_minutes = 25\nshort_break_minutes = 5\nlong_break_minutes = 15\nlong_break_interval = 4\n\n[theme]\nfocused_border = \"orange\"\nunfocused_border = \"dark_gray\"\ntodo_highlight = \"yellow\"\ndone_highlight = \"green\"\ncompleted_sessions = \"green\"\n",
+            "[timer]\nfocus_minutes = 25\nshort_break_minutes = 5\nlong_break_minutes = 15\nlong_break_interval = 4\n\n[theme]\nfocused_border = \"orange\"\nunfocused_border = \"dark_gray\"\ntodo_highlight = \"yellow\"\ndone_highlight = \"green\"\n",
         )
         .unwrap();
 
