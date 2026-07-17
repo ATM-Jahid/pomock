@@ -463,7 +463,8 @@ fn controls_text(app: &App, keys: &KeysConfig) -> String {
                     format_key(first_key(keys.task_primary())),
                 ),
                 UiFocus::Done => format!(
-                    "[{focus_navigation}] box nav  [{list_navigation}] list nav  [{}] edit  [{}] delete  [{}] return  [{settings}] settings  [{quit}] quit",
+                    "[{focus_navigation}] box nav  [{list_navigation}] list nav  [{}] add  [{}] edit  [{}] delete  [{}] return  [{settings}] settings  [{quit}] quit",
+                    format_key(first_key(keys.add_task())),
                     format_key(first_key(keys.edit_task())),
                     format_key(first_key(keys.delete_task())),
                     format_key(first_key(keys.task_primary())),

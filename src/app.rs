@@ -4,7 +4,7 @@ use crate::{
     SessionKind,
     config::{Config, ConfigKey},
     settings::SettingsOverlay,
-    tasks::{Task, TaskList},
+    tasks::TaskList,
     timer::{PomodoroTimer, TimerState},
 };
 
@@ -90,18 +90,21 @@ pub enum FocusAudioAction {
 /// An opaque snapshot of durable task data for persistence adapters.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct TaskState {
-    pub(crate) tasks: Vec<(String, bool)>,
+    pub(crate) todo: Vec<String>,
+    pub(crate) done: Vec<String>,
 }
 
 impl TaskState {
-    pub(crate) fn from_records(tasks: Vec<(String, bool)>) -> Self {
-        Self { tasks }
+    pub(crate) fn from_lists(todo: Vec<String>, done: Vec<String>) -> Self {
+        Self { todo, done }
     }
 
-    pub(crate) fn records(&self) -> impl Iterator<Item = (&str, bool)> {
-        self.tasks
-            .iter()
-            .map(|(description, completed)| (description.as_str(), *completed))
+    pub(crate) fn todo(&self) -> impl Iterator<Item = &str> {
+        self.todo.iter().map(String::as_str)
+    }
+
+    pub(crate) fn done(&self) -> impl Iterator<Item = &str> {
+        self.done.iter().map(String::as_str)
     }
 }
 
@@ -213,13 +216,7 @@ impl App {
                 timer.long_break_duration(),
                 timer.long_break_interval(),
             ),
-            tasks: TaskList::from_tasks(
-                task_state
-                    .tasks
-                    .into_iter()
-                    .map(|(description, completed)| Task::new(description, completed))
-                    .collect(),
-            ),
+            tasks: TaskList::from_descriptions(task_state.todo, task_state.done),
             ui_focus: UiFocus::Clock,
             todo_selection: 0,
             done_selection: 0,
@@ -242,12 +239,16 @@ impl App {
         &self.tasks
     }
 
-    /// Captures task order, descriptions, and completion state for persistence.
+    /// Captures the independently ordered to-do and done lists for persistence.
     pub fn task_state(&self) -> TaskState {
-        TaskState::from_records(
+        TaskState::from_lists(
             self.tasks
-                .all()
-                .map(|task| (task.description().to_owned(), task.is_completed()))
+                .pending()
+                .map(|task| task.description().to_owned())
+                .collect(),
+            self.tasks
+                .completed()
+                .map(|task| task.description().to_owned())
                 .collect(),
         )
     }
@@ -555,7 +556,7 @@ impl App {
     }
 
     fn begin_add(&mut self) {
-        if self.ui_focus != UiFocus::Todo {
+        if !matches!(self.ui_focus, UiFocus::Todo | UiFocus::Done) {
             return;
         }
 
@@ -573,10 +574,18 @@ impl App {
 
         let changed = match self.edit_mode {
             EditMode::Adding if !description.trim().is_empty() => {
-                self.tasks.add(description);
+                if self.ui_focus == UiFocus::Done {
+                    self.tasks.add_completed(description);
+                } else {
+                    self.tasks.add(description);
+                }
                 true
             }
-            EditMode::Editing { task_index } => self.tasks.edit(task_index, description),
+            EditMode::Editing { task_index } => match self.ui_focus {
+                UiFocus::Todo => self.tasks.edit_pending(task_index, description),
+                UiFocus::Done => self.tasks.edit_completed(task_index, description),
+                UiFocus::Clock => false,
+            },
             EditMode::Adding | EditMode::Normal => false,
         };
 
@@ -704,20 +713,30 @@ impl App {
     }
 
     fn edit_selected_todo(&mut self) {
-        if let Some(index) = self.selected_todo_index() {
-            self.begin_edit(index);
+        let description = self
+            .tasks
+            .pending()
+            .nth(self.todo_selection)
+            .map(|task| task.description().to_string());
+        if let Some(description) = description {
+            self.begin_edit(self.todo_selection, description);
         }
     }
 
     fn edit_selected_done(&mut self) {
-        if let Some(index) = self.selected_done_index() {
-            self.begin_edit(index);
+        let description = self
+            .tasks
+            .completed()
+            .nth(self.done_selection)
+            .map(|task| task.description().to_string());
+        if let Some(description) = description {
+            self.begin_edit(self.done_selection, description);
         }
     }
 
     fn delete_selected_todo(&mut self) -> bool {
-        if let Some(index) = self.selected_todo_index() {
-            let changed = self.tasks.delete(index);
+        if self.tasks.pending().nth(self.todo_selection).is_some() {
+            let changed = self.tasks.delete_pending(self.todo_selection);
             self.clamp_selections();
             return changed;
         }
@@ -725,8 +744,8 @@ impl App {
     }
 
     fn delete_selected_done(&mut self) -> bool {
-        if let Some(index) = self.selected_done_index() {
-            let changed = self.tasks.delete(index);
+        if self.tasks.completed().nth(self.done_selection).is_some() {
+            let changed = self.tasks.delete_completed(self.done_selection);
             self.clamp_selections();
             return changed;
         }
@@ -734,8 +753,8 @@ impl App {
     }
 
     fn complete_selected_todo(&mut self) -> bool {
-        if let Some(index) = self.selected_todo_index() {
-            let changed = self.tasks.complete(index);
+        if self.tasks.pending().nth(self.todo_selection).is_some() {
+            let changed = self.tasks.complete(self.todo_selection);
             self.clamp_selections();
             return changed;
         }
@@ -743,8 +762,8 @@ impl App {
     }
 
     fn return_selected_done(&mut self) -> bool {
-        if let Some(index) = self.selected_done_index() {
-            let changed = self.tasks.uncomplete(index);
+        if self.tasks.completed().nth(self.done_selection).is_some() {
+            let changed = self.tasks.uncomplete(self.done_selection);
             self.clamp_selections();
             return changed;
         }
@@ -931,32 +950,9 @@ impl App {
         self.done_offset = self.done_offset.min(self.done_selection);
     }
 
-    fn selected_todo_index(&self) -> Option<usize> {
-        self.tasks
-            .pending_with_indices()
-            .nth(self.todo_selection)
-            .map(|(index, _)| index)
-    }
-
-    fn selected_done_index(&self) -> Option<usize> {
-        self.tasks
-            .completed_with_indices()
-            .nth(self.done_selection)
-            .map(|(index, _)| index)
-    }
-
-    fn begin_edit(&mut self, task_index: usize) {
-        let description = self
-            .tasks
-            .pending_with_indices()
-            .chain(self.tasks.completed_with_indices())
-            .find(|(index, _)| *index == task_index)
-            .map(|(_, task)| task.description().to_string());
-
-        if let Some(description) = description {
-            self.input = description;
-            self.edit_mode = EditMode::Editing { task_index };
-        }
+    fn begin_edit(&mut self, task_index: usize, description: String) {
+        self.input = description;
+        self.edit_mode = EditMode::Editing { task_index };
     }
 }
 
@@ -1049,10 +1045,10 @@ mod tests {
 
     #[test]
     fn durable_task_state_restores_order_and_completion() {
-        let state = TaskState::from_records(vec![
-            ("Completed first".to_owned(), true),
-            ("Pending second".to_owned(), false),
-        ]);
+        let state = TaskState::from_lists(
+            vec!["Pending first".to_owned(), "Pending second".to_owned()],
+            vec!["Completed first".to_owned()],
+        );
 
         let app = App::from_config_and_tasks(&Config::default(), state.clone());
 
@@ -1063,7 +1059,7 @@ mod tests {
         );
         assert_eq!(
             app.tasks().pending().next().unwrap().description(),
-            "Pending second"
+            "Pending first"
         );
     }
 
@@ -1285,7 +1281,7 @@ mod tests {
     }
 
     #[test]
-    fn begin_add_action_only_works_from_todo_focus() {
+    fn begin_add_action_works_from_task_list_focus() {
         let mut app = App::new();
         let _ = app.dispatch(Action::BeginAdd);
         assert_eq!(app.edit_mode(), EditMode::Normal);
@@ -1293,6 +1289,29 @@ mod tests {
         let _ = app.dispatch(Action::NavigateFocus(Direction::Down));
         let _ = app.dispatch(Action::BeginAdd);
         assert_eq!(app.edit_mode(), EditMode::Adding);
+
+        let _ = app.dispatch(Action::CancelEdit);
+        let _ = app.dispatch(Action::NavigateFocus(Direction::Right));
+        let _ = app.dispatch(Action::BeginAdd);
+        assert_eq!(app.edit_mode(), EditMode::Adding);
+    }
+
+    #[test]
+    fn adding_from_done_focus_creates_a_completed_task() {
+        let mut app = App::new();
+        let _ = app.dispatch(Action::NavigateFocus(Direction::Down));
+        let _ = app.dispatch(Action::NavigateFocus(Direction::Right));
+        let _ = app.dispatch(Action::BeginAdd);
+        for character in "New task".chars() {
+            let _ = app.dispatch(Action::PushInput(character));
+        }
+
+        assert_eq!(app.dispatch(Action::SubmitEdit), AppOutcome::TasksChanged);
+        assert_eq!(app.tasks().pending().count(), 0);
+        assert_eq!(
+            app.tasks().completed().next().unwrap().description(),
+            "New task"
+        );
     }
 
     #[test]
@@ -1384,7 +1403,7 @@ mod tests {
     }
 
     #[test]
-    fn editing_selected_filtered_task_updates_the_right_task() {
+    fn editing_a_selected_todo_updates_that_list_entry() {
         let mut app = App::new();
         add_task(&mut app, "Done");
         let _ = app.dispatch(Action::NavigateFocus(Direction::Down));
@@ -1396,7 +1415,7 @@ mod tests {
         add_task(&mut app, "Edit me");
         let _ = app.dispatch(Action::NavigateFocus(Direction::Down));
         let _ = app.dispatch(Action::EditSelected);
-        assert_eq!(app.edit_mode(), EditMode::Editing { task_index: 1 });
+        assert_eq!(app.edit_mode(), EditMode::Editing { task_index: 0 });
 
         while !app.input().is_empty() {
             let _ = app.dispatch(Action::PopInput);
@@ -1442,6 +1461,41 @@ mod tests {
         );
         assert_eq!(app.todo_selection(), 0);
         assert_eq!(app.tasks().pending().count(), 1);
+    }
+
+    #[test]
+    fn moving_tasks_appends_them_to_the_destination_view() {
+        let state = TaskState::from_lists(
+            vec!["Todo first".to_string(), "Todo second".to_string()],
+            vec!["Done first".to_string()],
+        );
+        let mut app = App::from_config_and_tasks(&Config::default(), state);
+        let _ = app.dispatch(Action::NavigateFocus(Direction::Down));
+
+        assert_eq!(
+            app.dispatch(Action::PrimaryAction),
+            AppOutcome::TasksChanged
+        );
+        assert_eq!(
+            app.tasks()
+                .completed()
+                .map(|task| task.description())
+                .collect::<Vec<_>>(),
+            ["Done first", "Todo first"]
+        );
+
+        let _ = app.dispatch(Action::NavigateFocus(Direction::Right));
+        assert_eq!(
+            app.dispatch(Action::PrimaryAction),
+            AppOutcome::TasksChanged
+        );
+        assert_eq!(
+            app.tasks()
+                .pending()
+                .map(|task| task.description())
+                .collect::<Vec<_>>(),
+            ["Todo second", "Done first"]
+        );
     }
 
     #[test]

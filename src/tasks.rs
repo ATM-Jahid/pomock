@@ -1,53 +1,59 @@
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Task {
     description: String,
-    completed: bool,
 }
 
 impl Task {
-    pub(crate) fn new(description: String, completed: bool) -> Self {
-        Self {
-            description,
-            completed,
-        }
+    pub(crate) fn new(description: String) -> Self {
+        Self { description }
     }
 
     pub fn description(&self) -> &str {
         &self.description
     }
-
-    pub(crate) fn is_completed(&self) -> bool {
-        self.completed
-    }
 }
 
+/// Two independently ordered task lists matching the two workspace views.
 #[derive(Debug, Clone, Default)]
 pub struct TaskList {
-    tasks: Vec<Task>,
+    pending: Vec<Task>,
+    completed: Vec<Task>,
 }
 
 impl TaskList {
-    pub(crate) fn from_tasks(tasks: Vec<Task>) -> Self {
-        Self { tasks }
-    }
-
-    pub(crate) fn all(&self) -> impl Iterator<Item = &Task> {
-        self.tasks.iter()
+    pub(crate) fn from_descriptions(pending: Vec<String>, completed: Vec<String>) -> Self {
+        Self {
+            pending: pending.into_iter().map(Task::new).collect(),
+            completed: completed.into_iter().map(Task::new).collect(),
+        }
     }
 
     pub fn add(&mut self, description: String) {
-        if description.trim().is_empty() {
-            return;
-        }
-
-        self.tasks.push(Task::new(description, false));
+        Self::add_to(&mut self.pending, description);
     }
 
-    pub fn edit(&mut self, index: usize, description: String) -> bool {
-        let Some(task) = self.tasks.get_mut(index) else {
+    pub fn add_completed(&mut self, description: String) {
+        Self::add_to(&mut self.completed, description);
+    }
+
+    fn add_to(tasks: &mut Vec<Task>, description: String) {
+        if !description.trim().is_empty() {
+            tasks.push(Task::new(description));
+        }
+    }
+
+    pub fn edit_pending(&mut self, index: usize, description: String) -> bool {
+        Self::edit(&mut self.pending, index, description)
+    }
+
+    pub fn edit_completed(&mut self, index: usize, description: String) -> bool {
+        Self::edit(&mut self.completed, index, description)
+    }
+
+    fn edit(tasks: &mut [Task], index: usize, description: String) -> bool {
+        let Some(task) = tasks.get_mut(index) else {
             return false;
         };
-
         if description.trim().is_empty() {
             return false;
         }
@@ -56,59 +62,58 @@ impl TaskList {
         true
     }
 
+    /// Moves a to-do task to the end of the done list.
     pub fn complete(&mut self, index: usize) -> bool {
-        let Some(task) = self.tasks.get_mut(index) else {
-            return false;
-        };
-
-        task.completed = true;
-        true
+        Self::move_to_end(&mut self.pending, &mut self.completed, index)
     }
 
+    /// Moves a done task to the end of the to-do list.
     pub fn uncomplete(&mut self, index: usize) -> bool {
-        let Some(task) = self.tasks.get_mut(index) else {
-            return false;
-        };
-
-        task.completed = false;
-        true
+        Self::move_to_end(&mut self.completed, &mut self.pending, index)
     }
 
-    pub fn delete(&mut self, index: usize) -> bool {
-        if index >= self.tasks.len() {
+    fn move_to_end(source: &mut Vec<Task>, destination: &mut Vec<Task>, index: usize) -> bool {
+        if index >= source.len() {
             return false;
         }
 
-        self.tasks.remove(index);
+        destination.push(source.remove(index));
+        true
+    }
+
+    pub fn delete_pending(&mut self, index: usize) -> bool {
+        Self::delete(&mut self.pending, index)
+    }
+
+    pub fn delete_completed(&mut self, index: usize) -> bool {
+        Self::delete(&mut self.completed, index)
+    }
+
+    fn delete(tasks: &mut Vec<Task>, index: usize) -> bool {
+        if index >= tasks.len() {
+            return false;
+        }
+
+        tasks.remove(index);
         true
     }
 
     pub fn pending(&self) -> impl Iterator<Item = &Task> {
-        self.tasks.iter().filter(|task| !task.completed)
+        self.pending.iter()
     }
 
     pub fn completed(&self) -> impl Iterator<Item = &Task> {
-        self.tasks.iter().filter(|task| task.completed)
-    }
-
-    pub fn pending_with_indices(&self) -> impl Iterator<Item = (usize, &Task)> {
-        self.tasks
-            .iter()
-            .enumerate()
-            .filter(|(_, task)| !task.completed)
-    }
-
-    pub fn completed_with_indices(&self) -> impl Iterator<Item = (usize, &Task)> {
-        self.tasks
-            .iter()
-            .enumerate()
-            .filter(|(_, task)| task.completed)
+        self.completed.iter()
     }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn descriptions<'a>(tasks: impl Iterator<Item = &'a Task>) -> Vec<&'a str> {
+        tasks.map(Task::description).collect()
+    }
 
     #[test]
     fn new_task_list_is_empty() {
@@ -119,124 +124,84 @@ mod tests {
     }
 
     #[test]
-    fn add_creates_a_pending_task() {
+    fn add_appends_to_the_chosen_list_and_ignores_blanks() {
         let mut tasks = TaskList::default();
 
-        tasks.add("Write Hello".to_string());
-
-        let pending: Vec<_> = tasks.pending().collect();
-        assert_eq!(pending.len(), 1);
-        assert_eq!(pending[0].description(), "Write Hello");
-    }
-
-    #[test]
-    fn add_ignores_blank_descriptions() {
-        let mut tasks = TaskList::default();
-
+        tasks.add("To do".to_string());
+        tasks.add_completed("Done".to_string());
         tasks.add("   ".to_string());
 
-        assert_eq!(tasks.pending().count(), 0);
+        assert_eq!(descriptions(tasks.pending()), ["To do"]);
+        assert_eq!(descriptions(tasks.completed()), ["Done"]);
     }
 
     #[test]
-    fn edit_changes_a_task_description() {
-        let mut tasks = TaskList::default();
-        tasks.add("Learn Rust".to_string());
+    fn editing_is_local_to_each_list() {
+        let mut tasks =
+            TaskList::from_descriptions(vec!["Pending".to_string()], vec!["Completed".to_string()]);
 
-        assert!(tasks.edit(0, "Build pomock".to_string()));
+        assert!(tasks.edit_pending(0, "New pending".to_string()));
+        assert!(tasks.edit_completed(0, "New completed".to_string()));
+        assert!(!tasks.edit_pending(1, "Missing".to_string()));
+        assert!(!tasks.edit_completed(0, " ".to_string()));
 
-        assert_eq!(
-            tasks.pending().next().unwrap().description(),
-            "Build pomock"
+        assert_eq!(descriptions(tasks.pending()), ["New pending"]);
+        assert_eq!(descriptions(tasks.completed()), ["New completed"]);
+    }
+
+    #[test]
+    fn complete_appends_the_task_to_the_completed_list() {
+        let mut tasks = TaskList::from_descriptions(
+            vec!["First".to_string(), "Move me".to_string()],
+            vec!["Already done".to_string()],
         );
+
+        assert!(tasks.complete(1));
+
+        assert_eq!(descriptions(tasks.pending()), ["First"]);
+        assert_eq!(descriptions(tasks.completed()), ["Already done", "Move me"]);
     }
 
     #[test]
-    fn edit_rejects_an_unknown_index() {
-        let mut tasks = TaskList::default();
-
-        assert!(!tasks.edit(0, "Missing".to_string()));
-    }
-
-    #[test]
-    fn edit_rejects_a_blank_description() {
-        let mut tasks = TaskList::default();
-        tasks.add("Keep me".to_string());
-
-        assert!(!tasks.edit(0, " ".to_string()));
-        assert_eq!(tasks.pending().next().unwrap().description(), "Keep me");
-    }
-
-    #[test]
-    fn complete_moves_a_task_to_completed() {
-        let mut tasks = TaskList::default();
-        tasks.add("Finish session".to_string());
-
-        assert!(tasks.complete(0));
-
-        assert_eq!(tasks.pending().count(), 0);
-        assert_eq!(tasks.completed().count(), 1);
-    }
-
-    #[test]
-    fn uncomplete_moves_a_task_back_to_pending() {
-        let mut tasks = TaskList::default();
-        tasks.add("Finish session".to_string());
-        tasks.complete(0);
+    fn uncomplete_appends_the_task_to_the_pending_list() {
+        let mut tasks = TaskList::from_descriptions(
+            vec!["Already pending".to_string()],
+            vec!["Return me".to_string(), "Stay done".to_string()],
+        );
 
         assert!(tasks.uncomplete(0));
 
-        assert_eq!(tasks.pending().count(), 1);
-        assert_eq!(tasks.completed().count(), 0);
+        assert_eq!(
+            descriptions(tasks.pending()),
+            ["Already pending", "Return me"]
+        );
+        assert_eq!(descriptions(tasks.completed()), ["Stay done"]);
     }
 
     #[test]
-    fn completing_an_unknown_index_returns_false() {
-        let mut tasks = TaskList::default();
+    fn unknown_moves_do_not_change_either_list() {
+        let mut tasks =
+            TaskList::from_descriptions(vec!["Pending".to_string()], vec!["Completed".to_string()]);
 
-        assert!(!tasks.complete(0));
-        assert!(!tasks.uncomplete(0));
+        assert!(!tasks.complete(1));
+        assert!(!tasks.uncomplete(1));
+
+        assert_eq!(descriptions(tasks.pending()), ["Pending"]);
+        assert_eq!(descriptions(tasks.completed()), ["Completed"]);
     }
 
     #[test]
-    fn delete_removes_a_task() {
-        let mut tasks = TaskList::default();
-        tasks.add("Keep".to_string());
-        tasks.add("Delete".to_string());
+    fn deletion_is_local_to_each_list() {
+        let mut tasks = TaskList::from_descriptions(
+            vec!["Keep".to_string(), "Delete pending".to_string()],
+            vec!["Delete completed".to_string()],
+        );
 
-        assert!(tasks.delete(1));
-        assert!(!tasks.delete(3));
+        assert!(tasks.delete_pending(1));
+        assert!(tasks.delete_completed(0));
+        assert!(!tasks.delete_pending(2));
 
-        let pending: Vec<_> = tasks.pending().collect();
-        assert_eq!(pending.len(), 1);
-        assert_eq!(pending[0].description(), "Keep");
-    }
-
-    #[test]
-    fn pending_indices_refer_to_positions_in_the_full_list() {
-        let mut tasks = TaskList::default();
-        tasks.add("Completed first".to_string());
-        tasks.add("Pending second".to_string());
-        tasks.complete(0);
-
-        let pending: Vec<_> = tasks.pending_with_indices().collect();
-
-        assert_eq!(pending.len(), 1);
-        assert_eq!(pending[0].0, 1);
-        assert_eq!(pending[0].1.description(), "Pending second");
-    }
-
-    #[test]
-    fn completed_indices_refer_to_position_in_the_full_list() {
-        let mut tasks = TaskList::default();
-        tasks.add("Pending first".to_string());
-        tasks.add("Completed second".to_string());
-        tasks.complete(1);
-
-        let completed: Vec<_> = tasks.completed_with_indices().collect();
-
-        assert_eq!(completed.len(), 1);
-        assert_eq!(completed[0].0, 1);
-        assert_eq!(completed[0].1.description(), "Completed second");
+        assert_eq!(descriptions(tasks.pending()), ["Keep"]);
+        assert!(tasks.completed().next().is_none());
     }
 }

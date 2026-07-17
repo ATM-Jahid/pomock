@@ -79,7 +79,9 @@ pub fn map_key(
         UiFocus::Clock if key_matches_any(key, keys.clock_primary()) => Some(Action::PrimaryAction),
         UiFocus::Clock if key_matches_any(key, keys.cycle_session()) => Some(Action::CycleSession),
         UiFocus::Clock if key_matches_any(key, keys.reset_session()) => Some(Action::ResetSession),
-        UiFocus::Todo if key_matches_any(key, keys.add_task()) => Some(Action::BeginAdd),
+        UiFocus::Todo | UiFocus::Done if key_matches_any(key, keys.add_task()) => {
+            Some(Action::BeginAdd)
+        }
         UiFocus::Todo | UiFocus::Done if key_matches_any(key, keys.edit_task()) => {
             Some(Action::EditSelected)
         }
@@ -201,7 +203,7 @@ mod tests {
         );
         assert_eq!(
             map_default(KeyCode::Char('a'), EditMode::Normal, UiFocus::Done, false),
-            None
+            Some(Action::BeginAdd)
         );
         assert_eq!(
             map_default(KeyCode::Down, EditMode::Normal, UiFocus::Clock, false),

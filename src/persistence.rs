@@ -60,18 +60,9 @@ impl TaskStore {
             });
         }
 
-        let mut records = Vec::with_capacity(stored.tasks.len());
-        for (index, task) in stored.tasks.into_iter().enumerate() {
-            if task.description.trim().is_empty() {
-                return Err(TaskPersistenceError::Validation {
-                    path: self.path.clone(),
-                    index,
-                });
-            }
-            records.push((task.description, task.completed));
-        }
-
-        Ok(TaskState::from_records(records))
+        Self::validate_list(&self.path, "todo", &stored.todo)?;
+        Self::validate_list(&self.path, "done", &stored.done)?;
+        Ok(TaskState::from_lists(stored.todo, stored.done))
     }
 
     /// Saves task state, creating the parent application data directory.
@@ -85,13 +76,8 @@ impl TaskStore {
 
         let stored = StoredTaskFile {
             version: TASK_FILE_VERSION,
-            tasks: state
-                .records()
-                .map(|(description, completed)| StoredTask {
-                    description: description.to_owned(),
-                    completed,
-                })
-                .collect(),
+            todo: state.todo().map(str::to_owned).collect(),
+            done: state.done().map(str::to_owned).collect(),
         };
         let contents = toml::to_string_pretty(&stored).map_err(TaskPersistenceError::Serialize)?;
         fs::write(&self.path, contents).map_err(|source| TaskPersistenceError::Write {
@@ -103,6 +89,33 @@ impl TaskStore {
     /// Returns the backing path used by this store.
     pub fn path(&self) -> &Path {
         &self.path
+    }
+
+    fn validate_list(
+        path: &Path,
+        list: &'static str,
+        descriptions: &[String],
+    ) -> Result<(), TaskPersistenceError> {
+        for (index, description) in descriptions.iter().enumerate() {
+            Self::validate_description(path, list, index, description)?;
+        }
+        Ok(())
+    }
+
+    fn validate_description(
+        path: &Path,
+        list: &'static str,
+        index: usize,
+        description: &str,
+    ) -> Result<(), TaskPersistenceError> {
+        if description.trim().is_empty() {
+            return Err(TaskPersistenceError::Validation {
+                path: path.to_owned(),
+                list,
+                index,
+            });
+        }
+        Ok(())
     }
 }
 
@@ -119,6 +132,7 @@ pub enum TaskPersistenceError {
     },
     Validation {
         path: PathBuf,
+        list: &'static str,
         index: usize,
     },
     UnsupportedVersion {
@@ -156,9 +170,9 @@ impl fmt::Display for TaskPersistenceError {
                     path.display()
                 )
             }
-            Self::Validation { path, index } => write!(
+            Self::Validation { path, list, index } => write!(
                 formatter,
-                "invalid task {} in {}: description must not be blank",
+                "invalid {list} task {} in {}: description must not be blank",
                 index + 1,
                 path.display()
             ),
@@ -203,14 +217,10 @@ impl Error for TaskPersistenceError {
 #[serde(deny_unknown_fields)]
 struct StoredTaskFile {
     version: u32,
-    tasks: Vec<StoredTask>,
-}
-
-#[derive(Debug, Serialize, Deserialize)]
-#[serde(deny_unknown_fields)]
-struct StoredTask {
-    description: String,
-    completed: bool,
+    #[serde(default)]
+    todo: Vec<String>,
+    #[serde(default)]
+    done: Vec<String>,
 }
 
 #[cfg(test)]
@@ -242,28 +252,29 @@ mod tests {
     }
 
     #[test]
-    fn task_order_and_completion_round_trip() {
+    fn independently_ordered_lists_round_trip_without_completion_flags() {
         let path = temp_path("round-trip/tasks.toml");
         let store = TaskStore::at(&path);
-        let state = TaskState::from_records(vec![
-            ("First".to_owned(), true),
-            ("Second".to_owned(), false),
-        ]);
+        let state = TaskState::from_lists(
+            vec!["First todo".to_owned(), "Second todo".to_owned()],
+            vec!["First done".to_owned()],
+        );
 
         store.save(&state).unwrap();
 
         assert_eq!(store.load().unwrap(), state);
         let contents = fs::read_to_string(&path).unwrap();
         assert!(contents.contains("version = 1"));
-        assert!(contents.contains("[[tasks]]"));
-        assert!(contents.contains("completed = true"));
+        assert!(contents.contains("todo = ["));
+        assert!(contents.contains("done = ["));
+        assert!(!contents.contains("completed"));
         fs::remove_dir_all(path.parent().unwrap()).unwrap();
     }
 
     #[test]
     fn malformed_toml_reports_the_path_and_parse_error() {
         let path = temp_path("malformed.toml");
-        fs::write(&path, "[[tasks]\ndescription = 'broken'").unwrap();
+        fs::write(&path, "version = 1\ntodo = ['broken'\ndone = []").unwrap();
         let store = TaskStore::at(&path);
 
         let error = store.load().unwrap_err();
@@ -276,11 +287,7 @@ mod tests {
     #[test]
     fn blank_descriptions_report_the_task_number_and_path() {
         let path = temp_path("blank.toml");
-        fs::write(
-            &path,
-            "version = 1\n\n[[tasks]]\ndescription = 'valid'\ncompleted = false\n\n[[tasks]]\ndescription = '  '\ncompleted = true\n",
-        )
-        .unwrap();
+        fs::write(&path, "version = 1\ntodo = ['valid', '  ']\ndone = []\n").unwrap();
         let store = TaskStore::at(&path);
 
         let error = store.load().unwrap_err();
@@ -297,7 +304,7 @@ mod tests {
     #[test]
     fn unsupported_versions_report_the_found_version_and_path() {
         let path = temp_path("future-version.toml");
-        fs::write(&path, "version = 2\ntasks = []\n").unwrap();
+        fs::write(&path, "version = 2\ntodo = []\ndone = []\n").unwrap();
         let store = TaskStore::at(&path);
 
         let error = store.load().unwrap_err();
