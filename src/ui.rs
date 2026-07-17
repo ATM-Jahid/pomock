@@ -9,7 +9,10 @@ use ratatui::{
 use crate::{
     app::{App, ClickTarget, ConfirmationOperation, EditMode, ScrollTarget, TimerChange, UiFocus},
     config::{ConfigKey, KeyAction, KeysConfig, ThemeColor, ThemeConfig, ThemeRole},
-    display::{format_big_duration, format_key, format_state},
+    display::{
+        BIG_DURATION_HEIGHT, BIG_DURATION_WIDTH, format_big_duration_at_scale, format_key,
+        format_state,
+    },
     settings::SettingField,
     timer::{SessionKind, TimerState},
 };
@@ -28,6 +31,7 @@ struct ClockLayout {
     remaining: Rect,
     completed_sessions: Rect,
     session_controls: [Rect; 3],
+    glyph_scale: u16,
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -105,13 +109,16 @@ pub fn draw(frame: &mut Frame, app: &mut App, theme: Theme, keys: &KeysConfig) {
     let clock_layout = clock_layout(layout.clock);
 
     let state = Paragraph::new(format_state(app.timer().state())).alignment(Alignment::Center);
-    let remaining = Paragraph::new(format_big_duration(app.timer().remaining()))
-        .alignment(Alignment::Center)
-        .style(
-            Style::default()
-                .fg(theme.session(current_session(app.timer().state())))
-                .add_modifier(Modifier::BOLD),
-        );
+    let remaining = Paragraph::new(format_big_duration_at_scale(
+        app.timer().remaining(),
+        clock_layout.glyph_scale,
+    ))
+    .alignment(Alignment::Center)
+    .style(
+        Style::default()
+            .fg(theme.session(current_session(app.timer().state())))
+            .add_modifier(Modifier::BOLD),
+    );
     let completed_sessions = Paragraph::new(format!(
         "Focus sessions completed: {}",
         app.timer().completed_focus_sessions()
@@ -299,15 +306,28 @@ pub fn scroll_target(area: Rect, position: (u16, u16), app: &App) -> Option<Scro
 }
 
 fn clock_layout(area: Rect) -> ClockLayout {
+    const SPACED_CLOCK_MIN_INNER_HEIGHT: u16 = 12;
+    // Two gaps, two outer padding rows, and the status, count, and controls rows.
+    const NON_GLYPH_SPACED_HEIGHT: u16 = 7;
+
     let inner = Block::default().borders(Borders::ALL).inner(area);
+    let scale_for_width = inner.width / BIG_DURATION_WIDTH;
+    let scale_for_height =
+        inner.height.saturating_sub(NON_GLYPH_SPACED_HEIGHT) / BIG_DURATION_HEIGHT;
+    let glyph_scale = scale_for_width.min(scale_for_height).max(1);
+    let content_gap = if inner.height >= SPACED_CLOCK_MIN_INNER_HEIGHT {
+        1
+    } else {
+        0
+    };
     let chunks = Layout::default()
         .direction(LayoutDirection::Vertical)
         .constraints([
             Constraint::Fill(1),
             Constraint::Length(1),
-            Constraint::Length(1),
-            Constraint::Length(5),
-            Constraint::Length(1),
+            Constraint::Length(content_gap),
+            Constraint::Length(BIG_DURATION_HEIGHT * glyph_scale),
+            Constraint::Length(content_gap),
             Constraint::Length(1),
             Constraint::Fill(1),
             Constraint::Length(1),
@@ -327,6 +347,7 @@ fn clock_layout(area: Rect) -> ClockLayout {
         remaining: chunks[3],
         completed_sessions: chunks[5],
         session_controls: [controls[0], controls[1], controls[2]],
+        glyph_scale,
     }
 }
 
@@ -931,6 +952,40 @@ mod tests {
         let bottom_padding = layout.session_controls[0].y
             - (layout.completed_sessions.y + layout.completed_sessions.height);
         assert_eq!(top_padding, bottom_padding);
+    }
+
+    #[test]
+    fn compact_clock_removes_internal_gaps_before_squeezing_content() {
+        let layout = clock_layout(Rect::new(0, 0, 80, 10));
+
+        assert_eq!(layout.remaining.height, 5);
+        assert_eq!(layout.remaining.y, layout.state.y + layout.state.height);
+        assert_eq!(
+            layout.completed_sessions.y,
+            layout.remaining.y + layout.remaining.height
+        );
+        assert_eq!(layout.session_controls[0].height, 1);
+        assert_eq!(
+            layout.session_controls[0].y,
+            layout.completed_sessions.y + layout.completed_sessions.height
+        );
+    }
+
+    #[test]
+    fn roomy_clock_scales_glyphs_to_available_width_and_height() {
+        let layout = clock_layout(Rect::new(0, 0, 80, 19));
+
+        assert_eq!(layout.glyph_scale, 2);
+        assert_eq!(layout.remaining.height, 10);
+    }
+
+    #[test]
+    fn clock_does_not_scale_when_only_one_dimension_has_room() {
+        let wide_but_short = clock_layout(Rect::new(0, 0, 100, 16));
+        let tall_but_narrow = clock_layout(Rect::new(0, 0, 50, 24));
+
+        assert_eq!(wide_but_short.glyph_scale, 1);
+        assert_eq!(tall_but_narrow.glyph_scale, 1);
     }
 
     #[test]

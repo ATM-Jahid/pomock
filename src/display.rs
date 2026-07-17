@@ -8,6 +8,8 @@ use crate::{
 const BIG_GLYPH_HEIGHT: usize = 5;
 const BIG_ON: &str = "██";
 const BIG_OFF: &str = "  ";
+pub const BIG_DURATION_HEIGHT: u16 = 5;
+pub const BIG_DURATION_WIDTH: u16 = 30;
 
 pub fn format_duration(duration: Duration) -> String {
     let total_seconds = duration.as_secs();
@@ -17,8 +19,8 @@ pub fn format_duration(duration: Duration) -> String {
     format!("{minutes:02}:{seconds:02}")
 }
 
-pub fn format_big_duration(duration: Duration) -> String {
-    render_big_text(&format_duration(duration))
+pub fn format_big_duration_at_scale(duration: Duration, scale: u16) -> String {
+    render_big_text(&format_duration(duration), usize::from(scale.max(1)))
 }
 
 pub fn format_state(state: TimerState) -> &'static str {
@@ -49,9 +51,9 @@ pub fn format_key(key: ConfigKey) -> String {
     }
 }
 
-fn render_big_text(text: &str) -> String {
+fn render_big_text(text: &str, scale: usize) -> String {
     let glyphs: Vec<[String; BIG_GLYPH_HEIGHT]> = text.chars().map(glyph).collect();
-    let mut rows = Vec::with_capacity(BIG_GLYPH_HEIGHT);
+    let mut rows = Vec::with_capacity(BIG_GLYPH_HEIGHT * scale);
 
     for row in 0..BIG_GLYPH_HEIGHT {
         let line = glyphs
@@ -59,8 +61,12 @@ fn render_big_text(text: &str) -> String {
             .map(|glyph| glyph[row].as_str())
             .collect::<Vec<_>>()
             .join(" ");
+        let line = line
+            .chars()
+            .flat_map(|character| std::iter::repeat_n(character, scale))
+            .collect::<String>();
 
-        rows.push(line);
+        rows.extend(std::iter::repeat_n(line, scale));
     }
 
     rows.join("\n")
@@ -113,14 +119,14 @@ mod tests {
 
     #[test]
     fn formats_big_duration_as_five_lines() {
-        let output = format_big_duration(Duration::ZERO);
+        let output = format_big_duration_at_scale(Duration::ZERO, 1);
 
         assert_eq!(output.lines().count(), 5);
     }
 
     #[test]
     fn formats_big_duration_with_equal_width_lines() {
-        let output = format_big_duration(Duration::from_secs(65));
+        let output = format_big_duration_at_scale(Duration::from_secs(65), 1);
         let mut lines = output.lines();
         let first_line_width = lines.next().unwrap().chars().count();
 
@@ -129,9 +135,19 @@ mod tests {
     }
 
     #[test]
+    fn scales_big_duration_in_both_dimensions() {
+        let output = format_big_duration_at_scale(Duration::from_secs(65), 2);
+        let lines = output.lines().collect::<Vec<_>>();
+
+        assert_eq!(lines.len(), 10);
+        assert!(lines.iter().all(|line| line.chars().count() == 60));
+        assert!(lines.chunks_exact(2).all(|rows| rows[0] == rows[1]));
+    }
+
+    #[test]
     fn formats_big_duration_for_minutes_and_seconds() {
         assert_eq!(
-            format_big_duration(Duration::from_secs(65)),
+            format_big_duration_at_scale(Duration::from_secs(65), 1),
             "██████     ██    ██████ ██████\n\
              ██  ██     ██ ██ ██  ██ ██    \n\
              ██  ██     ██    ██  ██ ██████\n\
