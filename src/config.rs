@@ -8,13 +8,15 @@ use directories::ProjectDirs;
 use serde::{Deserialize, Serialize};
 
 mod keys;
+mod notification;
 mod sound;
 mod tasks;
 mod theme;
 mod timer;
 
 pub use keys::{ConfigKey, KeyAction, KeysConfig};
-pub use sound::SoundConfig;
+pub use notification::NotificationConfig;
+pub use sound::{CompletionSoundConfig, FocusSoundConfig, SoundConfig};
 pub use tasks::TasksConfig;
 pub use theme::{ThemeColor, ThemeConfig, ThemeRole};
 pub use timer::TimerConfig;
@@ -31,6 +33,7 @@ pub struct Config {
     tasks: TasksConfig,
     theme: ThemeConfig,
     keys: KeysConfig,
+    notification: NotificationConfig,
     sound: SoundConfig,
 }
 
@@ -64,7 +67,14 @@ impl Config {
         theme: ThemeConfig,
         keys: KeysConfig,
     ) -> Result<Self, ConfigValidationError> {
-        Self::with_all_settings(timer, tasks, theme, keys, SoundConfig::default())
+        Self::with_all_settings(
+            timer,
+            tasks,
+            theme,
+            keys,
+            NotificationConfig::default(),
+            SoundConfig::default(),
+        )
     }
 
     pub(crate) fn with_all_settings(
@@ -72,6 +82,7 @@ impl Config {
         tasks: TasksConfig,
         theme: ThemeConfig,
         keys: KeysConfig,
+        notification: NotificationConfig,
         mut sound: SoundConfig,
     ) -> Result<Self, ConfigValidationError> {
         timer.validate()?;
@@ -82,6 +93,7 @@ impl Config {
             tasks,
             theme,
             keys,
+            notification,
             sound,
         })
     }
@@ -104,6 +116,17 @@ impl Config {
     /// Returns the contextual normal-mode key bindings.
     pub fn keys(&self) -> &KeysConfig {
         &self.keys
+    }
+
+    /// Returns native desktop-notification settings.
+    pub const fn notification(&self) -> NotificationConfig {
+        self.notification
+    }
+
+    /// Replaces native desktop-notification settings.
+    pub fn with_notification(mut self, notification: NotificationConfig) -> Self {
+        self.notification = notification;
+        self
     }
 
     /// Returns the optional file-backed completion sound settings.
@@ -204,9 +227,12 @@ pub enum ConfigValidationError {
         key: ConfigKey,
     },
     RelativeSoundPath {
+        field: &'static str,
         path: PathBuf,
     },
-    HomeDirectoryUnavailable,
+    HomeDirectoryUnavailable {
+        field: &'static str,
+    },
 }
 
 impl fmt::Display for ConfigValidationError {
@@ -230,13 +256,15 @@ impl fmt::Display for ConfigValidationError {
                 formatter,
                 "keys.settings cannot use fixed settings-overlay control {key}"
             ),
-            Self::RelativeSoundPath { path } => write!(
+            Self::RelativeSoundPath { field, path } => write!(
                 formatter,
-                "sound.file must be an absolute path or start with ~/; got {}",
+                "{field} must be an absolute path or start with ~/; got {}",
                 path.display()
             ),
-            Self::HomeDirectoryUnavailable => formatter
-                .write_str("could not expand sound.file because the home directory is unavailable"),
+            Self::HomeDirectoryUnavailable { field } => write!(
+                formatter,
+                "could not expand {field} because the home directory is unavailable"
+            ),
         }
     }
 }
@@ -322,13 +350,15 @@ impl Error for ConfigError {
 struct StoredConfig {
     timer: StoredTimerConfig,
     #[serde(default)]
-    tasks: StoredTasksConfig,
+    notification: NotificationConfig,
     #[serde(default)]
-    theme: ThemeConfig,
+    sound: SoundConfig,
+    #[serde(default)]
+    tasks: StoredTasksConfig,
     #[serde(default)]
     keys: KeysConfig,
     #[serde(default)]
-    sound: SoundConfig,
+    theme: ThemeConfig,
 }
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -375,6 +405,7 @@ impl TryFrom<StoredConfig> for Config {
             TasksConfig::with_numbering(stored.tasks.persist, stored.tasks.show_numbers),
             stored.theme,
             stored.keys,
+            stored.notification,
             stored.sound,
         )
     }
@@ -390,13 +421,14 @@ impl From<&Config> for StoredConfig {
                 long_break_minutes: timer.long_break_minutes,
                 long_break_interval: timer.long_break_interval,
             },
+            notification: config.notification(),
+            sound: config.sound().clone(),
             tasks: StoredTasksConfig {
                 persist: config.tasks().persist(),
                 show_numbers: config.tasks().show_numbers(),
             },
-            theme: *config.theme(),
             keys: config.keys().clone(),
-            sound: config.sound().clone(),
+            theme: *config.theme(),
         }
     }
 }
@@ -410,8 +442,9 @@ mod tests {
     };
 
     use super::{
-        Config, ConfigError, ConfigKey, ConfigValidationError, KeyBindings, KeysConfig,
-        SoundConfig, TasksConfig, ThemeColor, ThemeConfig, TimerConfig,
+        CompletionSoundConfig, Config, ConfigError, ConfigKey, ConfigValidationError,
+        FocusSoundConfig, KeyBindings, KeysConfig, NotificationConfig, SoundConfig, TasksConfig,
+        ThemeColor, ThemeConfig, TimerConfig,
     };
 
     static NEXT_TEMP_PATH: AtomicU64 = AtomicU64::new(0);
@@ -436,7 +469,12 @@ mod tests {
         assert!(config.tasks().show_numbers());
         assert_eq!(config.theme(), &ThemeConfig::default());
         assert_eq!(config.keys(), &KeysConfig::default());
+        assert!(config.notification().enabled());
         assert_eq!(config.sound(), &SoundConfig::default());
+        assert!(!config.sound().completion().enabled());
+        assert!(config.sound().completion().file().is_none());
+        assert!(!config.sound().focus().enabled());
+        assert!(config.sound().focus().file().is_none());
         assert_eq!(
             config.keys().list_down(),
             [ConfigKey::Character('j'), ConfigKey::Down]
@@ -456,18 +494,68 @@ mod tests {
     }
 
     #[test]
-    fn sound_file_round_trips_and_is_disabled_when_omitted() {
+    fn saved_sections_follow_the_settings_overlay_order() {
+        let path = temp_path("ordered/config.toml");
+        Config::default().save_to(&path).unwrap();
+
+        let contents = fs::read_to_string(&path).unwrap();
+        let headings: Vec<_> = contents
+            .lines()
+            .filter(|line| line.starts_with('['))
+            .collect();
+
+        assert_eq!(
+            headings,
+            [
+                "[timer]",
+                "[notification]",
+                "[sound.completion]",
+                "[sound.focus]",
+                "[tasks]",
+                "[keys]",
+                "[theme]",
+            ]
+        );
+        fs::remove_dir_all(path.parent().unwrap()).unwrap();
+    }
+
+    #[test]
+    fn partial_nested_sound_sections_remain_disabled_without_enabled_flags() {
+        let path = temp_path("partial-sound.toml");
+        fs::write(
+            &path,
+            "[timer]\nfocus_minutes = 25\nshort_break_minutes = 5\nlong_break_minutes = 15\nlong_break_interval = 4\n\n[sound.completion]\nfile = \"~/complete.wav\"\n\n[sound.focus]\nfile = \"~/focus.wav\"\n",
+        )
+        .unwrap();
+
+        let config = Config::load_from(&path).unwrap();
+
+        assert!(!config.sound().completion().enabled());
+        assert!(config.sound().completion().playback_file().is_none());
+        assert!(!config.sound().focus().enabled());
+        assert!(config.sound().focus().playback_file().is_none());
+        fs::remove_file(path).unwrap();
+    }
+
+    #[test]
+    fn notification_and_sound_files_round_trip() {
         let path = temp_path("sound/config.toml");
         let sound_file = PathBuf::from("~/sounds/session-complete.mp3");
+        let focus_file = PathBuf::from("~/sounds/focus.ogg");
         let config = Config::default()
-            .with_sound(SoundConfig::new(&sound_file))
+            .with_notification(NotificationConfig::new(false))
+            .with_sound(
+                SoundConfig::default()
+                    .with_completion(CompletionSoundConfig::new(true, Some(sound_file.clone())))
+                    .with_focus(FocusSoundConfig::new(true, Some(focus_file.clone()))),
+            )
             .unwrap();
 
         config.save_to(&path).unwrap();
 
         assert_eq!(Config::load_from(&path).unwrap(), config);
         assert_eq!(
-            config.sound().resolved_file(),
+            config.sound().completion().playback_file(),
             Some(
                 directories::UserDirs::new()
                     .unwrap()
@@ -476,9 +564,24 @@ mod tests {
                     .as_path()
             )
         );
+        assert_eq!(
+            config.sound().focus().playback_file(),
+            Some(
+                directories::UserDirs::new()
+                    .unwrap()
+                    .home_dir()
+                    .join("sounds/focus.ogg")
+                    .as_path()
+            )
+        );
         let contents = fs::read_to_string(&path).unwrap();
-        assert!(contents.contains("[sound]"));
+        assert!(contents.contains("[notification]"));
+        assert!(contents.contains("enabled = false"));
+        assert!(contents.contains("[sound.completion]"));
+        assert!(contents.contains("enabled = true"));
         assert!(contents.contains("file = \"~/sounds/session-complete.mp3\""));
+        assert!(contents.contains("[sound.focus]"));
+        assert!(contents.contains("file = \"~/sounds/focus.ogg\""));
 
         fs::remove_dir_all(path.parent().unwrap()).unwrap();
     }
@@ -487,11 +590,20 @@ mod tests {
     fn absolute_sound_paths_pass_through_unchanged() {
         let sound_file = temp_path("absolute-sound.wav");
         let config = Config::default()
-            .with_sound(SoundConfig::new(&sound_file))
+            .with_sound(
+                SoundConfig::default()
+                    .with_completion(CompletionSoundConfig::new(true, Some(sound_file.clone()))),
+            )
             .unwrap();
 
-        assert_eq!(config.sound().file(), Some(sound_file.as_path()));
-        assert_eq!(config.sound().resolved_file(), Some(sound_file.as_path()));
+        assert_eq!(
+            config.sound().completion().file(),
+            Some(sound_file.as_path())
+        );
+        assert_eq!(
+            config.sound().completion().playback_file(),
+            Some(sound_file.as_path())
+        );
     }
 
     #[test]
@@ -499,7 +611,7 @@ mod tests {
         let path = temp_path("relative-sound.toml");
         fs::write(
             &path,
-            "[timer]\nfocus_minutes = 25\nshort_break_minutes = 5\nlong_break_minutes = 15\nlong_break_interval = 4\n\n[sound]\nfile = \"sounds/done.wav\"\n",
+            "[timer]\nfocus_minutes = 25\nshort_break_minutes = 5\nlong_break_minutes = 15\nlong_break_interval = 4\n\n[sound.completion]\nenabled = true\nfile = \"sounds/done.wav\"\n",
         )
         .unwrap();
 
@@ -509,6 +621,23 @@ mod tests {
         assert!(error.to_string().contains(path.to_str().unwrap()));
         assert!(error.to_string().contains("absolute path or start with ~/"));
         assert!(error.to_string().contains("sounds/done.wav"));
+        fs::remove_file(path).unwrap();
+    }
+
+    #[test]
+    fn relative_focus_sound_paths_report_the_precise_field_and_config_path() {
+        let path = temp_path("relative-focus-sound.toml");
+        fs::write(
+            &path,
+            "[timer]\nfocus_minutes = 25\nshort_break_minutes = 5\nlong_break_minutes = 15\nlong_break_interval = 4\n\n[sound.focus]\nenabled = true\nfile = \"sounds/focus.wav\"\n",
+        )
+        .unwrap();
+
+        let error = Config::load_from(&path).unwrap_err();
+
+        assert!(error.to_string().contains(path.to_str().unwrap()));
+        assert!(error.to_string().contains("sound.focus.file"));
+        assert!(error.to_string().contains("sounds/focus.wav"));
         fs::remove_file(path).unwrap();
     }
 

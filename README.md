@@ -15,9 +15,11 @@ and [Crossterm](https://github.com/crossterm-rs/crossterm).
 - Persistent task order and completion state.
 - Keyboard and mouse navigation.
 - Native desktop notifications when a session completes.
-- A user-selected sound file when a session completes.
+- Independently configurable native notifications, completion audio,
+  and looping Focus audio.
 - TOML configuration for session durations, task behavior, and theme colors.
-- An in-app settings overlay for timer, task, theme, and key settings.
+- An in-app settings overlay for timer, notification, sound, task, key,
+  and theme settings.
 
 The completed-focus count remains runtime-only and resets when `pomock` exits.
 
@@ -102,6 +104,15 @@ short_break_minutes = 5
 long_break_minutes = 15
 long_break_interval = 4
 
+[notification]
+enabled = true
+
+[sound.completion]
+enabled = false
+
+[sound.focus]
+enabled = false
+
 [tasks]
 persist = true
 show_numbers = true
@@ -155,13 +166,24 @@ A key is one printable character or one of
 `Esc` is reserved as the fixed Settings alias in normal mode
 and for cancel/back behavior in modal contexts.
 
-Sound is disabled by default. To play a custom file whenever any session
-completes, add its path:
+Native desktop notifications are enabled by default
+and can be toggled with `notification.enabled`.
+Both sound types are disabled and have no selected file by default.
+Completion audio is a one-shot effect;
+Focus audio loops only while a Focus session is running.
 
 ```toml
-[sound]
-file = "~/Music/session-complete.mp3"
+[sound.completion]
+enabled = true
+file = "~/Music/completion.mp3"
+
+[sound.focus]
+enabled = true
+file = "~/Music/focus-ambience.wav"
 ```
+
+The Focus loop starts and resumes with a running Focus timer, pauses with it,
+and stops on reset, session change, completion, disablement, or quit.
 
 Playback uses the system's default audio output and supports common formats,
 including WAV, MP3, FLAC, Ogg Vorbis, and AAC.

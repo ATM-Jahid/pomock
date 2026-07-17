@@ -64,9 +64,18 @@ pub enum Action {
 pub enum AppOutcome {
     None,
     Quit,
+    FocusAudio(FocusAudioAction),
     SessionCompleted(SessionKind),
     TasksChanged,
     SettingsChanged(Box<Config>),
+}
+
+/// A lifecycle operation for the optional looping Focus audio.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum FocusAudioAction {
+    StartOrResume,
+    Pause,
+    Stop,
 }
 
 /// An opaque snapshot of durable task data for persistence adapters.
@@ -236,8 +245,9 @@ impl App {
 
     /// Applies a semantic action without depending on its physical key mapping.
     pub fn dispatch(&mut self, action: Action) -> AppOutcome {
+        let prior_timer_state = self.timer.state();
         if self.pending_confirmation.is_some() {
-            return match action {
+            let outcome = match action {
                 Action::ConfirmPendingAction => self.confirm_pending_action(),
                 Action::CancelPendingAction => {
                     self.cancel_pending_action();
@@ -245,6 +255,7 @@ impl App {
                 }
                 _ => AppOutcome::None,
             };
+            return Self::timer_transition_outcome(prior_timer_state, self.timer.state(), outcome);
         }
 
         if self.settings.is_some() {
@@ -252,7 +263,14 @@ impl App {
         }
 
         match action {
-            Action::Quit => return self.request_quit(),
+            Action::Quit => {
+                let outcome = self.request_quit();
+                return Self::timer_transition_outcome(
+                    prior_timer_state,
+                    self.timer.state(),
+                    outcome,
+                );
+            }
             Action::NavigateFocus(direction) => self.navigate_focus(direction),
             Action::MoveSelection(direction) => match self.ui_focus {
                 UiFocus::Clock => {}
@@ -314,7 +332,7 @@ impl App {
             | Action::SettingsCaptureKey(_) => {}
         }
 
-        AppOutcome::None
+        Self::timer_transition_outcome(prior_timer_state, self.timer.state(), AppOutcome::None)
     }
 
     /// Advances monotonic application time and reports a completed session.
@@ -322,6 +340,35 @@ impl App {
         self.timer
             .tick(elapsed)
             .map_or(AppOutcome::None, AppOutcome::SessionCompleted)
+    }
+
+    fn timer_transition_outcome(
+        before: TimerState,
+        after: TimerState,
+        outcome: AppOutcome,
+    ) -> AppOutcome {
+        if outcome != AppOutcome::None {
+            return outcome;
+        }
+        let action = match (before, after) {
+            (
+                TimerState::Ready(_)
+                | TimerState::Running(SessionKind::ShortBreak | SessionKind::LongBreak)
+                | TimerState::Paused(_),
+                TimerState::Running(SessionKind::Focus),
+            ) => Some(FocusAudioAction::StartOrResume),
+            (TimerState::Running(SessionKind::Focus), TimerState::Paused(SessionKind::Focus)) => {
+                Some(FocusAudioAction::Pause)
+            }
+            (
+                TimerState::Running(SessionKind::Focus) | TimerState::Paused(SessionKind::Focus),
+                TimerState::Ready(_)
+                | TimerState::Running(SessionKind::ShortBreak | SessionKind::LongBreak)
+                | TimerState::Paused(SessionKind::ShortBreak | SessionKind::LongBreak),
+            ) => Some(FocusAudioAction::Stop),
+            _ => None,
+        };
+        action.map_or(AppOutcome::None, AppOutcome::FocusAudio)
     }
 
     /// Returns the area that receives contextual semantic actions.
@@ -341,6 +388,11 @@ impl App {
 
     pub fn is_settings_open(&self) -> bool {
         self.settings.is_some()
+    }
+
+    /// Reports whether Focus is actively counting down.
+    pub fn is_focus_running(&self) -> bool {
+        self.timer.state() == TimerState::Running(SessionKind::Focus)
     }
 
     pub fn settings_mode(&self) -> SettingsMode {
@@ -669,6 +721,7 @@ impl App {
 
     /// Applies a semantic click after the UI boundary performs hit testing.
     pub fn handle_click_target(&mut self, target: ClickTarget, now: Instant) -> AppOutcome {
+        let prior_timer_state = self.timer.state();
         if self.edit_mode != EditMode::Normal {
             return AppOutcome::None;
         }
@@ -758,7 +811,7 @@ impl App {
         if tasks_changed {
             AppOutcome::TasksChanged
         } else {
-            AppOutcome::None
+            Self::timer_transition_outcome(prior_timer_state, self.timer.state(), AppOutcome::None)
         }
     }
 
@@ -886,13 +939,14 @@ mod tests {
     use std::time::{Duration, Instant};
 
     use crate::{
-        config::{Config, ConfigKey, TasksConfig, TimerConfig},
+        config::{Config, ConfigKey, KeyAction, TasksConfig, TimerConfig},
+        settings::SettingField,
         timer::{SessionKind, TimerState},
     };
 
     use super::{
         Action, App, AppOutcome, ClickTarget, ConfirmationOperation, Direction, EditMode,
-        SettingsMode, TaskState, TimerChange, UiFocus,
+        FocusAudioAction, SettingsMode, TaskState, TimerChange, UiFocus,
     };
 
     fn add_task(app: &mut App, description: &str) {
@@ -903,6 +957,12 @@ mod tests {
         }
         let _ = app.dispatch(Action::SubmitEdit);
         let _ = app.dispatch(Action::NavigateFocus(Direction::Up));
+    }
+
+    fn move_settings_to(app: &mut App, field: SettingField) {
+        while app.settings().unwrap().field() != field {
+            let _ = app.dispatch(Action::SettingsMove(true));
+        }
     }
 
     fn double_click_session(app: &mut App, session: SessionKind, first_click: Instant) {
@@ -1026,6 +1086,65 @@ mod tests {
     }
 
     #[test]
+    fn focus_audio_lifecycle_follows_timer_transitions_and_confirmations() {
+        let mut app = App::new();
+
+        assert_eq!(
+            app.dispatch(Action::PrimaryAction),
+            AppOutcome::FocusAudio(FocusAudioAction::StartOrResume)
+        );
+        assert_eq!(
+            app.dispatch(Action::PrimaryAction),
+            AppOutcome::FocusAudio(FocusAudioAction::Pause)
+        );
+        assert_eq!(
+            app.dispatch(Action::PrimaryAction),
+            AppOutcome::FocusAudio(FocusAudioAction::StartOrResume)
+        );
+        let _ = app.tick(Duration::from_secs(10));
+        assert_eq!(
+            app.dispatch(Action::CycleSession),
+            AppOutcome::FocusAudio(FocusAudioAction::Pause)
+        );
+        assert_eq!(
+            app.dispatch(Action::CancelPendingAction),
+            AppOutcome::FocusAudio(FocusAudioAction::StartOrResume)
+        );
+        assert_eq!(
+            app.dispatch(Action::CycleSession),
+            AppOutcome::FocusAudio(FocusAudioAction::Pause)
+        );
+        assert_eq!(
+            app.dispatch(Action::ConfirmPendingAction),
+            AppOutcome::FocusAudio(FocusAudioAction::Stop)
+        );
+    }
+
+    #[test]
+    fn focus_audio_lifecycle_is_emitted_for_mouse_timer_controls() {
+        let mut app = App::new();
+        let now = Instant::now();
+
+        assert_eq!(
+            app.handle_click_target(ClickTarget::Clock, now),
+            AppOutcome::None
+        );
+        assert_eq!(
+            app.handle_click_target(ClickTarget::Clock, now + Duration::from_millis(100)),
+            AppOutcome::FocusAudio(FocusAudioAction::StartOrResume)
+        );
+        let target = ClickTarget::SessionControl(SessionKind::Focus);
+        assert_eq!(
+            app.handle_click_target(target, now + Duration::from_millis(200)),
+            AppOutcome::None
+        );
+        assert_eq!(
+            app.handle_click_target(target, now + Duration::from_millis(300)),
+            AppOutcome::FocusAudio(FocusAudioAction::Pause)
+        );
+    }
+
+    #[test]
     fn quit_below_ten_seconds_is_immediate_for_running_and_paused_sessions() {
         for initially_paused in [false, true] {
             let mut app = active_focus(Duration::from_secs(9), initially_paused);
@@ -1040,7 +1159,12 @@ mod tests {
         for initially_paused in [false, true] {
             let mut app = active_focus(Duration::from_secs(10), initially_paused);
 
-            assert_eq!(app.dispatch(Action::Quit), AppOutcome::None);
+            let expected = if initially_paused {
+                AppOutcome::None
+            } else {
+                AppOutcome::FocusAudio(FocusAudioAction::Pause)
+            };
+            assert_eq!(app.dispatch(Action::Quit), expected);
 
             assert!(app.is_confirmation_open());
             assert_eq!(
@@ -1055,7 +1179,10 @@ mod tests {
     #[test]
     fn confirming_quit_emits_quit_outcome() {
         let mut app = active_focus(Duration::from_secs(10), false);
-        assert_eq!(app.dispatch(Action::Quit), AppOutcome::None);
+        assert_eq!(
+            app.dispatch(Action::Quit),
+            AppOutcome::FocusAudio(FocusAudioAction::Pause)
+        );
 
         assert_eq!(app.dispatch(Action::ConfirmPendingAction), AppOutcome::Quit);
         assert!(!app.is_confirmation_open());
@@ -1067,7 +1194,12 @@ mod tests {
             let mut app = active_focus(Duration::from_secs(10), initially_paused);
             let _ = app.dispatch(Action::Quit);
 
-            assert_eq!(app.dispatch(Action::CancelPendingAction), AppOutcome::None);
+            let expected_outcome = if initially_paused {
+                AppOutcome::None
+            } else {
+                AppOutcome::FocusAudio(FocusAudioAction::StartOrResume)
+            };
+            assert_eq!(app.dispatch(Action::CancelPendingAction), expected_outcome);
 
             let expected = if initially_paused {
                 TimerState::Paused(SessionKind::Focus)
@@ -1807,9 +1939,7 @@ mod tests {
     fn accepted_settings_binding_is_emitted_immediately_and_closes_overlay() {
         let mut app = App::new();
         let _ = app.dispatch(Action::OpenSettings);
-        for _ in 0..18 {
-            let _ = app.dispatch(Action::SettingsMove(true));
-        }
+        move_settings_to(&mut app, SettingField::Key(KeyAction::Settings));
         let _ = app.dispatch(Action::SettingsActivate);
         let outcome = app.dispatch(Action::SettingsCaptureKey(ConfigKey::Character('t')));
 
@@ -1828,9 +1958,7 @@ mod tests {
         let mut app = App::new();
         let _ = app.dispatch(Action::PrimaryAction);
         let _ = app.dispatch(Action::OpenSettings);
-        for _ in 0..4 {
-            let _ = app.dispatch(Action::SettingsMove(true));
-        }
+        move_settings_to(&mut app, SettingField::PersistTasks);
         let outcome = app.dispatch(Action::SettingsActivate);
         let AppOutcome::SettingsChanged(config) = outcome else {
             panic!("settings were not emitted")

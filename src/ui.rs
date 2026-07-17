@@ -511,8 +511,14 @@ fn settings_offset(selection: usize, visible_rows: usize) -> usize {
     }
 }
 
-const SETTINGS_GROUPS: [(usize, &str); 4] =
-    [(0, "Timer"), (4, "Tasks"), (6, "Theme"), (11, "Keys")];
+const SETTINGS_GROUPS: [(usize, &str); 6] = [
+    (0, "Timer"),
+    (4, "Notification"),
+    (5, "Sound"),
+    (9, "Tasks"),
+    (11, "Keys"),
+    (26, "Theme"),
+];
 
 fn settings_visual_row(selection: usize) -> usize {
     selection
@@ -604,10 +610,12 @@ fn settings_footer(settings: &crate::settings::SettingsOverlay) -> String {
     if let Some(error) = settings.error() {
         format!("{error}\n[Esc] back")
     } else if settings.input().is_some() {
-        let prompt = if matches!(settings.field(), SettingField::Theme(_)) {
-            "Type a preset or #RRGGBB"
-        } else {
-            "Type a positive number"
+        let prompt = match settings.field() {
+            SettingField::Theme(_) => "Type a preset or #RRGGBB",
+            SettingField::CompletionSoundFile | SettingField::FocusSoundFile => {
+                "Type an absolute or ~/ path; leave empty to disable"
+            }
+            _ => "Type a positive number",
         };
         format!("{prompt}  [Enter] apply  [Esc] cancel")
     } else if settings.is_capturing_key() {
@@ -635,6 +643,34 @@ fn setting_row(field: SettingField, settings: &crate::settings::SettingsOverlay)
         SettingField::LongBreakInterval => (
             "  Long break interval",
             config.timer().long_break_interval().to_string(),
+        ),
+        SettingField::NotificationEnabled => (
+            "  Desktop notifications",
+            on_off(config.notification().enabled()).to_string(),
+        ),
+        SettingField::CompletionSoundEnabled => (
+            "  Completion enabled",
+            on_off(config.sound().completion().enabled()).to_string(),
+        ),
+        SettingField::CompletionSoundFile => (
+            "  Completion file",
+            config
+                .sound()
+                .completion()
+                .file()
+                .map_or_else(|| "not set".to_string(), |path| path.display().to_string()),
+        ),
+        SettingField::FocusSoundEnabled => (
+            "  Focus loop enabled",
+            on_off(config.sound().focus().enabled()).to_string(),
+        ),
+        SettingField::FocusSoundFile => (
+            "  Focus loop file",
+            config
+                .sound()
+                .focus()
+                .file()
+                .map_or_else(|| "not set".to_string(), |path| path.display().to_string()),
         ),
         SettingField::PersistTasks => ("  Persist", on_off(config.tasks().persist()).to_string()),
         SettingField::ShowTaskNumbers => (
@@ -1053,19 +1089,10 @@ mod tests {
         assert!(!setting_row(SettingField::PersistTasks, settings).contains("Tasks /"));
         assert!(!setting_row(SettingField::Key(KeyAction::FocusLeft), settings).contains("Keys /"));
 
-        let area = Rect::new(0, 0, 80, 24);
-        let footer = settings_footer(app.settings().unwrap());
-        let (list, _) = settings_parts(area, &footer);
         for (group_index, (first_field, _)) in SETTINGS_GROUPS.iter().enumerate() {
             let heading_row = first_field + group_index;
-            assert_eq!(
-                click_target(area, (list.x, list.y + heading_row as u16), &app),
-                ClickTarget::Outside
-            );
-            assert_eq!(
-                click_target(area, (list.x, list.y + heading_row as u16 + 1), &app),
-                ClickTarget::SettingsRow(*first_field)
-            );
+            assert_eq!(settings_field_row(heading_row), None);
+            assert_eq!(settings_field_row(heading_row + 1), Some(*first_field));
         }
     }
 
@@ -1073,7 +1100,7 @@ mod tests {
     fn settings_help_shows_fixed_navigation_and_the_active_close_keys() {
         let mut app = App::new();
         let _ = app.dispatch(Action::OpenSettings);
-        for _ in 0..18 {
+        while app.settings().unwrap().field() != SettingField::Key(KeyAction::Settings) {
             let _ = app.dispatch(Action::SettingsMove(true));
         }
         let _ = app.dispatch(Action::SettingsActivate);

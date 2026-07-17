@@ -18,7 +18,7 @@ use ratatui::{Terminal, backend::CrosstermBackend, layout::Rect};
 use std::time::{Duration, Instant};
 
 use pomock::{
-    app::{App, AppOutcome, EditMode, TaskState},
+    app::{App, AppOutcome, EditMode, FocusAudioAction, TaskState},
     config::{Config, ConfigError},
     input::map_key,
     notification::{DesktopNotifier, Notifier},
@@ -46,10 +46,27 @@ fn handle_outcome(
 ) -> Result<bool, RunError> {
     match outcome {
         AppOutcome::None => Ok(false),
+        AppOutcome::FocusAudio(action) => {
+            match action {
+                FocusAudioAction::StartOrResume => {
+                    if let Some(file) = config.sound().focus().playback_file() {
+                        sound_player.start_or_resume_focus(file);
+                    }
+                }
+                FocusAudioAction::Pause => sound_player.pause_focus(),
+                FocusAudioAction::Stop => sound_player.stop_focus(),
+            }
+            Ok(false)
+        }
         AppOutcome::SessionCompleted(session) => {
-            notifier.session_completed(session);
-            if let Some(file) = config.sound().resolved_file() {
-                sound_player.play(file);
+            if session == pomock::SessionKind::Focus {
+                sound_player.stop_focus();
+            }
+            if config.notification().enabled() {
+                notifier.session_completed(session);
+            }
+            if let Some(file) = config.sound().completion().playback_file() {
+                sound_player.play_completion(file);
             }
             Ok(false)
         }
@@ -60,15 +77,28 @@ fn handle_outcome(
             Ok(false)
         }
         AppOutcome::SettingsChanged(updated) => {
+            let focus_file_changed =
+                config.sound().focus().playback_file() != updated.sound().focus().playback_file();
             updated.save()?;
             *config = *updated;
             *task_store = task_store_for_config(config)?;
             if let Some(task_store) = task_store.as_ref() {
                 task_store.save(&app.task_state())?;
             }
+            if focus_file_changed {
+                sound_player.stop_focus();
+                if app.is_focus_running()
+                    && let Some(file) = config.sound().focus().playback_file()
+                {
+                    sound_player.start_or_resume_focus(file);
+                }
+            }
             Ok(false)
         }
-        AppOutcome::Quit => Ok(true),
+        AppOutcome::Quit => {
+            sound_player.stop_focus();
+            Ok(true)
+        }
     }
 }
 
@@ -391,11 +421,26 @@ mod tests {
     #[derive(Default)]
     struct RecordingSoundPlayer {
         files: Vec<PathBuf>,
+        focus_actions: Vec<&'static str>,
+        focus_files: Vec<PathBuf>,
     }
 
     impl SoundPlayer for RecordingSoundPlayer {
-        fn play(&mut self, file: &std::path::Path) {
+        fn play_completion(&mut self, file: &std::path::Path) {
             self.files.push(file.to_owned());
+        }
+
+        fn start_or_resume_focus(&mut self, file: &std::path::Path) {
+            self.focus_actions.push("start");
+            self.focus_files.push(file.to_owned());
+        }
+
+        fn pause_focus(&mut self) {
+            self.focus_actions.push("pause");
+        }
+
+        fn stop_focus(&mut self) {
+            self.focus_actions.push("stop");
         }
     }
 
@@ -425,7 +470,10 @@ mod tests {
             advance_timer(&mut app, &mut last_tick, key_time),
             AppOutcome::None
         );
-        assert_eq!(app.dispatch(Action::PrimaryAction), AppOutcome::None);
+        assert_eq!(
+            app.dispatch(Action::PrimaryAction),
+            AppOutcome::FocusAudio(FocusAudioAction::StartOrResume)
+        );
 
         assert_eq!(
             advance_timer(
@@ -536,7 +584,9 @@ mod tests {
         let app = App::new();
         let sound_file = temp_path("custom-completion.mp3");
         let mut config = Config::default()
-            .with_sound(pomock::config::SoundConfig::new(sound_file.clone()))
+            .with_sound(pomock::config::SoundConfig::default().with_completion(
+                pomock::config::CompletionSoundConfig::new(true, Some(sound_file.clone())),
+            ))
             .unwrap();
         let mut task_store = None;
         let mut notifier = RecordingNotifier::default();
@@ -555,6 +605,7 @@ mod tests {
         );
         assert_eq!(notifier.completions, [pomock::SessionKind::Focus]);
         assert_eq!(sound_player.files, [sound_file]);
+        assert_eq!(sound_player.focus_actions, ["stop"]);
 
         assert!(
             !handle_outcome(
@@ -569,6 +620,120 @@ mod tests {
         );
         assert_eq!(notifier.completions, [pomock::SessionKind::Focus]);
         assert_eq!(sound_player.files.len(), 1);
+        assert_eq!(sound_player.focus_actions, ["stop"]);
+    }
+
+    #[test]
+    fn disabled_notifications_do_not_suppress_completion_audio() {
+        let app = App::new();
+        let sound_file = temp_path("completion.wav");
+        let mut config = Config::default()
+            .with_notification(pomock::config::NotificationConfig::new(false))
+            .with_sound(pomock::config::SoundConfig::default().with_completion(
+                pomock::config::CompletionSoundConfig::new(true, Some(sound_file.clone())),
+            ))
+            .unwrap();
+        let mut task_store = None;
+        let mut notifier = RecordingNotifier::default();
+        let mut sound_player = RecordingSoundPlayer::default();
+
+        handle_outcome(
+            AppOutcome::SessionCompleted(pomock::SessionKind::ShortBreak),
+            &app,
+            &mut config,
+            &mut task_store,
+            &mut notifier,
+            &mut sound_player,
+        )
+        .unwrap();
+
+        assert!(notifier.completions.is_empty());
+        assert_eq!(sound_player.files, [sound_file]);
+        assert!(sound_player.focus_actions.is_empty());
+    }
+
+    #[test]
+    fn focus_audio_outcomes_route_only_configured_starts_and_always_cleanup() {
+        let app = App::new();
+        let focus_file = temp_path("focus.ogg");
+        let mut config = Config::default()
+            .with_sound(pomock::config::SoundConfig::default().with_focus(
+                pomock::config::FocusSoundConfig::new(true, Some(focus_file.clone())),
+            ))
+            .unwrap();
+        let mut task_store = None;
+        let mut notifier = RecordingNotifier::default();
+        let mut sound_player = RecordingSoundPlayer::default();
+
+        for outcome in [
+            AppOutcome::FocusAudio(FocusAudioAction::StartOrResume),
+            AppOutcome::FocusAudio(FocusAudioAction::Pause),
+            AppOutcome::FocusAudio(FocusAudioAction::Stop),
+        ] {
+            handle_outcome(
+                outcome,
+                &app,
+                &mut config,
+                &mut task_store,
+                &mut notifier,
+                &mut sound_player,
+            )
+            .unwrap();
+        }
+
+        assert_eq!(sound_player.focus_actions, ["start", "pause", "stop"]);
+        assert_eq!(sound_player.focus_files, [focus_file]);
+
+        let mut disabled_config = Config::default();
+        handle_outcome(
+            AppOutcome::FocusAudio(FocusAudioAction::StartOrResume),
+            &app,
+            &mut disabled_config,
+            &mut task_store,
+            &mut notifier,
+            &mut sound_player,
+        )
+        .unwrap();
+        assert_eq!(sound_player.focus_actions, ["start", "pause", "stop"]);
+    }
+
+    #[test]
+    fn disabled_sound_options_keep_configured_files_silent() {
+        let app = App::new();
+        let mut config = Config::default()
+            .with_sound(
+                pomock::config::SoundConfig::default()
+                    .with_completion(pomock::config::CompletionSoundConfig::new(
+                        false,
+                        Some(temp_path("disabled-completion.wav")),
+                    ))
+                    .with_focus(pomock::config::FocusSoundConfig::new(
+                        false,
+                        Some(temp_path("disabled-focus.ogg")),
+                    )),
+            )
+            .unwrap();
+        let mut task_store = None;
+        let mut notifier = RecordingNotifier::default();
+        let mut sound_player = RecordingSoundPlayer::default();
+
+        for outcome in [
+            AppOutcome::FocusAudio(FocusAudioAction::StartOrResume),
+            AppOutcome::SessionCompleted(pomock::SessionKind::ShortBreak),
+        ] {
+            handle_outcome(
+                outcome,
+                &app,
+                &mut config,
+                &mut task_store,
+                &mut notifier,
+                &mut sound_player,
+            )
+            .unwrap();
+        }
+
+        assert!(sound_player.files.is_empty());
+        assert!(sound_player.focus_actions.is_empty());
     }
 
     #[test]
