@@ -594,36 +594,37 @@ fn settings_offset(selection: usize, visible_rows: usize) -> usize {
     }
 }
 
-const SETTINGS_GROUPS: [(usize, &str); 6] = [
-    (0, "Timer"),
-    (4, "Notification"),
-    (5, "Sound"),
-    (9, "Tasks"),
-    (11, "Keys"),
-    (26, "Theme"),
-];
+fn settings_group_start(group_index: usize) -> usize {
+    SettingField::GROUPS[..group_index]
+        .iter()
+        .map(|(_, fields)| fields.len())
+        .sum()
+}
 
 fn settings_visual_row(selection: usize) -> usize {
     selection
-        + SETTINGS_GROUPS
+        + SettingField::GROUPS
             .iter()
-            .filter(|(first_field, _)| selection >= *first_field)
+            .enumerate()
+            .filter(|(group_index, _)| selection >= settings_group_start(*group_index))
             .count()
 }
 
 fn settings_scroll_anchor(selection: usize) -> usize {
-    SETTINGS_GROUPS
+    SettingField::GROUPS
         .iter()
         .enumerate()
-        .find_map(|(group_index, (first_field, _))| {
-            (*first_field == selection).then_some(first_field + group_index)
+        .find_map(|(group_index, _)| {
+            let first_field = settings_group_start(group_index);
+            (first_field == selection).then_some(first_field + group_index)
         })
         .unwrap_or_else(|| settings_visual_row(selection))
 }
 
 fn settings_field_row(visual_row: usize) -> Option<usize> {
     let mut headings_before = 0;
-    for (group_index, (first_field, _)) in SETTINGS_GROUPS.iter().enumerate() {
+    for (group_index, _) in SettingField::GROUPS.iter().enumerate() {
+        let first_field = settings_group_start(group_index);
         let heading_row = first_field + group_index;
         if visual_row == heading_row {
             return None;
@@ -665,11 +666,12 @@ fn draw_settings(frame: &mut Frame, app: &mut App, theme: Theme) {
         area,
     );
 
-    let mut items = Vec::with_capacity(SettingField::ALL.len() + SETTINGS_GROUPS.len());
+    let mut items = Vec::with_capacity(SettingField::ALL.len() + SettingField::GROUPS.len());
     for (index, field) in SettingField::ALL.iter().enumerate() {
-        if let Some((_, heading)) = SETTINGS_GROUPS
+        if let Some((_, (heading, _))) = SettingField::GROUPS
             .iter()
-            .find(|(first_field, _)| *first_field == index)
+            .enumerate()
+            .find(|(group_index, _)| settings_group_start(*group_index) == index)
         {
             items
                 .push(ListItem::new(*heading).style(Style::default().add_modifier(Modifier::BOLD)));
@@ -1358,11 +1360,35 @@ mod tests {
         assert!(!setting_row(SettingField::PersistTasks, settings).contains("Tasks /"));
         assert!(!setting_row(SettingField::Key(KeyAction::FocusLeft), settings).contains("Keys /"));
 
-        for (group_index, (first_field, _)) in SETTINGS_GROUPS.iter().enumerate() {
+        for (group_index, (_, fields)) in SettingField::GROUPS.iter().enumerate() {
+            let first_field = settings_group_start(group_index);
             let heading_row = first_field + group_index;
             assert_eq!(settings_field_row(heading_row), None);
-            assert_eq!(settings_field_row(heading_row + 1), Some(*first_field));
+            assert_eq!(settings_field_row(heading_row + 1), Some(first_field));
+            assert_eq!(SettingField::ALL[first_field], fields[0]);
         }
+    }
+
+    #[test]
+    fn task_reordering_keys_appear_before_the_theme_heading() {
+        let theme_group = SettingField::GROUPS
+            .iter()
+            .position(|(heading, _)| *heading == "Theme")
+            .unwrap();
+        let theme_start = settings_group_start(theme_group);
+
+        assert_eq!(
+            SettingField::ALL[theme_start - 2],
+            SettingField::Key(KeyAction::MoveTaskUp)
+        );
+        assert_eq!(
+            SettingField::ALL[theme_start - 1],
+            SettingField::Key(KeyAction::MoveTaskDown)
+        );
+        assert!(matches!(
+            SettingField::ALL[theme_start],
+            SettingField::Theme(_)
+        ));
     }
 
     #[test]

@@ -152,14 +152,12 @@ impl<'de> Deserialize<'de> for KeyBindings {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(default, deny_unknown_fields)]
 pub struct KeysConfig {
+    pub(super) quit: KeyBindings,
+    pub(super) settings: KeyBindings,
     pub(super) focus_left: KeyBindings,
     pub(super) focus_down: KeyBindings,
     pub(super) focus_up: KeyBindings,
     pub(super) focus_right: KeyBindings,
-    pub(super) list_down: KeyBindings,
-    pub(super) list_up: KeyBindings,
-    pub(super) quit: KeyBindings,
-    pub(super) settings: KeyBindings,
     pub(super) clock_primary: KeyBindings,
     pub(super) cycle_session: KeyBindings,
     pub(super) reset_session: KeyBindings,
@@ -167,6 +165,8 @@ pub struct KeysConfig {
     pub(super) edit_task: KeyBindings,
     pub(super) delete_task: KeyBindings,
     pub(super) task_primary: KeyBindings,
+    pub(super) list_down: KeyBindings,
+    pub(super) list_up: KeyBindings,
     pub(super) move_task_up: KeyBindings,
     pub(super) move_task_down: KeyBindings,
 }

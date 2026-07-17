@@ -30,11 +30,11 @@ pub enum ThemeColor {
 pub struct ThemeConfig {
     focused_border: ThemeColor,
     unfocused_border: ThemeColor,
-    todo_highlight: ThemeColor,
-    done_highlight: ThemeColor,
     focus: ThemeColor,
     short_break: ThemeColor,
     long_break: ThemeColor,
+    todo_highlight: ThemeColor,
+    done_highlight: ThemeColor,
 }
 
 impl ThemeConfig {

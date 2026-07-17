@@ -23,26 +23,27 @@ pub(crate) enum SettingField {
 }
 
 impl SettingField {
-    pub(crate) const ALL: [Self; 35] = [
+    const TIMER: [Self; 4] = [
         Self::FocusMinutes,
         Self::ShortBreakMinutes,
         Self::LongBreakMinutes,
         Self::LongBreakInterval,
-        Self::NotificationEnabled,
+    ];
+    const NOTIFICATION: [Self; 1] = [Self::NotificationEnabled];
+    const SOUND: [Self; 4] = [
         Self::CompletionSoundEnabled,
         Self::CompletionSoundFile,
         Self::FocusSoundEnabled,
         Self::FocusSoundFile,
-        Self::PersistTasks,
-        Self::ShowTaskNumbers,
+    ];
+    const TASKS: [Self; 2] = [Self::PersistTasks, Self::ShowTaskNumbers];
+    const KEYS: [Self; 17] = [
+        Self::Key(KeyAction::Quit),
+        Self::Key(KeyAction::Settings),
         Self::Key(KeyAction::FocusLeft),
         Self::Key(KeyAction::FocusDown),
         Self::Key(KeyAction::FocusUp),
         Self::Key(KeyAction::FocusRight),
-        Self::Key(KeyAction::ListDown),
-        Self::Key(KeyAction::ListUp),
-        Self::Key(KeyAction::Quit),
-        Self::Key(KeyAction::Settings),
         Self::Key(KeyAction::ClockPrimary),
         Self::Key(KeyAction::CycleSession),
         Self::Key(KeyAction::ResetSession),
@@ -50,16 +51,52 @@ impl SettingField {
         Self::Key(KeyAction::EditTask),
         Self::Key(KeyAction::DeleteTask),
         Self::Key(KeyAction::TaskPrimary),
+        Self::Key(KeyAction::ListDown),
+        Self::Key(KeyAction::ListUp),
         Self::Key(KeyAction::MoveTaskUp),
         Self::Key(KeyAction::MoveTaskDown),
+    ];
+    const THEME: [Self; 7] = [
         Self::Theme(ThemeRole::FocusedBorder),
         Self::Theme(ThemeRole::UnfocusedBorder),
-        Self::Theme(ThemeRole::TodoHighlight),
-        Self::Theme(ThemeRole::DoneHighlight),
         Self::Theme(ThemeRole::Focus),
         Self::Theme(ThemeRole::ShortBreak),
         Self::Theme(ThemeRole::LongBreak),
+        Self::Theme(ThemeRole::TodoHighlight),
+        Self::Theme(ThemeRole::DoneHighlight),
     ];
+    pub(crate) const GROUPS: [(&'static str, &'static [Self]); 6] = [
+        ("Timer", &Self::TIMER),
+        ("Notification", &Self::NOTIFICATION),
+        ("Sound", &Self::SOUND),
+        ("Tasks", &Self::TASKS),
+        ("Keys", &Self::KEYS),
+        ("Theme", &Self::THEME),
+    ];
+    const FIELD_COUNT: usize = Self::TIMER.len()
+        + Self::NOTIFICATION.len()
+        + Self::SOUND.len()
+        + Self::TASKS.len()
+        + Self::KEYS.len()
+        + Self::THEME.len();
+    pub(crate) const ALL: [Self; Self::FIELD_COUNT] = Self::flatten_groups();
+
+    const fn flatten_groups() -> [Self; Self::FIELD_COUNT] {
+        let mut all = [Self::FocusMinutes; Self::FIELD_COUNT];
+        let mut all_index = 0;
+        let mut group_index = 0;
+        while group_index < Self::GROUPS.len() {
+            let fields = Self::GROUPS[group_index].1;
+            let mut field_index = 0;
+            while field_index < fields.len() {
+                all[all_index] = fields[field_index];
+                all_index += 1;
+                field_index += 1;
+            }
+            group_index += 1;
+        }
+        all
+    }
 
     fn is_number(self) -> bool {
         matches!(
@@ -484,6 +521,50 @@ mod tests {
     }
 
     #[test]
+    fn field_groups_define_the_flat_settings_order() {
+        let grouped = SettingField::GROUPS
+            .iter()
+            .flat_map(|(_, fields)| fields.iter().copied())
+            .collect::<Vec<_>>();
+
+        assert_eq!(grouped, SettingField::ALL);
+        assert_eq!(
+            SettingField::KEYS,
+            [
+                SettingField::Key(KeyAction::Quit),
+                SettingField::Key(KeyAction::Settings),
+                SettingField::Key(KeyAction::FocusLeft),
+                SettingField::Key(KeyAction::FocusDown),
+                SettingField::Key(KeyAction::FocusUp),
+                SettingField::Key(KeyAction::FocusRight),
+                SettingField::Key(KeyAction::ClockPrimary),
+                SettingField::Key(KeyAction::CycleSession),
+                SettingField::Key(KeyAction::ResetSession),
+                SettingField::Key(KeyAction::AddTask),
+                SettingField::Key(KeyAction::EditTask),
+                SettingField::Key(KeyAction::DeleteTask),
+                SettingField::Key(KeyAction::TaskPrimary),
+                SettingField::Key(KeyAction::ListDown),
+                SettingField::Key(KeyAction::ListUp),
+                SettingField::Key(KeyAction::MoveTaskUp),
+                SettingField::Key(KeyAction::MoveTaskDown),
+            ]
+        );
+        assert_eq!(
+            SettingField::THEME,
+            [
+                SettingField::Theme(ThemeRole::FocusedBorder),
+                SettingField::Theme(ThemeRole::UnfocusedBorder),
+                SettingField::Theme(ThemeRole::Focus),
+                SettingField::Theme(ThemeRole::ShortBreak),
+                SettingField::Theme(ThemeRole::LongBreak),
+                SettingField::Theme(ThemeRole::TodoHighlight),
+                SettingField::Theme(ThemeRole::DoneHighlight),
+            ]
+        );
+    }
+
+    #[test]
     fn numeric_edits_are_validated_before_updating_the_config() {
         let mut settings = SettingsOverlay::new(&Config::default());
         settings.activate();
@@ -719,7 +800,10 @@ mod tests {
     fn selection_is_clamped_and_locked_during_nested_editing() {
         let mut settings = SettingsOverlay::new(&Config::default());
         settings.select(usize::MAX);
-        assert_eq!(settings.field(), SettingField::Theme(ThemeRole::LongBreak));
+        assert_eq!(
+            settings.field(),
+            SettingField::Theme(ThemeRole::DoneHighlight)
+        );
         settings.select(0);
         settings.activate();
         settings.move_selection(true);

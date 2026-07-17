@@ -496,27 +496,67 @@ mod tests {
     }
 
     #[test]
-    fn saved_sections_follow_the_settings_overlay_order() {
+    fn saved_default_config_follows_the_documented_settings_order() {
         let path = temp_path("ordered/config.toml");
         Config::default().save_to(&path).unwrap();
 
         let contents = fs::read_to_string(&path).unwrap();
-        let headings: Vec<_> = contents
-            .lines()
-            .filter(|line| line.starts_with('['))
-            .collect();
-
         assert_eq!(
-            headings,
-            [
-                "[timer]",
-                "[notification]",
-                "[sound.completion]",
-                "[sound.focus]",
-                "[tasks]",
-                "[keys]",
-                "[theme]",
-            ]
+            contents,
+            concat!(
+                "[timer]\n",
+                "focus_minutes = 25\n",
+                "short_break_minutes = 5\n",
+                "long_break_minutes = 15\n",
+                "long_break_interval = 4\n",
+                "\n",
+                "[notification]\n",
+                "enabled = true\n",
+                "\n",
+                "[sound.completion]\n",
+                "enabled = false\n",
+                "\n",
+                "[sound.focus]\n",
+                "enabled = false\n",
+                "\n",
+                "[tasks]\n",
+                "persist = true\n",
+                "show_numbers = true\n",
+                "\n",
+                "[keys]\n",
+                "quit = \"q\"\n",
+                "settings = \"s\"\n",
+                "focus_left = \"H\"\n",
+                "focus_down = \"J\"\n",
+                "focus_up = \"K\"\n",
+                "focus_right = \"L\"\n",
+                "clock_primary = \"space\"\n",
+                "cycle_session = \"c\"\n",
+                "reset_session = \"r\"\n",
+                "add_task = \"a\"\n",
+                "edit_task = \"e\"\n",
+                "delete_task = \"x\"\n",
+                "task_primary = \"space\"\n",
+                "list_down = [\n",
+                "    \"j\",\n",
+                "    \"down\",\n",
+                "]\n",
+                "list_up = [\n",
+                "    \"k\",\n",
+                "    \"up\",\n",
+                "]\n",
+                "move_task_up = \"u\"\n",
+                "move_task_down = \"d\"\n",
+                "\n",
+                "[theme]\n",
+                "focused_border = \"light_red\"\n",
+                "unfocused_border = \"dark_gray\"\n",
+                "focus = \"magenta\"\n",
+                "short_break = \"cyan\"\n",
+                "long_break = \"green\"\n",
+                "todo_highlight = \"red\"\n",
+                "done_highlight = \"green\"\n",
+            )
         );
         fs::remove_dir_all(path.parent().unwrap()).unwrap();
     }

@@ -110,14 +110,12 @@ persist = true
 show_numbers = true
 
 [keys]
+quit = "q"
+settings = "s"
 focus_left = "H"
 focus_down = "J"
 focus_up = "K"
 focus_right = "L"
-list_down = ["j", "down"]
-list_up = ["k", "up"]
-quit = "q"
-settings = "s"
 clock_primary = "space"
 cycle_session = "c"
 reset_session = "r"
@@ -125,17 +123,19 @@ add_task = "a"
 edit_task = "e"
 delete_task = "x"
 task_primary = "space"
+list_down = ["j", "down"]
+list_up = ["k", "up"]
 move_task_up = "u"
 move_task_down = "d"
 
 [theme]
 focused_border = "light_red"
 unfocused_border = "dark_gray"
-todo_highlight = "red"
-done_highlight = "green"
 focus = "magenta"
 short_break = "cyan"
 long_break = "green"
+todo_highlight = "red"
+done_highlight = "green"
 ```
 
 To customize them, create `pomock/config.toml`
