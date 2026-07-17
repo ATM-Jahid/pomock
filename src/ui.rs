@@ -2,6 +2,7 @@ use ratatui::{
     Frame,
     layout::{Alignment, Constraint, Direction as LayoutDirection, Layout, Rect},
     style::{Color, Modifier, Style},
+    text::Line,
     widgets::{Block, Borders, Clear, List, ListItem, ListState, Paragraph},
 };
 
@@ -78,7 +79,9 @@ pub fn draw(frame: &mut Frame, app: &mut App, theme: Theme, keys: &KeysConfig) {
         .settings()
         .map_or(theme, |settings| Theme::from(settings.config().theme()));
     let area = frame.area();
-    let layout = ui_layout(area);
+    let controls_text = controls_text(app, keys);
+    let controls_text = wrap_help(&controls_text, inner_width(area));
+    let layout = ui_layout(area, text_height(&controls_text));
 
     let outer_block = Block::default().title("pomock").borders(Borders::ALL);
     frame.render_widget(outer_block, area);
@@ -108,7 +111,7 @@ pub fn draw(frame: &mut Frame, app: &mut App, theme: Theme, keys: &KeysConfig) {
         (SessionKind::LongBreak, "Long break"),
     ];
 
-    let controls = Paragraph::new(controls_text(app, keys)).alignment(Alignment::Center);
+    let controls = Paragraph::new(controls_text).alignment(Alignment::Center);
 
     let todo_items: Vec<ListItem> = app
         .tasks()
@@ -214,10 +217,12 @@ pub fn draw(frame: &mut Frame, app: &mut App, theme: Theme, keys: &KeysConfig) {
 /// Translates terminal coordinates into a semantic application click target.
 pub fn click_target(area: Rect, position: (u16, u16), app: &App) -> ClickTarget {
     if let Some(settings) = app.settings() {
-        return settings_row_at(area, position, settings.selection())
+        return settings_row_at(area, position, settings)
             .map_or(ClickTarget::Outside, ClickTarget::SettingsRow);
     }
-    let layout = ui_layout(area);
+    let controls_text = controls_text(app, app.input_keys());
+    let controls_text = wrap_help(&controls_text, inner_width(area));
+    let layout = ui_layout(area, text_height(&controls_text));
     let point = position.into();
 
     if let Some(session) = session_control_at(layout.clock, point) {
@@ -285,14 +290,14 @@ fn session_control_at(area: Rect, point: ratatui::layout::Position) -> Option<Se
     .find_map(|(session, area)| area.contains(point).then_some(session))
 }
 
-fn ui_layout(area: Rect) -> UiLayout {
+fn ui_layout(area: Rect, controls_height: u16) -> UiLayout {
     let inner_area = Block::default().borders(Borders::ALL).inner(area);
     let chunks = Layout::default()
         .direction(LayoutDirection::Vertical)
         .constraints([
             Constraint::Percentage(55),
             Constraint::Percentage(45),
-            Constraint::Length(1),
+            Constraint::Length(controls_height.min(inner_area.height)),
         ])
         .split(inner_area);
     let task_chunks = Layout::default()
@@ -306,6 +311,81 @@ fn ui_layout(area: Rect) -> UiLayout {
         done: task_chunks[1],
         controls: chunks[2],
     }
+}
+
+fn inner_width(area: Rect) -> u16 {
+    Block::default().borders(Borders::ALL).inner(area).width
+}
+
+fn text_height(text: &str) -> u16 {
+    u16::try_from(text.lines().count()).unwrap_or(u16::MAX)
+}
+
+fn wrap_help(text: &str, width: u16) -> String {
+    if width == 0 {
+        return String::new();
+    }
+
+    let mut lines = Vec::new();
+    for source_line in text.lines() {
+        let mut current = String::new();
+        for item in source_line.split("  ").filter(|item| !item.is_empty()) {
+            let candidate = if current.is_empty() {
+                item.to_string()
+            } else {
+                format!("{current}  {item}")
+            };
+            if Line::from(candidate.as_str()).width() <= usize::from(width) {
+                current = candidate;
+            } else {
+                if !current.is_empty() {
+                    lines.push(std::mem::take(&mut current));
+                }
+                push_item(item, width, &mut current, &mut lines);
+            }
+        }
+        lines.push(current);
+    }
+    lines.join("\n")
+}
+
+fn push_item(item: &str, width: u16, current: &mut String, lines: &mut Vec<String>) {
+    for word in item.split_whitespace() {
+        let candidate = if current.is_empty() {
+            word.to_string()
+        } else {
+            format!("{current} {word}")
+        };
+        if Line::from(candidate.as_str()).width() <= usize::from(width) {
+            *current = candidate;
+        } else {
+            if !current.is_empty() {
+                lines.push(std::mem::take(current));
+            }
+            push_word(word, width, current, lines);
+        }
+    }
+}
+
+fn push_word(word: &str, width: u16, current: &mut String, lines: &mut Vec<String>) {
+    let mut rest = word;
+    while Line::from(rest).width() > usize::from(width) {
+        let mut split = rest.len();
+        for (index, character) in rest.char_indices() {
+            let end = index + character.len_utf8();
+            if Line::from(&rest[..end]).width() > usize::from(width) {
+                split = if index == 0 {
+                    character.len_utf8()
+                } else {
+                    index
+                };
+                break;
+            }
+        }
+        lines.push(rest[..split].to_string());
+        rest = &rest[split..];
+    }
+    current.push_str(rest);
 }
 
 fn task_row_at(position: (u16, u16), area: Rect, offset: usize, len: usize) -> Option<usize> {
@@ -330,7 +410,7 @@ fn task_label(index: usize, description: &str, show_numbers: bool) -> String {
 fn controls_text(app: &App, keys: &KeysConfig) -> String {
     if let Some(operation) = app.pending_confirmation() {
         let prompt = confirmation_prompt(operation);
-        return format!("{prompt} [y/Enter] confirm [n/Esc] cancel");
+        return format!("{prompt}  [y/Enter] confirm  [n/Esc] cancel");
     }
 
     match app.edit_mode() {
@@ -349,20 +429,20 @@ fn controls_text(app: &App, keys: &KeysConfig) -> String {
             let settings = format_key(first_key(keys.settings()));
             match app.ui_focus() {
                 UiFocus::Clock => format!(
-                    "[{focus_navigation}] box nav [{}] start/pause [{}] cycle session [{}] reset [{settings}] settings [{quit}] quit",
+                    "[{focus_navigation}] box nav  [{}] start/pause  [{}] cycle session  [{}] reset  [{settings}] settings  [{quit}] quit",
                     format_key(first_key(keys.clock_primary())),
                     format_key(first_key(keys.cycle_session())),
                     format_key(first_key(keys.reset_session())),
                 ),
                 UiFocus::Todo => format!(
-                    "[{focus_navigation}] box nav [{list_navigation}] list nav [{}] add [{}] edit [{}] delete [{}] complete [{settings}] settings [{quit}] quit",
+                    "[{focus_navigation}] box nav  [{list_navigation}] list nav  [{}] add  [{}] edit  [{}] delete  [{}] complete  [{settings}] settings  [{quit}] quit",
                     format_key(first_key(keys.add_task())),
                     format_key(first_key(keys.edit_task())),
                     format_key(first_key(keys.delete_task())),
                     format_key(first_key(keys.task_primary())),
                 ),
                 UiFocus::Done => format!(
-                    "[{focus_navigation}] box nav [{list_navigation}] list nav [{}] edit [{}] delete [{}] return [{settings}] settings [{quit}] quit",
+                    "[{focus_navigation}] box nav  [{list_navigation}] list nav  [{}] edit  [{}] delete  [{}] return  [{settings}] settings  [{quit}] quit",
                     format_key(first_key(keys.edit_task())),
                     format_key(first_key(keys.delete_task())),
                     format_key(first_key(keys.task_primary())),
@@ -411,13 +491,14 @@ fn settings_area(area: Rect) -> Rect {
     )
 }
 
-fn settings_parts(area: Rect) -> (Rect, Rect) {
+fn settings_parts(area: Rect, footer_text: &str) -> (Rect, Rect) {
     let inner = Block::default()
         .borders(Borders::ALL)
         .inner(settings_area(area));
+    let footer_height = text_height(&wrap_help(footer_text, inner.width)).min(inner.height);
     let chunks = Layout::default()
         .direction(LayoutDirection::Vertical)
-        .constraints([Constraint::Min(1), Constraint::Length(2)])
+        .constraints([Constraint::Min(1), Constraint::Length(footer_height)])
         .split(inner);
     (chunks[0], chunks[1])
 }
@@ -456,14 +537,19 @@ fn settings_field_row(visual_row: usize) -> Option<usize> {
     (row < SettingField::ALL.len()).then_some(row)
 }
 
-fn settings_row_at(area: Rect, position: (u16, u16), selection: usize) -> Option<usize> {
-    let (list, _) = settings_parts(area);
+fn settings_row_at(
+    area: Rect,
+    position: (u16, u16),
+    settings: &crate::settings::SettingsOverlay,
+) -> Option<usize> {
+    let footer = settings_footer(settings);
+    let (list, _) = settings_parts(area, &footer);
     let point = position.into();
     if !list.contains(point) {
         return None;
     }
     let visible = usize::from(list.height);
-    let selected_row = settings_visual_row(selection);
+    let selected_row = settings_visual_row(settings.selection());
     let row = settings_offset(selected_row, visible) + usize::from(position.1 - list.y);
     settings_field_row(row)
 }
@@ -471,7 +557,8 @@ fn settings_row_at(area: Rect, position: (u16, u16), selection: usize) -> Option
 fn draw_settings(frame: &mut Frame, app: &App, theme: Theme) {
     let settings = app.settings().expect("settings overlay is open");
     let area = settings_area(frame.area());
-    let (list_area, footer_area) = settings_parts(frame.area());
+    let footer = settings_footer(settings);
+    let (list_area, footer_area) = settings_parts(frame.area(), &footer);
     frame.render_widget(Clear, area);
     frame.render_widget(
         Block::default()
@@ -505,7 +592,7 @@ fn draw_settings(frame: &mut Frame, app: &App, theme: Theme) {
         &mut state,
     );
 
-    let footer = settings_footer(settings);
+    let footer = wrap_help(&footer, footer_area.width);
     frame.render_widget(
         Paragraph::new(footer).alignment(Alignment::Center),
         footer_area,
@@ -681,6 +768,46 @@ mod tests {
     }
 
     #[test]
+    fn help_wraps_to_the_available_width_without_losing_controls() {
+        let app = App::new();
+        let help = controls_text(&app, &KeysConfig::default());
+
+        let wrapped = wrap_help(&help, 28);
+
+        assert!(wrapped.lines().all(|line| Line::from(line).width() <= 28));
+        assert_eq!(
+            wrapped.split_whitespace().collect::<Vec<_>>(),
+            help.split_whitespace().collect::<Vec<_>>()
+        );
+        assert!(text_height(&wrapped) > 1);
+    }
+
+    #[test]
+    fn help_wraps_between_complete_key_action_items() {
+        let app = App::new();
+        let help = controls_text(&app, &KeysConfig::default());
+
+        let wrapped = wrap_help(&help, 18);
+
+        assert!(wrapped.lines().any(|line| line.contains("[q] quit")));
+        assert!(wrapped.lines().any(|line| line.contains("[s] settings")));
+        assert!(!wrapped.lines().any(|line| line.ends_with("[q]")));
+    }
+
+    #[test]
+    fn narrow_layout_reserves_every_wrapped_control_row() {
+        let app = App::new();
+        let area = Rect::new(0, 0, 36, 18);
+        let help = wrap_help(&controls_text(&app, app.input_keys()), inner_width(area));
+
+        let layout = ui_layout(area, text_height(&help));
+
+        assert_eq!(layout.controls.height, text_height(&help));
+        assert!(layout.clock.height > 0);
+        assert!(layout.todo.height > 0);
+    }
+
+    #[test]
     fn configured_colors_map_to_their_semantic_theme_roles() {
         let config = ThemeConfig::new(
             ThemeColor::LightBlue,
@@ -762,7 +889,7 @@ mod tests {
 
         assert_eq!(
             controls_text(&app, &KeysConfig::default()),
-            "Discard progress and cycle session? [y/Enter] confirm [n/Esc] cancel"
+            "Discard progress and cycle session?  [y/Enter] confirm  [n/Esc] cancel"
         );
     }
 
@@ -775,7 +902,7 @@ mod tests {
 
         assert_eq!(
             controls_text(&app, &KeysConfig::default()),
-            "Quit and discard progress? [y/Enter] confirm [n/Esc] cancel"
+            "Quit and discard progress?  [y/Enter] confirm  [n/Esc] cancel"
         );
     }
 
@@ -826,7 +953,8 @@ mod tests {
         add_task(&mut app, "First");
         add_task(&mut app, "Second");
         let area = Rect::new(0, 0, 80, 24);
-        let layout = ui_layout(area);
+        let help = controls_text(&app, app.input_keys());
+        let layout = ui_layout(area, text_height(&wrap_help(&help, inner_width(area))));
 
         assert_eq!(
             click_target(area, (layout.clock.x, layout.clock.y), &app),
@@ -857,7 +985,8 @@ mod tests {
         }
         app.set_offsets(4, 0);
         let area = Rect::new(0, 0, 80, 24);
-        let layout = ui_layout(area);
+        let help = controls_text(&app, app.input_keys());
+        let layout = ui_layout(area, text_height(&wrap_help(&help, inner_width(area))));
 
         assert_eq!(
             click_target(area, (layout.todo.x + 1, layout.todo.y + 1), &app),
@@ -869,7 +998,8 @@ mod tests {
     fn click_translation_maps_all_visible_session_controls() {
         let app = App::new();
         let area = Rect::new(0, 0, 80, 24);
-        let layout = ui_layout(area);
+        let help = controls_text(&app, app.input_keys());
+        let layout = ui_layout(area, text_height(&wrap_help(&help, inner_width(area))));
         let controls = clock_layout(layout.clock).session_controls;
 
         for (control, session) in controls.into_iter().zip([
@@ -892,7 +1022,8 @@ mod tests {
             let _ = app.dispatch(Action::SettingsMove(true));
         }
         let area = Rect::new(0, 0, 80, 24);
-        let (list, _) = settings_parts(area);
+        let footer = settings_footer(app.settings().unwrap());
+        let (list, _) = settings_parts(area, &footer);
         let selected_row = settings_visual_row(25);
         let first_visible = settings_offset(selected_row, usize::from(list.height));
         let expected = settings_field_row(first_visible).unwrap();
@@ -923,7 +1054,8 @@ mod tests {
         assert!(!setting_row(SettingField::Key(KeyAction::FocusLeft), settings).contains("Keys /"));
 
         let area = Rect::new(0, 0, 80, 24);
-        let (list, _) = settings_parts(area);
+        let footer = settings_footer(app.settings().unwrap());
+        let (list, _) = settings_parts(area, &footer);
         for (group_index, (first_field, _)) in SETTINGS_GROUPS.iter().enumerate() {
             let heading_row = first_field + group_index;
             assert_eq!(
@@ -953,5 +1085,42 @@ mod tests {
         assert!(footer.contains("[Enter/Space] edit"));
         assert!(footer.contains("[t/Esc] close"));
         assert!(!footer.contains("[s/Esc] close"));
+    }
+
+    #[test]
+    fn narrow_settings_overlay_reserves_every_wrapped_help_row() {
+        let mut app = App::new();
+        let _ = app.dispatch(Action::OpenSettings);
+        let settings = app.settings().unwrap();
+        let area = Rect::new(0, 0, 40, 18);
+        let footer = settings_footer(settings);
+
+        let (list, footer_area) = settings_parts(area, &footer);
+        let wrapped = wrap_help(&footer, footer_area.width);
+
+        assert!(footer_area.height > 2);
+        assert_eq!(footer_area.height, text_height(&wrapped));
+        assert!(list.height > 0);
+        assert!(
+            wrapped
+                .lines()
+                .all(|line| Line::from(line).width() <= usize::from(footer_area.width))
+        );
+    }
+
+    #[test]
+    fn settings_help_wraps_between_complete_actions() {
+        let mut app = App::new();
+        let _ = app.dispatch(Action::OpenSettings);
+        let footer = settings_footer(app.settings().unwrap());
+
+        let wrapped = wrap_help(&footer, 24);
+
+        assert!(
+            wrapped
+                .lines()
+                .any(|line| line.contains("[Enter/Space] edit"))
+        );
+        assert!(wrapped.lines().any(|line| line.contains("[s/Esc] close")));
     }
 }
