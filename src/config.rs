@@ -484,6 +484,8 @@ mod tests {
             [ConfigKey::Character('k'), ConfigKey::Up]
         );
         assert_eq!(config.keys().settings(), [ConfigKey::Character('s')]);
+        assert_eq!(config.keys().move_task_up(), [ConfigKey::Character('u')]);
+        assert_eq!(config.keys().move_task_down(), [ConfigKey::Character('d')]);
     }
 
     #[test]
@@ -893,6 +895,23 @@ mod tests {
         assert!(error.to_string().contains(path.to_str().unwrap()));
         assert!(error.to_string().contains("keys.quit"));
         assert!(error.to_string().contains("keys.cycle_session"));
+        fs::remove_file(path).unwrap();
+    }
+
+    #[test]
+    fn task_movement_keys_share_task_context_validation() {
+        let path = temp_path("conflicting-task-movement-key.toml");
+        fs::write(
+            &path,
+            "[timer]\nfocus_minutes = 25\nshort_break_minutes = 5\nlong_break_minutes = 15\nlong_break_interval = 4\n\n[keys]\nmove_task_up = \"a\"\nmove_task_down = \"d\"\n",
+        )
+        .unwrap();
+
+        let error = Config::load_from(&path).unwrap_err();
+
+        assert!(matches!(error, ConfigError::Validation { .. }));
+        assert!(error.to_string().contains("keys.add_task"));
+        assert!(error.to_string().contains("keys.move_task_up"));
         fs::remove_file(path).unwrap();
     }
 

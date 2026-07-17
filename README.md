@@ -57,10 +57,11 @@ Controls are contextual to the focused box.
 
 ### To-do / Done
 
-- `j` / `k` or Down / Up — move the selected row.
+- `j` / `k` or Down / Up — move selection.
 - `a` — add a task.
 - `e` — edit the selected task.
 - `x` — delete the selected task.
+- `u` / `d` — move the selected task up or down.
 - `Space` — move the selected task to the other list.
 - Click a visible row — focus the box and select that row.
 - Double-click a visible row — move that task to the other list.
@@ -108,15 +109,6 @@ enabled = false
 persist = true
 show_numbers = true
 
-[theme]
-focused_border = "light_red"
-unfocused_border = "dark_gray"
-todo_highlight = "red"
-done_highlight = "green"
-focus = "magenta"
-short_break = "cyan"
-long_break = "green"
-
 [keys]
 focus_left = "H"
 focus_down = "J"
@@ -133,6 +125,17 @@ add_task = "a"
 edit_task = "e"
 delete_task = "x"
 task_primary = "space"
+move_task_up = "u"
+move_task_down = "d"
+
+[theme]
+focused_border = "light_red"
+unfocused_border = "dark_gray"
+todo_highlight = "red"
+done_highlight = "green"
+focus = "magenta"
+short_break = "cyan"
+long_break = "green"
 ```
 
 To customize them, create `pomock/config.toml`

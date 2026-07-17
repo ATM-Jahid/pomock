@@ -91,6 +91,12 @@ pub fn map_key(
         UiFocus::Todo | UiFocus::Done if key_matches_any(key, keys.task_primary()) => {
             Some(Action::PrimaryAction)
         }
+        UiFocus::Todo | UiFocus::Done if key_matches_any(key, keys.move_task_up()) => {
+            Some(Action::MoveSelectedTask(Direction::Up))
+        }
+        UiFocus::Todo | UiFocus::Done if key_matches_any(key, keys.move_task_down()) => {
+            Some(Action::MoveSelectedTask(Direction::Down))
+        }
         UiFocus::Todo | UiFocus::Done => row_direction(key, keys).map(Action::MoveSelection),
         _ => None,
     }
@@ -208,6 +214,14 @@ mod tests {
         assert_eq!(
             map_default(KeyCode::Down, EditMode::Normal, UiFocus::Clock, false),
             None
+        );
+        assert_eq!(
+            map_default(KeyCode::Char('u'), EditMode::Normal, UiFocus::Todo, false),
+            Some(Action::MoveSelectedTask(Direction::Up))
+        );
+        assert_eq!(
+            map_default(KeyCode::Char('d'), EditMode::Normal, UiFocus::Done, false),
+            Some(Action::MoveSelectedTask(Direction::Down))
         );
     }
 
@@ -375,6 +389,48 @@ mod tests {
                     key,
                     EditMode::Normal,
                     UiFocus::Done,
+                    false,
+                    SettingsMode::Closed,
+                    &keys
+                ),
+                None
+            );
+        }
+    }
+
+    #[test]
+    fn configured_task_movement_keys_replace_the_defaults() {
+        let keys: KeysConfig =
+            toml::from_str("move_task_up = \"w\"\nmove_task_down = \"z\"\n").unwrap();
+
+        assert_eq!(
+            map_key(
+                KeyCode::Char('w'),
+                EditMode::Normal,
+                UiFocus::Todo,
+                false,
+                SettingsMode::Closed,
+                &keys
+            ),
+            Some(Action::MoveSelectedTask(Direction::Up))
+        );
+        assert_eq!(
+            map_key(
+                KeyCode::Char('z'),
+                EditMode::Normal,
+                UiFocus::Done,
+                false,
+                SettingsMode::Closed,
+                &keys
+            ),
+            Some(Action::MoveSelectedTask(Direction::Down))
+        );
+        for key in [KeyCode::Char('u'), KeyCode::Char('d')] {
+            assert_eq!(
+                map_key(
+                    key,
+                    EditMode::Normal,
+                    UiFocus::Todo,
                     false,
                     SettingsMode::Closed,
                     &keys

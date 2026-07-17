@@ -34,6 +34,7 @@ pub enum Action {
     Quit,
     NavigateFocus(Direction),
     MoveSelection(Direction),
+    MoveSelectedTask(Direction),
     PrimaryAction,
     CycleSession,
     ResetSession,
@@ -298,6 +299,11 @@ impl App {
                 UiFocus::Todo => self.move_todo_selection(direction),
                 UiFocus::Done => self.move_done_selection(direction),
             },
+            Action::MoveSelectedTask(direction) => {
+                if self.move_selected_task(direction) {
+                    return AppOutcome::TasksChanged;
+                }
+            }
             Action::PrimaryAction => match self.ui_focus {
                 UiFocus::Clock => self.clock_primary_action(),
                 UiFocus::Todo => {
@@ -710,6 +716,42 @@ impl App {
     fn move_done_selection(&mut self, direction: Direction) {
         let len = self.tasks.completed().count();
         Self::move_selection(&mut self.done_selection, len, direction);
+    }
+
+    fn move_selected_task(&mut self, direction: Direction) -> bool {
+        match (self.ui_focus, direction) {
+            (UiFocus::Todo, Direction::Up) => {
+                let changed = self.tasks.move_pending_up(self.todo_selection);
+                if changed {
+                    self.todo_selection -= 1;
+                    self.todo_offset = self.todo_offset.min(self.todo_selection);
+                }
+                changed
+            }
+            (UiFocus::Todo, Direction::Down) => {
+                let changed = self.tasks.move_pending_down(self.todo_selection);
+                if changed {
+                    self.todo_selection += 1;
+                }
+                changed
+            }
+            (UiFocus::Done, Direction::Up) => {
+                let changed = self.tasks.move_completed_up(self.done_selection);
+                if changed {
+                    self.done_selection -= 1;
+                    self.done_offset = self.done_offset.min(self.done_selection);
+                }
+                changed
+            }
+            (UiFocus::Done, Direction::Down) => {
+                let changed = self.tasks.move_completed_down(self.done_selection);
+                if changed {
+                    self.done_selection += 1;
+                }
+                changed
+            }
+            (UiFocus::Clock, _) | (_, Direction::Left | Direction::Right) => false,
+        }
     }
 
     fn edit_selected_todo(&mut self) {
@@ -1368,6 +1410,54 @@ mod tests {
         assert_eq!(app.todo_selection(), 1);
         let _ = app.dispatch(Action::MoveSelection(Direction::Up));
         assert_eq!(app.todo_selection(), 0);
+    }
+
+    #[test]
+    fn moving_selected_tasks_reorders_each_list_and_keeps_the_item_selected() {
+        let state = TaskState::from_lists(
+            vec!["Todo first".to_string(), "Todo selected".to_string()],
+            vec!["Done selected".to_string(), "Done second".to_string()],
+        );
+        let mut app = App::from_config_and_tasks(&Config::default(), state);
+        let _ = app.dispatch(Action::NavigateFocus(Direction::Down));
+        let _ = app.dispatch(Action::MoveSelection(Direction::Down));
+
+        assert_eq!(
+            app.dispatch(Action::MoveSelectedTask(Direction::Up)),
+            AppOutcome::TasksChanged
+        );
+        assert_eq!(app.todo_selection(), 0);
+        assert_eq!(
+            app.tasks()
+                .pending()
+                .map(|task| task.description())
+                .collect::<Vec<_>>(),
+            ["Todo selected", "Todo first"]
+        );
+        assert_eq!(
+            app.dispatch(Action::MoveSelectedTask(Direction::Up)),
+            AppOutcome::None
+        );
+        assert_eq!(app.todo_selection(), 0);
+
+        let _ = app.dispatch(Action::NavigateFocus(Direction::Right));
+        assert_eq!(
+            app.dispatch(Action::MoveSelectedTask(Direction::Down)),
+            AppOutcome::TasksChanged
+        );
+        assert_eq!(app.done_selection(), 1);
+        assert_eq!(
+            app.tasks()
+                .completed()
+                .map(|task| task.description())
+                .collect::<Vec<_>>(),
+            ["Done second", "Done selected"]
+        );
+        assert_eq!(
+            app.dispatch(Action::MoveSelectedTask(Direction::Down)),
+            AppOutcome::None
+        );
+        assert_eq!(app.done_selection(), 1);
     }
 
     #[test]

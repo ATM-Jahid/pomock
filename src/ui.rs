@@ -498,6 +498,10 @@ fn controls_text(app: &App, keys: &KeysConfig) -> String {
             ]);
             let list_navigation =
                 key_labels(&[first_key(keys.list_down()), first_key(keys.list_up())]);
+            let item_movement = key_labels(&[
+                first_key(keys.move_task_up()),
+                first_key(keys.move_task_down()),
+            ]);
             let quit = format_key(first_key(keys.quit()));
             let settings = format_key(first_key(keys.settings()));
             match app.ui_focus() {
@@ -508,14 +512,14 @@ fn controls_text(app: &App, keys: &KeysConfig) -> String {
                     format_key(first_key(keys.reset_session())),
                 ),
                 UiFocus::Todo => format!(
-                    "[{focus_navigation}] box nav  [{list_navigation}] list nav  [{}] add  [{}] edit  [{}] delete  [{}] complete  [{settings}] settings  [{quit}] quit",
+                    "[{focus_navigation}] box nav  [{list_navigation}] list nav  [{item_movement}] move list item  [{}] add  [{}] edit  [{}] delete  [{}] complete  [{settings}] settings  [{quit}] quit",
                     format_key(first_key(keys.add_task())),
                     format_key(first_key(keys.edit_task())),
                     format_key(first_key(keys.delete_task())),
                     format_key(first_key(keys.task_primary())),
                 ),
                 UiFocus::Done => format!(
-                    "[{focus_navigation}] box nav  [{list_navigation}] list nav  [{}] add  [{}] edit  [{}] delete  [{}] return  [{settings}] settings  [{quit}] quit",
+                    "[{focus_navigation}] box nav  [{list_navigation}] list nav  [{item_movement}] move list item  [{}] add  [{}] edit  [{}] delete  [{}] return  [{settings}] settings  [{quit}] quit",
                     format_key(first_key(keys.add_task())),
                     format_key(first_key(keys.edit_task())),
                     format_key(first_key(keys.delete_task())),
@@ -827,6 +831,8 @@ fn key_action_label(action: KeyAction) -> &'static str {
         KeyAction::EditTask => "  Edit task",
         KeyAction::DeleteTask => "  Delete task",
         KeyAction::TaskPrimary => "  Task primary",
+        KeyAction::MoveTaskUp => "  Move task up",
+        KeyAction::MoveTaskDown => "  Move task down",
     }
 }
 
@@ -895,6 +901,7 @@ mod tests {
         assert!(help.contains("[j/k] list nav"));
         assert!(!help.contains('↓'));
         assert!(!help.contains('↑'));
+        assert!(help.contains("[u/d] move list item"));
     }
 
     #[test]
@@ -1071,6 +1078,19 @@ mod tests {
         assert!(help.contains("[Enter] start/pause"));
         assert!(help.contains("[n] cycle session"));
         assert!(!help.contains("[c] cycle session"));
+    }
+
+    #[test]
+    fn task_help_uses_configured_item_movement_keys() {
+        let mut app = App::new();
+        let _ = app.dispatch(Action::NavigateFocus(Direction::Down));
+        let keys: KeysConfig =
+            toml::from_str("move_task_up = \"w\"\nmove_task_down = \"z\"\n").unwrap();
+
+        let help = controls_text(&app, &keys);
+
+        assert!(help.contains("[w/z] move list item"));
+        assert!(!help.contains("[u/d] move list item"));
     }
 
     #[test]

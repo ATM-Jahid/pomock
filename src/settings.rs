@@ -23,7 +23,7 @@ pub(crate) enum SettingField {
 }
 
 impl SettingField {
-    pub(crate) const ALL: [Self; 33] = [
+    pub(crate) const ALL: [Self; 35] = [
         Self::FocusMinutes,
         Self::ShortBreakMinutes,
         Self::LongBreakMinutes,
@@ -50,6 +50,8 @@ impl SettingField {
         Self::Key(KeyAction::EditTask),
         Self::Key(KeyAction::DeleteTask),
         Self::Key(KeyAction::TaskPrimary),
+        Self::Key(KeyAction::MoveTaskUp),
+        Self::Key(KeyAction::MoveTaskDown),
         Self::Theme(ThemeRole::FocusedBorder),
         Self::Theme(ThemeRole::UnfocusedBorder),
         Self::Theme(ThemeRole::TodoHighlight),

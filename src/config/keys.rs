@@ -167,6 +167,8 @@ pub struct KeysConfig {
     pub(super) edit_task: KeyBindings,
     pub(super) delete_task: KeyBindings,
     pub(super) task_primary: KeyBindings,
+    pub(super) move_task_up: KeyBindings,
+    pub(super) move_task_down: KeyBindings,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -186,6 +188,8 @@ pub enum KeyAction {
     EditTask,
     DeleteTask,
     TaskPrimary,
+    MoveTaskUp,
+    MoveTaskDown,
 }
 
 impl KeysConfig {
@@ -234,6 +238,12 @@ impl KeysConfig {
     pub fn task_primary(&self) -> &[ConfigKey] {
         self.task_primary.as_slice()
     }
+    pub fn move_task_up(&self) -> &[ConfigKey] {
+        self.move_task_up.as_slice()
+    }
+    pub fn move_task_down(&self) -> &[ConfigKey] {
+        self.move_task_down.as_slice()
+    }
 
     pub fn binding(&self, action: KeyAction) -> &[ConfigKey] {
         match action {
@@ -252,6 +262,8 @@ impl KeysConfig {
             KeyAction::EditTask => self.edit_task(),
             KeyAction::DeleteTask => self.delete_task(),
             KeyAction::TaskPrimary => self.task_primary(),
+            KeyAction::MoveTaskUp => self.move_task_up(),
+            KeyAction::MoveTaskDown => self.move_task_down(),
         }
     }
 
@@ -273,6 +285,8 @@ impl KeysConfig {
             KeyAction::EditTask => self.edit_task = binding,
             KeyAction::DeleteTask => self.delete_task = binding,
             KeyAction::TaskPrimary => self.task_primary = binding,
+            KeyAction::MoveTaskUp => self.move_task_up = binding,
+            KeyAction::MoveTaskDown => self.move_task_down = binding,
         }
         self
     }
@@ -294,6 +308,8 @@ impl KeysConfig {
             ("edit_task", self.edit_task()),
             ("delete_task", self.delete_task()),
             ("task_primary", self.task_primary()),
+            ("move_task_up", self.move_task_up()),
+            ("move_task_down", self.move_task_down()),
         ];
         for (field, keys) in bindings {
             if keys.is_empty() {
@@ -351,6 +367,8 @@ impl Default for KeysConfig {
             edit_task: KeyBindings::one(ConfigKey::Character('e')),
             delete_task: KeyBindings::one(ConfigKey::Character('x')),
             task_primary: KeyBindings::one(ConfigKey::Space),
+            move_task_up: KeyBindings::one(ConfigKey::Character('u')),
+            move_task_down: KeyBindings::one(ConfigKey::Character('d')),
         }
     }
 }

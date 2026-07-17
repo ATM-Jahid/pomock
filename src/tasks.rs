@@ -81,6 +81,38 @@ impl TaskList {
         true
     }
 
+    pub fn move_pending_up(&mut self, index: usize) -> bool {
+        Self::move_up(&mut self.pending, index)
+    }
+
+    pub fn move_pending_down(&mut self, index: usize) -> bool {
+        Self::move_down(&mut self.pending, index)
+    }
+
+    pub fn move_completed_up(&mut self, index: usize) -> bool {
+        Self::move_up(&mut self.completed, index)
+    }
+
+    pub fn move_completed_down(&mut self, index: usize) -> bool {
+        Self::move_down(&mut self.completed, index)
+    }
+
+    fn move_up(tasks: &mut [Task], index: usize) -> bool {
+        if index == 0 || index >= tasks.len() {
+            return false;
+        }
+        tasks.swap(index, index - 1);
+        true
+    }
+
+    fn move_down(tasks: &mut [Task], index: usize) -> bool {
+        if index >= tasks.len().saturating_sub(1) {
+            return false;
+        }
+        tasks.swap(index, index + 1);
+        true
+    }
+
     pub fn delete_pending(&mut self, index: usize) -> bool {
         Self::delete(&mut self.pending, index)
     }
@@ -203,5 +235,24 @@ mod tests {
 
         assert_eq!(descriptions(tasks.pending()), ["Keep"]);
         assert!(tasks.completed().next().is_none());
+    }
+
+    #[test]
+    fn reordering_is_local_to_each_list_and_stops_at_boundaries() {
+        let mut tasks = TaskList::from_descriptions(
+            vec!["First".to_string(), "Second".to_string()],
+            vec!["Done first".to_string(), "Done second".to_string()],
+        );
+
+        assert!(tasks.move_pending_up(1));
+        assert!(!tasks.move_pending_up(0));
+        assert!(tasks.move_completed_down(0));
+        assert!(!tasks.move_completed_down(1));
+
+        assert_eq!(descriptions(tasks.pending()), ["Second", "First"]);
+        assert_eq!(
+            descriptions(tasks.completed()),
+            ["Done second", "Done first"]
+        );
     }
 }
