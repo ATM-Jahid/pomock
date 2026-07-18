@@ -1045,12 +1045,13 @@ mod tests {
 
     #[test]
     fn only_the_current_session_button_uses_its_session_color() {
-        let theme = Theme::from(&ThemeConfig::default());
+        let config = ThemeConfig::default().with_color(ThemeRole::Focus, ThemeColor::Red);
+        let theme = Theme::from(&config);
 
         let current = session_button_style(SessionKind::Focus, SessionKind::Focus, theme);
         let inactive = session_button_style(SessionKind::ShortBreak, SessionKind::Focus, theme);
 
-        assert_eq!(current.fg, Some(Color::LightRed));
+        assert_eq!(current.fg, Some(Color::Red));
         assert!(current.add_modifier.contains(Modifier::REVERSED));
         assert_eq!(inactive, Style::default());
     }

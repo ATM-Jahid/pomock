@@ -682,6 +682,8 @@ mod tests {
     fn booleans_and_theme_colors_update_the_overlay_config() {
         let original = Config::default();
         let mut settings = SettingsOverlay::new(&original);
+        let original_border = original.theme().color(ThemeRole::FocusedBorder);
+        let original_focus = original.theme().color(ThemeRole::Focus);
         select(&mut settings, SettingField::PersistTasks);
         settings.adjust(true);
         select(&mut settings, SettingField::Theme(ThemeRole::FocusedBorder));
@@ -690,17 +692,20 @@ mod tests {
         assert!(!settings.config().tasks().persist());
         assert_eq!(
             settings.config().theme().color(ThemeRole::FocusedBorder),
-            ThemeColor::Blue
+            original_border.cycle(true)
         );
         assert!(original.tasks().persist());
         assert_eq!(
             original.theme().color(ThemeRole::FocusedBorder),
-            ThemeColor::Yellow
+            original_border
         );
 
         select(&mut settings, SettingField::Theme(ThemeRole::Focus));
         settings.adjust(true);
-        assert_eq!(settings.config().theme().focus(), ThemeColor::LightGreen);
+        assert_eq!(
+            settings.config().theme().focus(),
+            original_focus.cycle(true)
+        );
     }
 
     #[test]
@@ -708,7 +713,8 @@ mod tests {
         let mut settings = SettingsOverlay::new(&Config::default());
         select(&mut settings, SettingField::Theme(ThemeRole::FocusedBorder));
         settings.activate();
-        for _ in 0.."yellow".len() {
+        let original_length = settings.input().unwrap().chars().count();
+        for _ in 0..original_length {
             settings.pop_input();
         }
         for character in "#5FD7fF".chars() {
@@ -725,9 +731,11 @@ mod tests {
     #[test]
     fn invalid_color_edits_leave_the_config_unchanged() {
         let mut settings = SettingsOverlay::new(&Config::default());
+        let original = settings.config().theme().focused_border();
         select(&mut settings, SettingField::Theme(ThemeRole::FocusedBorder));
         settings.activate();
-        for _ in 0.."yellow".len() {
+        let original_length = settings.input().unwrap().chars().count();
+        for _ in 0..original_length {
             settings.pop_input();
         }
         for character in "#12345".chars() {
@@ -736,10 +744,7 @@ mod tests {
 
         settings.submit_input();
 
-        assert_eq!(
-            settings.config().theme().focused_border(),
-            ThemeColor::Yellow
-        );
+        assert_eq!(settings.config().theme().focused_border(), original);
         assert!(settings.error().unwrap().contains("#RRGGBB"));
     }
 

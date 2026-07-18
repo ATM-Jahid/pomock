@@ -249,10 +249,10 @@ mod tests {
     use super::*;
 
     #[test]
-    fn default_session_colors_are_distinct_semantic_roles() {
+    fn default_session_colors_match_the_documented_configuration() {
         let theme = ThemeConfig::default();
 
-        assert_eq!(theme.focus(), ThemeColor::LightRed);
+        assert_eq!(theme.focus(), ThemeColor::Magenta);
         assert_eq!(theme.short_break(), ThemeColor::Cyan);
         assert_eq!(theme.long_break(), ThemeColor::Green);
     }
