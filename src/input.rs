@@ -223,6 +223,14 @@ mod tests {
             map_default(KeyCode::Char('d'), EditMode::Normal, UiFocus::Done, false),
             Some(Action::MoveSelectedTask(Direction::Down))
         );
+        assert_eq!(
+            map_default(KeyCode::Char('c'), EditMode::Normal, UiFocus::Clock, false),
+            Some(Action::CycleSession)
+        );
+        assert_eq!(
+            map_default(KeyCode::Char('c'), EditMode::Normal, UiFocus::Todo, false),
+            None
+        );
     }
 
     #[test]
@@ -277,18 +285,6 @@ mod tests {
                 expected
             );
         }
-    }
-
-    #[test]
-    fn maps_cycle_session_to_c_only_in_clock_context() {
-        assert_eq!(
-            map_default(KeyCode::Char('c'), EditMode::Normal, UiFocus::Clock, false),
-            Some(Action::CycleSession)
-        );
-        assert_eq!(
-            map_default(KeyCode::Char('n'), EditMode::Normal, UiFocus::Clock, false),
-            None
-        );
     }
 
     #[test]

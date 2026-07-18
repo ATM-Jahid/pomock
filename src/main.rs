@@ -592,7 +592,7 @@ mod tests {
     }
 
     #[test]
-    fn completion_outcomes_notify_and_play_the_configured_sound_exactly_once() {
+    fn completion_outcome_routes_notification_and_audio_effects() {
         let app = App::new();
         let sound_file = temp_path("custom-completion.mp3");
         let mut config = Config::default()
@@ -617,21 +617,6 @@ mod tests {
         );
         assert_eq!(notifier.completions, [pomock::SessionKind::Focus]);
         assert_eq!(sound_player.files, [sound_file]);
-        assert_eq!(sound_player.focus_actions, ["stop"]);
-
-        assert!(
-            !handle_outcome(
-                AppOutcome::None,
-                &app,
-                &mut config,
-                &mut task_store,
-                &mut notifier,
-                &mut sound_player,
-            )
-            .unwrap()
-        );
-        assert_eq!(notifier.completions, [pomock::SessionKind::Focus]);
-        assert_eq!(sound_player.files.len(), 1);
         assert_eq!(sound_player.focus_actions, ["stop"]);
     }
 

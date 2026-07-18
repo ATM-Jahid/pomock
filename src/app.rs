@@ -1282,25 +1282,18 @@ mod tests {
     }
 
     #[test]
-    fn tick_reports_focus_completion_exactly_once() {
-        let mut app = App::new();
-        let _ = app.dispatch(Action::PrimaryAction);
-
-        assert_eq!(
-            app.tick(Duration::from_secs(25 * 60)),
-            AppOutcome::SessionCompleted(SessionKind::Focus)
-        );
-        assert_eq!(app.tick(Duration::from_secs(1)), AppOutcome::None);
-    }
-
-    #[test]
-    fn tick_reports_each_break_completion_exactly_once() {
+    fn tick_reports_each_session_completion_exactly_once() {
         for (session, duration) in [
+            (SessionKind::Focus, Duration::from_secs(25 * 60)),
             (SessionKind::ShortBreak, Duration::from_secs(5 * 60)),
             (SessionKind::LongBreak, Duration::from_secs(15 * 60)),
         ] {
             let mut app = App::new();
-            double_click_session(&mut app, session, Instant::now());
+            if session == SessionKind::Focus {
+                let _ = app.dispatch(Action::PrimaryAction);
+            } else {
+                double_click_session(&mut app, session, Instant::now());
+            }
 
             assert_eq!(app.tick(duration), AppOutcome::SessionCompleted(session));
             assert_eq!(app.tick(Duration::from_secs(1)), AppOutcome::None);
@@ -2099,35 +2092,28 @@ mod tests {
     }
 
     #[test]
-    fn settings_open_and_close_do_not_change_running_activity() {
-        let mut app = App::new();
-        let _ = app.dispatch(Action::PrimaryAction);
+    fn settings_preserve_running_and_paused_activity() {
+        for initially_paused in [false, true] {
+            let mut app = active_focus(Duration::from_secs(1), initially_paused);
+            let expected_state = if initially_paused {
+                TimerState::Paused(SessionKind::Focus)
+            } else {
+                TimerState::Running(SessionKind::Focus)
+            };
 
-        assert_eq!(app.dispatch(Action::OpenSettings), AppOutcome::None);
-        assert_eq!(app.timer().state(), TimerState::Running(SessionKind::Focus));
-        assert!(app.is_settings_open());
-        assert_eq!(app.tick(Duration::from_secs(1)), AppOutcome::None);
-        assert_eq!(app.timer().progress(), Duration::from_secs(1));
+            assert_eq!(app.dispatch(Action::OpenSettings), AppOutcome::None);
+            assert_eq!(app.timer().state(), expected_state);
+            assert!(app.is_settings_open());
+            assert_eq!(app.tick(Duration::from_secs(1)), AppOutcome::None);
+            assert_eq!(
+                app.timer().progress(),
+                Duration::from_secs(if initially_paused { 1 } else { 2 })
+            );
 
-        assert_eq!(app.dispatch(Action::SettingsClose), AppOutcome::None);
-        assert_eq!(app.timer().state(), TimerState::Running(SessionKind::Focus));
-        assert!(!app.is_settings_open());
-    }
-
-    #[test]
-    fn settings_open_and_close_do_not_change_paused_activity() {
-        let mut app = App::new();
-        let _ = app.dispatch(Action::PrimaryAction);
-        let _ = app.tick(Duration::from_secs(1));
-        let _ = app.dispatch(Action::PrimaryAction);
-
-        let _ = app.dispatch(Action::OpenSettings);
-        assert_eq!(app.timer().state(), TimerState::Paused(SessionKind::Focus));
-        assert_eq!(app.tick(Duration::from_secs(1)), AppOutcome::None);
-        assert_eq!(app.timer().progress(), Duration::from_secs(1));
-
-        let _ = app.dispatch(Action::SettingsClose);
-        assert_eq!(app.timer().state(), TimerState::Paused(SessionKind::Focus));
+            assert_eq!(app.dispatch(Action::SettingsClose), AppOutcome::None);
+            assert_eq!(app.timer().state(), expected_state);
+            assert!(!app.is_settings_open());
+        }
     }
 
     #[test]

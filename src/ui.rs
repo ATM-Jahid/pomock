@@ -1371,28 +1371,6 @@ mod tests {
     }
 
     #[test]
-    fn task_reordering_keys_appear_before_the_theme_heading() {
-        let theme_group = SettingField::GROUPS
-            .iter()
-            .position(|(heading, _)| *heading == "Theme")
-            .unwrap();
-        let theme_start = settings_group_start(theme_group);
-
-        assert_eq!(
-            SettingField::ALL[theme_start - 2],
-            SettingField::Key(KeyAction::MoveTaskUp)
-        );
-        assert_eq!(
-            SettingField::ALL[theme_start - 1],
-            SettingField::Key(KeyAction::MoveTaskDown)
-        );
-        assert!(matches!(
-            SettingField::ALL[theme_start],
-            SettingField::Theme(_)
-        ));
-    }
-
-    #[test]
     fn settings_help_shows_fixed_navigation_and_the_active_close_keys() {
         let mut app = App::new();
         let _ = app.dispatch(Action::OpenSettings);

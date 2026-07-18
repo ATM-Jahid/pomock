@@ -103,18 +103,14 @@ mod tests {
     use std::time::Duration;
 
     #[test]
-    fn formats_zero_seconds() {
-        assert_eq!(format_duration(Duration::ZERO), "00:00");
-    }
-
-    #[test]
-    fn formats_seconds_with_leading_zero() {
-        assert_eq!(format_duration(Duration::from_secs(9)), "00:09");
-    }
-
-    #[test]
-    fn formats_minutes_and_seconds() {
-        assert_eq!(format_duration(Duration::from_secs(65)), "01:05");
+    fn formats_durations_as_zero_padded_minutes_and_seconds() {
+        for (duration, expected) in [
+            (Duration::ZERO, "00:00"),
+            (Duration::from_secs(9), "00:09"),
+            (Duration::from_secs(65), "01:05"),
+        ] {
+            assert_eq!(format_duration(duration), expected);
+        }
     }
 
     #[test]

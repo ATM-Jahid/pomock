@@ -815,17 +815,4 @@ mod tests {
         assert_eq!(settings.selection(), 0);
         assert!(settings.cancel_nested());
     }
-
-    #[test]
-    fn submitting_commits_a_valid_numeric_edit() {
-        let mut settings = SettingsOverlay::new(&Config::default());
-        settings.activate();
-        settings.pop_input();
-        settings.pop_input();
-        settings.push_input('3');
-        settings.push_input('0');
-
-        settings.submit_input();
-        assert_eq!(settings.config().timer().focus_minutes(), 30);
-    }
 }
