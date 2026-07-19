@@ -507,9 +507,9 @@ fn task_row_at(position: (u16, u16), area: Rect, offset: usize, len: usize) -> O
 
 fn task_label(index: usize, description: &str, show_numbers: bool) -> String {
     if show_numbers {
-        format!("  {}. {description}", index + 1)
+        format!("{}. {description}", index + 1)
     } else {
-        format!("  {description}")
+        description.to_string()
     }
 }
 
@@ -1503,9 +1503,9 @@ mod tests {
 
     #[test]
     fn task_labels_can_show_or_hide_one_based_numbers() {
-        assert_eq!(task_label(0, "First", true), "  1. First");
-        assert_eq!(task_label(11, "Twelfth", true), "  12. Twelfth");
-        assert_eq!(task_label(0, "First", false), "  First");
+        assert_eq!(task_label(0, "First", true), "1. First");
+        assert_eq!(task_label(11, "Twelfth", true), "12. Twelfth");
+        assert_eq!(task_label(0, "First", false), "First");
     }
 
     #[test]
