@@ -247,7 +247,7 @@ impl fmt::Display for ConfigValidationError {
             Self::InvalidDuration { field } => {
                 write!(
                     formatter,
-                    "{field} must use MM:SS with seconds from 00 to 59"
+                    "{field} must use MM:SS with minutes from 00 to 9999 and seconds from 00 to 59"
                 )
             }
             Self::ZeroLongBreakInterval => {

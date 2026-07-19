@@ -663,7 +663,7 @@ mod tests {
     fn duration_edits_require_mm_ss_and_reject_invalid_seconds() {
         let mut settings = SettingsOverlay::new(&Config::default());
 
-        for invalid in ["5:30", "05:60", "00:00", "05"] {
+        for invalid in ["5:30", "05:60", "00:00", "05", "10000:00"] {
             settings.activate();
             for _ in 0..settings.input().unwrap().len() {
                 settings.pop_input();
@@ -679,6 +679,21 @@ mod tests {
             );
             assert!(settings.error().is_some(), "{invalid} should be rejected");
         }
+
+        settings.activate();
+        for _ in 0..settings.input().unwrap().len() {
+            settings.pop_input();
+        }
+        for character in "9999:59".chars() {
+            settings.push_input(character);
+        }
+        settings.submit_input();
+
+        assert_eq!(
+            settings.config().timer().focus_duration().as_secs(),
+            9999 * 60 + 59
+        );
+        assert!(settings.error().is_none());
     }
 
     #[test]

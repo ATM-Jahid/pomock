@@ -9,7 +9,6 @@ const BIG_GLYPH_HEIGHT: usize = 5;
 const BIG_ON: &str = "██";
 const BIG_OFF: &str = "  ";
 pub const BIG_DURATION_HEIGHT: u16 = 5;
-pub const BIG_DURATION_WIDTH: u16 = 30;
 
 pub fn format_duration(duration: Duration) -> String {
     let total_seconds = duration.as_secs();
@@ -21,6 +20,17 @@ pub fn format_duration(duration: Duration) -> String {
 
 pub fn format_big_duration_at_scale(duration: Duration, scale: u16) -> String {
     render_big_text(&format_duration(duration), usize::from(scale.max(1)))
+}
+
+pub fn big_duration_width(duration: Duration) -> u16 {
+    let text = format_duration(duration);
+    let glyph_width = text
+        .chars()
+        .map(|character| if character == ':' { 2 } else { 6 })
+        .sum::<u16>();
+    let gaps = u16::try_from(text.len().saturating_sub(1)).unwrap_or(u16::MAX);
+
+    glyph_width.saturating_add(gaps)
 }
 
 pub fn format_state(state: TimerState) -> &'static str {
@@ -128,6 +138,24 @@ mod tests {
 
         assert!(lines.all(|line| line.chars().count() == first_line_width));
         assert_eq!(first_line_width, 30);
+    }
+
+    #[test]
+    fn big_duration_width_tracks_the_number_of_minute_glyphs() {
+        for (duration, expected) in [
+            (Duration::from_secs(25 * 60), 30),
+            (Duration::from_secs(9999 * 60 + 59), 44),
+        ] {
+            let rendered_width = format_big_duration_at_scale(duration, 1)
+                .lines()
+                .next()
+                .unwrap()
+                .chars()
+                .count();
+
+            assert_eq!(big_duration_width(duration), expected);
+            assert_eq!(usize::from(big_duration_width(duration)), rendered_width);
+        }
     }
 
     #[test]

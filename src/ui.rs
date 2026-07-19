@@ -10,7 +10,7 @@ use crate::{
     app::{App, ClickTarget, ConfirmationOperation, EditMode, ScrollTarget, TimerChange, UiFocus},
     config::{ConfigKey, KeyAction, KeysConfig, ThemeColor, ThemeConfig, ThemeRole},
     display::{
-        BIG_DURATION_HEIGHT, BIG_DURATION_WIDTH, format_big_duration_at_scale, format_key,
+        BIG_DURATION_HEIGHT, big_duration_width, format_big_duration_at_scale, format_key,
         format_state,
     },
     settings::SettingField,
@@ -106,7 +106,8 @@ pub fn draw(frame: &mut Frame, app: &mut App, theme: Theme, keys: &KeysConfig) {
 
     let clock_block = focused_block("Clock", app.ui_focus() == UiFocus::Clock, theme);
     frame.render_widget(clock_block, layout.clock);
-    let clock_layout = clock_layout(layout.clock);
+    let remaining_duration = app.timer().remaining();
+    let clock_layout = clock_layout(layout.clock, remaining_duration);
 
     let state_text = app.pending_autostart().map_or_else(
         || format_state(app.timer().state()).to_string(),
@@ -114,7 +115,7 @@ pub fn draw(frame: &mut Frame, app: &mut App, theme: Theme, keys: &KeysConfig) {
     );
     let state = Paragraph::new(state_text).alignment(Alignment::Center);
     let remaining = Paragraph::new(format_big_duration_at_scale(
-        app.timer().remaining(),
+        remaining_duration,
         clock_layout.glyph_scale,
     ))
     .alignment(Alignment::Center)
@@ -263,7 +264,7 @@ pub fn click_target(area: Rect, position: (u16, u16), app: &App) -> ClickTarget 
     let layout = ui_layout(area, text_height(&controls_text));
     let point = position.into();
 
-    if let Some(session) = session_control_at(layout.clock, point) {
+    if let Some(session) = session_control_at(layout.clock, app.timer().remaining(), point) {
         ClickTarget::SessionControl(session)
     } else if layout.clock.contains(point) {
         ClickTarget::Clock
@@ -309,13 +310,13 @@ pub fn scroll_target(area: Rect, position: (u16, u16), app: &App) -> Option<Scro
     }
 }
 
-fn clock_layout(area: Rect) -> ClockLayout {
+fn clock_layout(area: Rect, duration: std::time::Duration) -> ClockLayout {
     const SPACED_CLOCK_MIN_INNER_HEIGHT: u16 = 12;
     // Two gaps, two outer padding rows, and the status, count, and controls rows.
     const NON_GLYPH_SPACED_HEIGHT: u16 = 7;
 
     let inner = Block::default().borders(Borders::ALL).inner(area);
-    let scale_for_width = inner.width / BIG_DURATION_WIDTH;
+    let scale_for_width = inner.width / big_duration_width(duration);
     let scale_for_height =
         inner.height.saturating_sub(NON_GLYPH_SPACED_HEIGHT) / BIG_DURATION_HEIGHT;
     let glyph_scale = scale_for_width.min(scale_for_height).max(1);
@@ -355,8 +356,12 @@ fn clock_layout(area: Rect) -> ClockLayout {
     }
 }
 
-fn session_control_at(area: Rect, point: ratatui::layout::Position) -> Option<SessionKind> {
-    let controls = clock_layout(area).session_controls;
+fn session_control_at(
+    area: Rect,
+    duration: std::time::Duration,
+    point: ratatui::layout::Position,
+) -> Option<SessionKind> {
+    let controls = clock_layout(area, duration).session_controls;
     [
         SessionKind::Focus,
         SessionKind::ShortBreak,
@@ -726,7 +731,7 @@ fn settings_footer(settings: &crate::settings::SettingsOverlay) -> String {
             }
             SettingField::FocusDuration
             | SettingField::ShortBreakDuration
-            | SettingField::LongBreakDuration => "Type a duration as MM:SS",
+            | SettingField::LongBreakDuration => "Type a duration as MM:SS (max 9999:59)",
             _ => "Type a positive number",
         };
         format!("{prompt}  [Enter] apply  [Esc] cancel")
@@ -972,7 +977,7 @@ mod tests {
 
     #[test]
     fn clock_content_is_centered_with_equal_internal_gaps() {
-        let layout = clock_layout(Rect::new(0, 0, 80, 18));
+        let layout = clock_layout(Rect::new(0, 0, 80, 18), Duration::from_secs(25 * 60));
 
         assert_eq!(layout.remaining.height, 5);
         assert_eq!(layout.remaining.y, layout.state.y + layout.state.height + 1);
@@ -989,7 +994,7 @@ mod tests {
 
     #[test]
     fn compact_clock_removes_internal_gaps_before_squeezing_content() {
-        let layout = clock_layout(Rect::new(0, 0, 80, 10));
+        let layout = clock_layout(Rect::new(0, 0, 80, 10), Duration::from_secs(25 * 60));
 
         assert_eq!(layout.remaining.height, 5);
         assert_eq!(layout.remaining.y, layout.state.y + layout.state.height);
@@ -1006,16 +1011,25 @@ mod tests {
 
     #[test]
     fn roomy_clock_scales_glyphs_to_available_width_and_height() {
-        let layout = clock_layout(Rect::new(0, 0, 80, 19));
+        let layout = clock_layout(Rect::new(0, 0, 80, 19), Duration::from_secs(25 * 60));
 
         assert_eq!(layout.glyph_scale, 2);
         assert_eq!(layout.remaining.height, 10);
     }
 
     #[test]
+    fn clock_scaling_accounts_for_additional_minute_glyphs() {
+        let layout = clock_layout(Rect::new(0, 0, 80, 19), Duration::from_secs(9999 * 60 + 59));
+
+        assert_eq!(layout.glyph_scale, 1);
+        assert_eq!(layout.remaining.height, 5);
+    }
+
+    #[test]
     fn clock_does_not_scale_when_only_one_dimension_has_room() {
-        let wide_but_short = clock_layout(Rect::new(0, 0, 100, 16));
-        let tall_but_narrow = clock_layout(Rect::new(0, 0, 50, 24));
+        let duration = Duration::from_secs(25 * 60);
+        let wide_but_short = clock_layout(Rect::new(0, 0, 100, 16), duration);
+        let tall_but_narrow = clock_layout(Rect::new(0, 0, 50, 24), duration);
 
         assert_eq!(wide_but_short.glyph_scale, 1);
         assert_eq!(tall_but_narrow.glyph_scale, 1);
@@ -1028,8 +1042,11 @@ mod tests {
         let theme = Theme::from(&ThemeConfig::default());
         let area = Rect::new(0, 0, 80, 24);
         let help = wrap_help(&controls_text(&app, &keys), inner_width(area));
-        let completed_area =
-            clock_layout(ui_layout(area, text_height(&help)).clock).completed_sessions;
+        let completed_area = clock_layout(
+            ui_layout(area, text_height(&help)).clock,
+            app.timer().remaining(),
+        )
+        .completed_sessions;
         let text = "Focus sessions completed: 0";
         let text_x = completed_area.x + (completed_area.width - text.len() as u16) / 2;
         let mut terminal = Terminal::new(TestBackend::new(area.width, area.height)).unwrap();
@@ -1302,7 +1319,7 @@ mod tests {
         let area = Rect::new(0, 0, 80, 24);
         let help = controls_text(&app, app.input_keys());
         let layout = ui_layout(area, text_height(&wrap_help(&help, inner_width(area))));
-        let controls = clock_layout(layout.clock).session_controls;
+        let controls = clock_layout(layout.clock, app.timer().remaining()).session_controls;
 
         for (control, session) in controls.into_iter().zip([
             SessionKind::Focus,

@@ -3,6 +3,8 @@ use std::{num::NonZeroU32, time::Duration};
 use super::ConfigValidationError;
 
 const SECONDS_PER_MINUTE: u64 = 60;
+const MAX_MINUTES: u64 = 9_999;
+const MAX_DURATION_SECONDS: u64 = MAX_MINUTES * SECONDS_PER_MINUTE + 59;
 
 pub(crate) fn format_duration(duration: Duration) -> String {
     let seconds = duration.as_secs();
@@ -20,7 +22,7 @@ pub(crate) fn parse_duration(
     let (minutes, seconds) = value
         .split_once(':')
         .ok_or(ConfigValidationError::InvalidDuration { field })?;
-    if minutes.len() < 2
+    if !(2..=4).contains(&minutes.len())
         || seconds.len() != 2
         || !value.chars().all(|c| c.is_ascii_digit() || c == ':')
     {
@@ -32,7 +34,7 @@ pub(crate) fn parse_duration(
     let seconds = seconds
         .parse::<u64>()
         .map_err(|_| ConfigValidationError::InvalidDuration { field })?;
-    if seconds >= SECONDS_PER_MINUTE {
+    if minutes > MAX_MINUTES || seconds >= SECONDS_PER_MINUTE {
         return Err(ConfigValidationError::InvalidDuration { field });
     }
     minutes
@@ -140,6 +142,9 @@ impl TimerConfig {
             if seconds == 0 {
                 return Err(ConfigValidationError::ZeroDuration { field });
             }
+            if seconds > MAX_DURATION_SECONDS {
+                return Err(ConfigValidationError::DurationOverflow { field });
+            }
         }
 
         if self.long_break_interval == 0 {
@@ -160,5 +165,41 @@ impl Default for TimerConfig {
             autostart_breaks: false,
             autostart_focus: false,
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn duration_input_accepts_the_largest_supported_value() {
+        assert_eq!(
+            parse_duration("9999:59", "focus_duration"),
+            Ok(MAX_DURATION_SECONDS)
+        );
+    }
+
+    #[test]
+    fn duration_input_rejects_invalid_widths_and_values_above_the_limit() {
+        for value in ["5:30", "10000:00", "9999:60"] {
+            assert_eq!(
+                parse_duration(value, "focus_duration"),
+                Err(ConfigValidationError::InvalidDuration {
+                    field: "focus_duration"
+                }),
+                "{value} should be rejected"
+            );
+        }
+    }
+
+    #[test]
+    fn timer_config_rejects_durations_above_the_input_limit() {
+        assert_eq!(
+            TimerConfig::from_seconds(MAX_DURATION_SECONDS + 1, 5 * 60, 15 * 60, 4),
+            Err(ConfigValidationError::DurationOverflow {
+                field: "focus_duration"
+            })
+        );
     }
 }
