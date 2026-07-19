@@ -194,6 +194,7 @@ pub struct App {
     timer: PomodoroTimer,
     tasks: TaskList,
     ui_focus: UiFocus,
+    last_task_focus: UiFocus,
     todo_selection: usize,
     done_selection: usize,
     todo_offset: usize,
@@ -232,6 +233,7 @@ impl App {
             ),
             tasks: TaskList::from_descriptions(task_state.todo, task_state.done),
             ui_focus: UiFocus::Clock,
+            last_task_focus: UiFocus::Todo,
             todo_selection: 0,
             done_selection: 0,
             todo_offset: 0,
@@ -519,6 +521,11 @@ impl App {
         self.ui_focus
     }
 
+    /// Returns the task panel most recently focused by the user.
+    pub(crate) fn last_task_focus(&self) -> UiFocus {
+        self.last_task_focus
+    }
+
     /// Returns the current text-entry context.
     pub fn edit_mode(&self) -> EditMode {
         self.edit_mode
@@ -610,6 +617,9 @@ impl App {
 
     fn focus(&mut self, focus: UiFocus) {
         self.ui_focus = focus;
+        if matches!(focus, UiFocus::Todo | UiFocus::Done) {
+            self.last_task_focus = focus;
+        }
     }
 
     fn open_settings(&mut self) {
@@ -675,7 +685,7 @@ impl App {
     }
 
     fn navigate_focus(&mut self, direction: Direction) {
-        self.ui_focus = self.ui_focus.navigate(direction);
+        self.focus(self.ui_focus.navigate(direction));
     }
 
     fn select_todo(&mut self, selection: usize) {

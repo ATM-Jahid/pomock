@@ -13,7 +13,7 @@ use crossterm::{
     terminal::{EnterAlternateScreen, LeaveAlternateScreen, disable_raw_mode, enable_raw_mode},
 };
 
-use ratatui::{Terminal, backend::CrosstermBackend, layout::Rect};
+use ratatui::{Terminal, backend::CrosstermBackend};
 
 use std::time::{Duration, Instant};
 
@@ -24,17 +24,22 @@ use pomock::{
     notification::{DesktopNotifier, Notifier},
     persistence::{TaskPersistenceError, TaskStore},
     sound::{FileSoundPlayer, SoundPlayer},
-    ui::{Theme, click_target, draw, scroll_target},
+    ui::{FrameGeometry, Theme, click_target, draw, scroll_target},
 };
 
-fn handle_mouse(app: &mut App, mouse: MouseEvent, area: Rect, now: Instant) -> AppOutcome {
+fn handle_mouse(
+    app: &mut App,
+    mouse: MouseEvent,
+    geometry: &FrameGeometry,
+    now: Instant,
+) -> AppOutcome {
     match mouse.kind {
         MouseEventKind::Down(MouseButton::Left) => {
-            let target = click_target(area, (mouse.column, mouse.row), app);
+            let target = click_target(geometry, (mouse.column, mouse.row), app);
             app.handle_click_target(target, now)
         }
         MouseEventKind::ScrollUp | MouseEventKind::ScrollDown => {
-            let Some(target) = scroll_target(area, (mouse.column, mouse.row), app) else {
+            let Some(target) = scroll_target(geometry, (mouse.column, mouse.row), app) else {
                 return AppOutcome::None;
             };
             let direction = if mouse.kind == MouseEventKind::ScrollUp {
@@ -361,9 +366,16 @@ fn run_app(
             break;
         }
 
+        let mut frame_geometry = None;
         terminal.draw(|frame| {
-            draw(frame, &mut app, Theme::from(config.theme()), config.keys());
+            frame_geometry = Some(draw(
+                frame,
+                &mut app,
+                Theme::from(config.theme()),
+                config.keys(),
+            ));
         })?;
+        let frame_geometry = frame_geometry.expect("terminal draw must resolve frame geometry");
 
         if event::poll(Duration::from_millis(100))? {
             let event = event::read()?;
@@ -404,7 +416,7 @@ fn run_app(
                     }
                 }
                 Event::Mouse(mouse) if app.edit_mode() == EditMode::Normal => {
-                    let outcome = handle_mouse(&mut app, mouse, terminal.size()?.into(), now);
+                    let outcome = handle_mouse(&mut app, mouse, &frame_geometry, now);
                     if handle_outcome(
                         outcome,
                         &app,

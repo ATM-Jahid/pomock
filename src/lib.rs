@@ -21,5 +21,6 @@ pub mod sound;
 mod tasks;
 mod timer;
 pub mod ui;
+mod ui_layout;
 
 pub use timer::SessionKind;

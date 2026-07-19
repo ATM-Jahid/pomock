@@ -9,30 +9,16 @@ use ratatui::{
 use crate::{
     app::{App, ClickTarget, ConfirmationOperation, EditMode, ScrollTarget, TimerChange, UiFocus},
     config::{ConfigKey, KeyAction, KeysConfig, ThemeColor, ThemeConfig, ThemeRole},
-    display::{
-        BIG_DURATION_HEIGHT, big_duration_width, format_big_duration_at_scale, format_key,
-        format_state,
-    },
+    display::{format_big_duration_at_scale, format_duration, format_key, format_state},
     settings::SettingField,
     timer::{SessionKind, TimerState},
+    ui_layout::{LayoutRequest, WorkspaceMode, resolve},
 };
 
-#[derive(Debug, Clone, Copy)]
-struct UiLayout {
-    clock: Rect,
-    todo: Rect,
-    done: Rect,
-    controls: Rect,
-}
+pub use crate::ui_layout::FrameGeometry;
 
-#[derive(Debug, Clone, Copy)]
-struct ClockLayout {
-    state: Rect,
-    remaining: Rect,
-    completed_sessions: Rect,
-    session_controls: [Rect; 3],
-    glyph_scale: u16,
-}
+#[cfg(test)]
+use crate::ui_layout::clock_geometry;
 
 #[derive(Debug, Clone, Copy)]
 pub struct Theme {
@@ -92,37 +78,29 @@ fn theme_color(color: ThemeColor) -> Color {
 }
 
 /// Renders the complete application UI and synchronizes list scroll offsets.
-pub fn draw(frame: &mut Frame, app: &mut App, theme: Theme, keys: &KeysConfig) {
+pub fn draw(frame: &mut Frame, app: &mut App, theme: Theme, keys: &KeysConfig) -> FrameGeometry {
     let theme = app
         .settings()
         .map_or(theme, |settings| Theme::from(settings.config().theme()));
     let area = frame.area();
     let controls_text = controls_text(app, keys);
     let controls_text = wrap_help(&controls_text, inner_width(area));
-    let layout = ui_layout(area, text_height(&controls_text));
+    let layout = resolve(LayoutRequest {
+        area,
+        controls_height: text_height(&controls_text),
+        focus: app.ui_focus(),
+        last_task_focus: app.last_task_focus(),
+        duration: app.timer().remaining(),
+    });
 
     let outer_block = Block::default().title("pomock").borders(Borders::ALL);
     frame.render_widget(outer_block, area);
 
-    let clock_block = focused_block("Clock", app.ui_focus() == UiFocus::Clock, theme);
-    frame.render_widget(clock_block, layout.clock);
     let remaining_duration = app.timer().remaining();
-    let clock_layout = clock_layout(layout.clock, remaining_duration);
 
     let state_text = app.pending_autostart().map_or_else(
         || format_state(app.timer().state()).to_string(),
         |(session, seconds)| format!("Next: {} (autostart in {seconds}s)", session_label(session)),
-    );
-    let state = Paragraph::new(state_text).alignment(Alignment::Center);
-    let remaining = Paragraph::new(format_big_duration_at_scale(
-        remaining_duration,
-        clock_layout.glyph_scale,
-    ))
-    .alignment(Alignment::Center)
-    .style(
-        Style::default()
-            .fg(theme.session(current_session(app.timer().state())))
-            .add_modifier(Modifier::BOLD),
     );
     let completed_sessions = Paragraph::new(format!(
         "Focus sessions completed: {}",
@@ -210,29 +188,70 @@ pub fn draw(frame: &mut Frame, app: &mut App, theme: Theme, keys: &KeysConfig) {
         *done_state.offset_mut() = app.done_offset();
     }
 
-    frame.render_widget(state, clock_layout.state);
-    frame.render_widget(remaining, clock_layout.remaining);
-    frame.render_widget(completed_sessions, clock_layout.completed_sessions);
-    for ((session, label), area) in session_controls
-        .into_iter()
-        .zip(clock_layout.session_controls)
+    if let Some(clock_layout) = layout.clock() {
+        let clock_area = clock_layout.area;
+        let clock_block = focused_block("Clock", app.ui_focus() == UiFocus::Clock, theme);
+        frame.render_widget(clock_block, clock_area);
+        let state = Paragraph::new(state_text.as_str()).alignment(Alignment::Center);
+        let remaining = Paragraph::new(format_big_duration_at_scale(
+            remaining_duration,
+            clock_layout.glyph_scale,
+        ))
+        .alignment(Alignment::Center)
+        .style(
+            Style::default()
+                .fg(theme.session(current_session))
+                .add_modifier(Modifier::BOLD),
+        );
+        frame.render_widget(state, clock_layout.state);
+        frame.render_widget(remaining, clock_layout.remaining);
+        frame.render_widget(completed_sessions, clock_layout.completed_sessions);
+        for ((session, label), area) in session_controls
+            .into_iter()
+            .zip(clock_layout.session_controls)
+        {
+            let style = session_button_style(session, current_session, theme);
+            frame.render_widget(
+                Paragraph::new(format!("[ {label} ]"))
+                    .alignment(Alignment::Center)
+                    .style(style),
+                area,
+            );
+        }
+    }
+    if let Some(todo_area) = layout.todo() {
+        frame.render_stateful_widget(todo, todo_area, &mut todo_state);
+    }
+    if let Some(done_area) = layout.done() {
+        frame.render_stateful_widget(done, done_area, &mut done_state);
+    }
+    if layout.mode() == WorkspaceMode::Tiny
+        && let Some(compact_area) = layout.compact_clock()
     {
-        let style = session_button_style(session, current_session, theme);
+        let duration_text = format_duration(remaining_duration);
+        let detailed_text = format!("{state_text}  {duration_text}");
+        let compact_text = if usize::from(compact_area.width) >= detailed_text.len() {
+            detailed_text
+        } else if compact_area.width >= 5 {
+            duration_text
+        } else {
+            "Terminal too small".to_string()
+        };
         frame.render_widget(
-            Paragraph::new(format!("[ {label} ]"))
-                .alignment(Alignment::Center)
-                .style(style),
-            area,
+            Paragraph::new(compact_text).alignment(Alignment::Center),
+            compact_area,
         );
     }
-    frame.render_stateful_widget(todo, layout.todo, &mut todo_state);
-    frame.render_stateful_widget(done, layout.done, &mut done_state);
-    frame.render_widget(controls, layout.controls);
+    if layout.controls().width > 0 && layout.controls().height > 0 {
+        frame.render_widget(controls, layout.controls());
+    }
     app.set_offsets(todo_state.offset(), done_state.offset());
 
     if app.is_settings_open() {
         draw_settings(frame, app, theme);
     }
+
+    layout
 }
 
 fn current_session(state: TimerState) -> SessionKind {
@@ -254,32 +273,35 @@ fn session_button_style(session: SessionKind, current: SessionKind, theme: Theme
 }
 
 /// Translates terminal coordinates into a semantic application click target.
-pub fn click_target(area: Rect, position: (u16, u16), app: &App) -> ClickTarget {
+pub fn click_target(layout: &FrameGeometry, position: (u16, u16), app: &App) -> ClickTarget {
     if let Some(settings) = app.settings() {
-        return settings_row_at(area, position, settings)
+        return settings_row_at(layout.area(), position, settings)
             .map_or(ClickTarget::Outside, ClickTarget::SettingsRow);
     }
-    let controls_text = controls_text(app, app.input_keys());
-    let controls_text = wrap_help(&controls_text, inner_width(area));
-    let layout = ui_layout(area, text_height(&controls_text));
     let point = position.into();
 
-    if let Some(session) = session_control_at(layout.clock, app.timer().remaining(), point) {
+    if let Some(session) = layout
+        .clock()
+        .and_then(|clock| session_control_at(clock.session_controls, point))
+    {
         ClickTarget::SessionControl(session)
-    } else if layout.clock.contains(point) {
+    } else if layout
+        .clock()
+        .is_some_and(|clock| clock.area.contains(point))
+    {
         ClickTarget::Clock
-    } else if layout.todo.contains(point) {
+    } else if let Some(area) = layout.todo().filter(|area| area.contains(point)) {
         task_row_at(
             position,
-            layout.todo,
+            area,
             app.todo_offset(),
             app.tasks().pending().count(),
         )
         .map_or(ClickTarget::Todo, ClickTarget::TodoTask)
-    } else if layout.done.contains(point) {
+    } else if let Some(area) = layout.done().filter(|area| area.contains(point)) {
         task_row_at(
             position,
-            layout.done,
+            area,
             app.done_offset(),
             app.tasks().completed().count(),
         )
@@ -290,78 +312,31 @@ pub fn click_target(area: Rect, position: (u16, u16), app: &App) -> ClickTarget 
 }
 
 /// Identifies the list under a mouse-wheel/touchpad scroll event.
-pub fn scroll_target(area: Rect, position: (u16, u16), app: &App) -> Option<ScrollTarget> {
+pub fn scroll_target(
+    layout: &FrameGeometry,
+    position: (u16, u16),
+    app: &App,
+) -> Option<ScrollTarget> {
     let point = position.into();
     if let Some(settings) = app.settings() {
         let footer = settings_footer(settings);
-        let (list, _) = settings_parts(area, &footer);
+        let (list, _) = settings_parts(layout.area(), &footer);
         return list.contains(point).then_some(ScrollTarget::Settings);
     }
 
-    let controls_text = controls_text(app, app.input_keys());
-    let controls_text = wrap_help(&controls_text, inner_width(area));
-    let layout = ui_layout(area, text_height(&controls_text));
-    if layout.todo.contains(point) {
+    if layout.todo().is_some_and(|area| area.contains(point)) {
         Some(ScrollTarget::Todo)
-    } else if layout.done.contains(point) {
+    } else if layout.done().is_some_and(|area| area.contains(point)) {
         Some(ScrollTarget::Done)
     } else {
         None
     }
 }
 
-fn clock_layout(area: Rect, duration: std::time::Duration) -> ClockLayout {
-    const SPACED_CLOCK_MIN_INNER_HEIGHT: u16 = 12;
-    // Two gaps, two outer padding rows, and the status, count, and controls rows.
-    const NON_GLYPH_SPACED_HEIGHT: u16 = 7;
-
-    let inner = Block::default().borders(Borders::ALL).inner(area);
-    let scale_for_width = inner.width / big_duration_width(duration);
-    let scale_for_height =
-        inner.height.saturating_sub(NON_GLYPH_SPACED_HEIGHT) / BIG_DURATION_HEIGHT;
-    let glyph_scale = scale_for_width.min(scale_for_height).max(1);
-    let content_gap = if inner.height >= SPACED_CLOCK_MIN_INNER_HEIGHT {
-        1
-    } else {
-        0
-    };
-    let chunks = Layout::default()
-        .direction(LayoutDirection::Vertical)
-        .constraints([
-            Constraint::Fill(1),
-            Constraint::Length(1),
-            Constraint::Length(content_gap),
-            Constraint::Length(BIG_DURATION_HEIGHT * glyph_scale),
-            Constraint::Length(content_gap),
-            Constraint::Length(1),
-            Constraint::Fill(1),
-            Constraint::Length(1),
-        ])
-        .split(inner);
-    let controls = Layout::default()
-        .direction(LayoutDirection::Horizontal)
-        .constraints([
-            Constraint::Ratio(1, 3),
-            Constraint::Ratio(1, 3),
-            Constraint::Ratio(1, 3),
-        ])
-        .split(chunks[7]);
-
-    ClockLayout {
-        state: chunks[1],
-        remaining: chunks[3],
-        completed_sessions: chunks[5],
-        session_controls: [controls[0], controls[1], controls[2]],
-        glyph_scale,
-    }
-}
-
 fn session_control_at(
-    area: Rect,
-    duration: std::time::Duration,
+    controls: [Rect; 3],
     point: ratatui::layout::Position,
 ) -> Option<SessionKind> {
-    let controls = clock_layout(area, duration).session_controls;
     [
         SessionKind::Focus,
         SessionKind::ShortBreak,
@@ -370,29 +345,6 @@ fn session_control_at(
     .into_iter()
     .zip(controls)
     .find_map(|(session, area)| area.contains(point).then_some(session))
-}
-
-fn ui_layout(area: Rect, controls_height: u16) -> UiLayout {
-    let inner_area = Block::default().borders(Borders::ALL).inner(area);
-    let chunks = Layout::default()
-        .direction(LayoutDirection::Vertical)
-        .constraints([
-            Constraint::Percentage(55),
-            Constraint::Percentage(45),
-            Constraint::Length(controls_height.min(inner_area.height)),
-        ])
-        .split(inner_area);
-    let task_chunks = Layout::default()
-        .direction(LayoutDirection::Horizontal)
-        .constraints([Constraint::Percentage(50), Constraint::Percentage(50)])
-        .split(chunks[1]);
-
-    UiLayout {
-        clock: chunks[0],
-        todo: task_chunks[0],
-        done: task_chunks[1],
-        controls: chunks[2],
-    }
 }
 
 fn inner_width(area: Rect) -> u16 {
@@ -908,6 +860,17 @@ mod tests {
         let _ = app.dispatch(Action::NavigateFocus(Direction::Up));
     }
 
+    fn app_layout(area: Rect, app: &App) -> FrameGeometry {
+        let help = wrap_help(&controls_text(app, app.input_keys()), inner_width(area));
+        resolve(LayoutRequest {
+            area,
+            controls_height: text_height(&help),
+            focus: app.ui_focus(),
+            last_task_focus: app.last_task_focus(),
+            duration: app.timer().remaining(),
+        })
+    }
+
     #[test]
     fn clock_legend_describes_cycle_session_control() {
         let app = App::new();
@@ -963,21 +926,204 @@ mod tests {
     }
 
     #[test]
-    fn narrow_layout_reserves_every_wrapped_control_row() {
+    fn responsive_layout_selects_each_space_class() {
         let app = App::new();
-        let area = Rect::new(0, 0, 36, 18);
+        for (area, expected) in [
+            (Rect::new(0, 0, 80, 24), WorkspaceMode::Full),
+            (Rect::new(0, 0, 80, 14), WorkspaceMode::Short),
+            (Rect::new(0, 0, 40, 24), WorkspaceMode::Narrow),
+            (Rect::new(0, 0, 40, 16), WorkspaceMode::Compact),
+            (Rect::new(0, 0, 20, 10), WorkspaceMode::Tiny),
+        ] {
+            assert_eq!(app_layout(area, &app).mode(), expected, "area: {area:?}");
+        }
+    }
+
+    #[test]
+    fn responsive_mode_is_stable_when_focus_changes_the_help_height() {
+        for (area, expected) in [
+            (Rect::new(0, 0, 80, 24), WorkspaceMode::Full),
+            (Rect::new(0, 0, 80, 14), WorkspaceMode::Short),
+            (Rect::new(0, 0, 40, 24), WorkspaceMode::Narrow),
+            (Rect::new(0, 0, 40, 16), WorkspaceMode::Compact),
+            (Rect::new(0, 0, 20, 10), WorkspaceMode::Tiny),
+        ] {
+            let mut app = App::new();
+            assert_eq!(app_layout(area, &app).mode(), expected);
+
+            let _ = app.dispatch(Action::NavigateFocus(Direction::Down));
+            assert_eq!(app_layout(area, &app).mode(), expected);
+
+            let _ = app.dispatch(Action::NavigateFocus(Direction::Right));
+            assert_eq!(app_layout(area, &app).mode(), expected);
+
+            let _ = app.dispatch(Action::NavigateFocus(Direction::Up));
+            assert_eq!(app_layout(area, &app).mode(), expected);
+        }
+    }
+
+    #[test]
+    fn short_layout_switches_between_clock_and_the_task_split() {
+        let area = Rect::new(0, 0, 80, 14);
+        let mut app = App::new();
+
+        let clock = app_layout(area, &app);
+        assert_eq!(clock.mode(), WorkspaceMode::Short);
+        assert!(clock.clock().is_some());
+        assert!(clock.todo().is_none());
+        assert!(clock.done().is_none());
+
+        let _ = app.dispatch(Action::NavigateFocus(Direction::Down));
+        let tasks = app_layout(area, &app);
+        assert_eq!(tasks.mode(), WorkspaceMode::Short);
+        assert!(tasks.clock().is_none());
+        assert!(tasks.todo().is_some());
+        assert!(tasks.done().is_some());
+    }
+
+    #[test]
+    fn hit_testing_uses_the_layout_of_the_last_rendered_frame() {
+        let area = Rect::new(0, 0, 80, 14);
+        let mut app = App::new();
+        let rendered = app_layout(area, &app);
+        let clock = rendered.clock().unwrap().area;
+
+        let _ = app.dispatch(Action::NavigateFocus(Direction::Down));
+        assert!(app_layout(area, &app).clock().is_none());
+        assert_eq!(
+            click_target(&rendered, (clock.x + 1, clock.y + 1), &app),
+            ClickTarget::Clock
+        );
+    }
+
+    #[test]
+    fn narrow_layout_retains_the_last_task_panel_while_clock_is_focused() {
+        let area = Rect::new(0, 0, 40, 24);
+        let mut app = App::new();
+        let _ = app.dispatch(Action::NavigateFocus(Direction::Down));
+        let _ = app.dispatch(Action::NavigateFocus(Direction::Right));
+
+        let done = app_layout(area, &app);
+        assert_eq!(done.mode(), WorkspaceMode::Narrow);
+        assert!(done.todo().is_none());
+        assert!(done.done().is_some());
+
+        let _ = app.dispatch(Action::NavigateFocus(Direction::Up));
+        let clock = app_layout(area, &app);
+        assert!(clock.clock().is_some());
+        assert!(clock.todo().is_none());
+        assert!(clock.done().is_some());
+
+        let _ = app.dispatch(Action::NavigateFocus(Direction::Down));
+        let todo = app_layout(area, &app);
+        assert_eq!(app.ui_focus(), UiFocus::Todo);
+        assert!(todo.todo().is_some());
+        assert!(todo.done().is_none());
+    }
+
+    #[test]
+    fn compact_layout_shows_only_the_focused_panel() {
+        let area = Rect::new(0, 0, 40, 16);
+        let mut app = App::new();
+
+        let clock = app_layout(area, &app);
+        assert_eq!(clock.mode(), WorkspaceMode::Compact);
+        assert!(clock.clock().is_some());
+        assert!(clock.todo().is_none());
+
+        let _ = app.dispatch(Action::NavigateFocus(Direction::Down));
+        let todo = app_layout(area, &app);
+        assert!(todo.clock().is_none());
+        assert!(todo.todo().is_some());
+        assert!(todo.done().is_none());
+
+        let _ = app.dispatch(Action::NavigateFocus(Direction::Right));
+        let done = app_layout(area, &app);
+        assert!(done.todo().is_none());
+        assert!(done.done().is_some());
+    }
+
+    #[test]
+    fn tiny_layout_has_no_panel_hit_targets() {
+        let app = App::new();
+        let area = Rect::new(0, 0, 20, 10);
+        let layout = app_layout(area, &app);
+
+        assert_eq!(layout.mode(), WorkspaceMode::Tiny);
+        assert!(layout.compact_clock().is_some());
+        assert_eq!(click_target(&layout, (10, 5), &app), ClickTarget::Outside);
+        assert_eq!(scroll_target(&layout, (10, 5), &app), None);
+    }
+
+    #[test]
+    fn tiny_layout_shows_complete_help_when_it_fits_beside_the_text_clock() {
+        let mut app = App::new();
+        let area = Rect::new(0, 0, 30, 24);
         let help = wrap_help(&controls_text(&app, app.input_keys()), inner_width(area));
+        let layout = app_layout(area, &app);
 
-        let layout = ui_layout(area, text_height(&help));
+        assert_eq!(layout.mode(), WorkspaceMode::Tiny);
+        assert_eq!(layout.controls().height, text_height(&help));
+        assert!(layout.controls().height > 0);
+        assert!(layout.compact_clock().unwrap().height > 0);
 
-        assert_eq!(layout.controls.height, text_height(&help));
-        assert!(layout.clock.height > 0);
-        assert!(layout.todo.height > 0);
+        let theme = Theme::from(&ThemeConfig::default());
+        let keys = KeysConfig::default();
+        let mut terminal = Terminal::new(TestBackend::new(area.width, area.height)).unwrap();
+        terminal
+            .draw(|frame| {
+                draw(frame, &mut app, theme, &keys);
+            })
+            .unwrap();
+        let rendered = terminal
+            .backend()
+            .buffer()
+            .content()
+            .iter()
+            .map(|cell| cell.symbol())
+            .collect::<String>();
+        assert!(rendered.contains("box nav"));
+    }
+
+    #[test]
+    fn tiny_layout_omits_help_when_it_would_displace_the_text_clock() {
+        let app = App::new();
+        let area = Rect::new(0, 0, 30, 4);
+        let layout = app_layout(area, &app);
+
+        assert_eq!(layout.mode(), WorkspaceMode::Tiny);
+        assert_eq!(layout.controls().height, 0);
+        assert_eq!(layout.compact_clock().unwrap().height, 2);
+    }
+
+    #[test]
+    fn tiny_layout_renders_the_text_duration_instead_of_big_glyphs() {
+        let mut app = App::new();
+        let area = Rect::new(0, 0, 20, 10);
+        let theme = Theme::from(&ThemeConfig::default());
+        let keys = KeysConfig::default();
+        let mut terminal = Terminal::new(TestBackend::new(area.width, area.height)).unwrap();
+
+        terminal
+            .draw(|frame| {
+                draw(frame, &mut app, theme, &keys);
+            })
+            .unwrap();
+
+        let rendered = terminal
+            .backend()
+            .buffer()
+            .content()
+            .iter()
+            .map(|cell| cell.symbol())
+            .collect::<String>();
+        assert!(rendered.contains("25:00"));
+        assert!(!rendered.contains('█'));
     }
 
     #[test]
     fn clock_content_is_centered_with_equal_internal_gaps() {
-        let layout = clock_layout(Rect::new(0, 0, 80, 18), Duration::from_secs(25 * 60));
+        let layout = clock_geometry(Rect::new(0, 0, 80, 18), Duration::from_secs(25 * 60));
 
         assert_eq!(layout.remaining.height, 5);
         assert_eq!(layout.remaining.y, layout.state.y + layout.state.height + 1);
@@ -994,7 +1140,7 @@ mod tests {
 
     #[test]
     fn compact_clock_removes_internal_gaps_before_squeezing_content() {
-        let layout = clock_layout(Rect::new(0, 0, 80, 10), Duration::from_secs(25 * 60));
+        let layout = clock_geometry(Rect::new(0, 0, 80, 10), Duration::from_secs(25 * 60));
 
         assert_eq!(layout.remaining.height, 5);
         assert_eq!(layout.remaining.y, layout.state.y + layout.state.height);
@@ -1011,7 +1157,7 @@ mod tests {
 
     #[test]
     fn roomy_clock_scales_glyphs_to_available_width_and_height() {
-        let layout = clock_layout(Rect::new(0, 0, 80, 19), Duration::from_secs(25 * 60));
+        let layout = clock_geometry(Rect::new(0, 0, 80, 19), Duration::from_secs(25 * 60));
 
         assert_eq!(layout.glyph_scale, 2);
         assert_eq!(layout.remaining.height, 10);
@@ -1019,7 +1165,7 @@ mod tests {
 
     #[test]
     fn clock_scaling_accounts_for_additional_minute_glyphs() {
-        let layout = clock_layout(Rect::new(0, 0, 80, 19), Duration::from_secs(9999 * 60 + 59));
+        let layout = clock_geometry(Rect::new(0, 0, 80, 19), Duration::from_secs(9999 * 60 + 59));
 
         assert_eq!(layout.glyph_scale, 1);
         assert_eq!(layout.remaining.height, 5);
@@ -1028,8 +1174,8 @@ mod tests {
     #[test]
     fn clock_does_not_scale_when_only_one_dimension_has_room() {
         let duration = Duration::from_secs(25 * 60);
-        let wide_but_short = clock_layout(Rect::new(0, 0, 100, 16), duration);
-        let tall_but_narrow = clock_layout(Rect::new(0, 0, 50, 24), duration);
+        let wide_but_short = clock_geometry(Rect::new(0, 0, 100, 16), duration);
+        let tall_but_narrow = clock_geometry(Rect::new(0, 0, 50, 24), duration);
 
         assert_eq!(wide_but_short.glyph_scale, 1);
         assert_eq!(tall_but_narrow.glyph_scale, 1);
@@ -1041,18 +1187,15 @@ mod tests {
         let keys = KeysConfig::default();
         let theme = Theme::from(&ThemeConfig::default());
         let area = Rect::new(0, 0, 80, 24);
-        let help = wrap_help(&controls_text(&app, &keys), inner_width(area));
-        let completed_area = clock_layout(
-            ui_layout(area, text_height(&help)).clock,
-            app.timer().remaining(),
-        )
-        .completed_sessions;
+        let completed_area = app_layout(area, &app).clock().unwrap().completed_sessions;
         let text = "Focus sessions completed: 0";
         let text_x = completed_area.x + (completed_area.width - text.len() as u16) / 2;
         let mut terminal = Terminal::new(TestBackend::new(area.width, area.height)).unwrap();
 
         terminal
-            .draw(|frame| draw(frame, &mut app, theme, &keys))
+            .draw(|frame| {
+                draw(frame, &mut app, theme, &keys);
+            })
             .unwrap();
 
         let buffer = terminal.backend().buffer();
@@ -1237,28 +1380,30 @@ mod tests {
         add_task(&mut app, "First");
         add_task(&mut app, "Second");
         let area = Rect::new(0, 0, 80, 24);
-        let help = controls_text(&app, app.input_keys());
-        let layout = ui_layout(area, text_height(&wrap_help(&help, inner_width(area))));
+        let layout = app_layout(area, &app);
+        let clock = layout.clock().unwrap().area;
+        let todo = layout.todo().unwrap();
+        let done = layout.done().unwrap();
 
         assert_eq!(
-            click_target(area, (layout.clock.x, layout.clock.y), &app),
+            click_target(&layout, (clock.x, clock.y), &app),
             ClickTarget::Clock
         );
         assert_eq!(
-            click_target(area, (layout.todo.x + 1, layout.todo.y + 2), &app),
+            click_target(&layout, (todo.x + 1, todo.y + 2), &app),
             ClickTarget::TodoTask(1)
         );
         assert_eq!(
-            click_target(area, (layout.todo.x, layout.todo.y), &app),
+            click_target(&layout, (todo.x, todo.y), &app),
             ClickTarget::Todo
         );
         let _ = app.dispatch(Action::NavigateFocus(Direction::Down));
         let _ = app.dispatch(Action::PrimaryAction);
         assert_eq!(
-            click_target(area, (layout.done.x + 1, layout.done.y + 1), &app),
+            click_target(&layout, (done.x + 1, done.y + 1), &app),
             ClickTarget::DoneTask(0)
         );
-        assert_eq!(click_target(area, (0, 0), &app), ClickTarget::Outside);
+        assert_eq!(click_target(&layout, (0, 0), &app), ClickTarget::Outside);
     }
 
     #[test]
@@ -1269,11 +1414,11 @@ mod tests {
         }
         app.set_offsets(4, 0);
         let area = Rect::new(0, 0, 80, 24);
-        let help = controls_text(&app, app.input_keys());
-        let layout = ui_layout(area, text_height(&wrap_help(&help, inner_width(area))));
+        let layout = app_layout(area, &app);
+        let todo = layout.todo().unwrap();
 
         assert_eq!(
-            click_target(area, (layout.todo.x + 1, layout.todo.y + 1), &app),
+            click_target(&layout, (todo.x + 1, todo.y + 1), &app),
             ClickTarget::TodoTask(4)
         );
     }
@@ -1283,32 +1428,31 @@ mod tests {
         let mut app = App::new();
         add_task(&mut app, "First");
         let area = Rect::new(0, 0, 80, 24);
-        let help = controls_text(&app, app.input_keys());
-        let layout = ui_layout(area, text_height(&wrap_help(&help, inner_width(area))));
+        let layout = app_layout(area, &app);
+        let clock = layout.clock().unwrap().area;
+        let todo = layout.todo().unwrap();
+        let done = layout.done().unwrap();
 
         assert_eq!(
-            scroll_target(area, (layout.todo.x, layout.todo.y), &app),
+            scroll_target(&layout, (todo.x, todo.y), &app),
             Some(ScrollTarget::Todo)
         );
         assert_eq!(
-            scroll_target(area, (layout.done.x, layout.done.y), &app),
+            scroll_target(&layout, (done.x, done.y), &app),
             Some(ScrollTarget::Done)
         );
-        assert_eq!(
-            scroll_target(area, (layout.clock.x, layout.clock.y), &app),
-            None
-        );
+        assert_eq!(scroll_target(&layout, (clock.x, clock.y), &app), None);
 
         let _ = app.dispatch(Action::OpenSettings);
         let settings = app.settings().unwrap();
         let footer = settings_footer(settings);
         let (list, footer_area) = settings_parts(area, &footer);
         assert_eq!(
-            scroll_target(area, (list.x, list.y), &app),
+            scroll_target(&layout, (list.x, list.y), &app),
             Some(ScrollTarget::Settings)
         );
         assert_eq!(
-            scroll_target(area, (footer_area.x, footer_area.y), &app),
+            scroll_target(&layout, (footer_area.x, footer_area.y), &app),
             None
         );
     }
@@ -1317,9 +1461,8 @@ mod tests {
     fn click_translation_maps_all_visible_session_controls() {
         let app = App::new();
         let area = Rect::new(0, 0, 80, 24);
-        let help = controls_text(&app, app.input_keys());
-        let layout = ui_layout(area, text_height(&wrap_help(&help, inner_width(area))));
-        let controls = clock_layout(layout.clock, app.timer().remaining()).session_controls;
+        let layout = app_layout(area, &app);
+        let controls = layout.clock().unwrap().session_controls;
 
         for (control, session) in controls.into_iter().zip([
             SessionKind::Focus,
@@ -1327,7 +1470,7 @@ mod tests {
             SessionKind::LongBreak,
         ]) {
             assert_eq!(
-                click_target(area, (control.x, control.y), &app),
+                click_target(&layout, (control.x, control.y), &app),
                 ClickTarget::SessionControl(session)
             );
         }
@@ -1351,16 +1494,17 @@ mod tests {
             .unwrap();
         let expected = settings_field_row(row).unwrap();
         app.set_settings_offset(first_visible);
+        let layout = app_layout(area, &app);
 
         assert_eq!(
             click_target(
-                area,
+                &layout,
                 (list.x, list.y + u16::try_from(row - first_visible).unwrap()),
                 &app
             ),
             ClickTarget::SettingsRow(expected)
         );
-        assert_eq!(click_target(area, (0, 0), &app), ClickTarget::Outside);
+        assert_eq!(click_target(&layout, (0, 0), &app), ClickTarget::Outside);
     }
 
     #[test]
@@ -1374,8 +1518,9 @@ mod tests {
         app.set_settings_offset(offset);
 
         let clicked = settings_field_row(offset + 2).unwrap();
+        let layout = app_layout(area, &app);
         assert_eq!(
-            click_target(area, (list.x, list.y + 2), &app),
+            click_target(&layout, (list.x, list.y + 2), &app),
             ClickTarget::SettingsRow(clicked)
         );
         let _ =
