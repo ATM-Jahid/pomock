@@ -63,7 +63,11 @@ pub fn map_key(
         SettingsMode::Closed => {}
     }
 
-    if key == KeyCode::Esc || key_matches_any(key, keys.settings()) {
+    if key == KeyCode::Esc {
+        return Some(Action::CancelPendingAction);
+    }
+
+    if key_matches_any(key, keys.settings()) {
         return Some(Action::OpenSettings);
     }
 
@@ -519,7 +523,7 @@ mod tests {
                 SettingsMode::Closed,
                 &keys
             ),
-            Some(Action::OpenSettings)
+            Some(Action::CancelPendingAction)
         );
         assert_eq!(
             map_key(

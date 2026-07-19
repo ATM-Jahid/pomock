@@ -10,6 +10,7 @@ use crate::{
 
 const DOUBLE_CLICK_WINDOW: Duration = Duration::from_millis(500);
 const PROGRESS_CONFIRMATION_THRESHOLD: Duration = Duration::from_secs(10);
+const AUTOSTART_DELAY: Duration = Duration::from_secs(5);
 
 /// The application area that currently receives contextual commands.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -75,6 +76,10 @@ pub enum AppOutcome {
     None,
     Quit,
     FocusAudio(FocusAudioAction),
+    TimerEffects {
+        focus_audio: Option<FocusAudioAction>,
+        stop_completion_audio: bool,
+    },
     SessionCompleted(SessionKind),
     TasksChanged,
     SettingsChanged(Box<Config>),
@@ -176,6 +181,12 @@ struct PendingConfirmation {
     prior_activity: PriorActivity,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct PendingAutostart {
+    session: SessionKind,
+    remaining: Duration,
+}
+
 /// Runtime application state and terminal-independent state transitions.
 #[derive(Debug)]
 pub struct App {
@@ -191,6 +202,8 @@ pub struct App {
     input: String,
     last_click: Option<(ClickTarget, Instant)>,
     pending_confirmation: Option<PendingConfirmation>,
+    pending_autostart: Option<PendingAutostart>,
+    completion_audio_active: bool,
     show_task_numbers: bool,
     settings: Option<SettingsOverlay>,
 }
@@ -227,6 +240,8 @@ impl App {
             input: String::new(),
             last_click: None,
             pending_confirmation: None,
+            pending_autostart: None,
+            completion_audio_active: false,
             show_task_numbers: config.tasks().show_numbers(),
             settings: None,
         }
@@ -271,6 +286,45 @@ impl App {
 
         if self.settings.is_some() {
             return self.dispatch_settings(action);
+        }
+
+        if self.pending_autostart.is_some() {
+            match action {
+                Action::PrimaryAction if self.ui_focus == UiFocus::Clock => {
+                    self.pending_autostart = None;
+                    self.completion_audio_active = false;
+                    self.timer.primary_action();
+                    return Self::autostart_transition_outcome(
+                        prior_timer_state,
+                        self.timer.state(),
+                    );
+                }
+                Action::CycleSession => {
+                    self.pending_autostart = None;
+                    self.completion_audio_active = false;
+                    self.timer.cycle_ready_session();
+                    return Self::autostart_transition_outcome(
+                        prior_timer_state,
+                        self.timer.state(),
+                    );
+                }
+                Action::CancelPendingAction => {
+                    self.pending_autostart = None;
+                    self.completion_audio_active = false;
+                    return Self::autostart_transition_outcome(
+                        prior_timer_state,
+                        self.timer.state(),
+                    );
+                }
+                _ => {}
+            }
+        }
+
+        let stop_completion_audio = self.completion_audio_active
+            && (action == Action::CycleSession
+                || action == Action::PrimaryAction && self.ui_focus == UiFocus::Clock);
+        if stop_completion_audio {
+            self.completion_audio_active = false;
         }
 
         match action {
@@ -359,14 +413,76 @@ impl App {
             | Action::SettingsCaptureKey(_) => {}
         }
 
-        Self::timer_transition_outcome(prior_timer_state, self.timer.state(), AppOutcome::None)
+        let outcome =
+            Self::timer_transition_outcome(prior_timer_state, self.timer.state(), AppOutcome::None);
+        if stop_completion_audio {
+            Self::with_completion_stop(outcome)
+        } else {
+            outcome
+        }
     }
 
     /// Advances monotonic application time and reports a completed session.
     pub fn tick(&mut self, elapsed: Duration) -> AppOutcome {
-        self.timer
-            .tick(elapsed)
-            .map_or(AppOutcome::None, AppOutcome::SessionCompleted)
+        if let Some(pending) = &mut self.pending_autostart {
+            if elapsed < pending.remaining {
+                pending.remaining -= elapsed;
+                return AppOutcome::None;
+            }
+            self.pending_autostart = None;
+            self.completion_audio_active = false;
+            let before = self.timer.state();
+            self.timer.primary_action();
+            return Self::autostart_transition_outcome(before, self.timer.state());
+        }
+
+        let Some(completed) = self.timer.tick(elapsed) else {
+            return AppOutcome::None;
+        };
+        let recommended = match self.timer.state() {
+            TimerState::Ready(session) => session,
+            TimerState::Running(_) | TimerState::Paused(_) => {
+                unreachable!("completion installs a ready recommendation")
+            }
+        };
+        let enabled = match recommended {
+            SessionKind::Focus => self.config.timer().autostart_focus(),
+            SessionKind::ShortBreak | SessionKind::LongBreak => {
+                self.config.timer().autostart_breaks()
+            }
+        };
+        if enabled {
+            self.pending_autostart = Some(PendingAutostart {
+                session: recommended,
+                remaining: AUTOSTART_DELAY,
+            });
+        }
+        self.completion_audio_active = true;
+        AppOutcome::SessionCompleted(completed)
+    }
+
+    fn autostart_transition_outcome(before: TimerState, after: TimerState) -> AppOutcome {
+        let focus_audio = match Self::timer_transition_outcome(before, after, AppOutcome::None) {
+            AppOutcome::FocusAudio(action) => Some(action),
+            AppOutcome::None => None,
+            _ => unreachable!("timer transition only reports Focus audio"),
+        };
+        AppOutcome::TimerEffects {
+            focus_audio,
+            stop_completion_audio: true,
+        }
+    }
+
+    fn with_completion_stop(outcome: AppOutcome) -> AppOutcome {
+        let focus_audio = match outcome {
+            AppOutcome::FocusAudio(action) => Some(action),
+            AppOutcome::None => None,
+            _ => return outcome,
+        };
+        AppOutcome::TimerEffects {
+            focus_audio,
+            stop_completion_audio: true,
+        }
     }
 
     fn timer_transition_outcome(
@@ -415,6 +531,15 @@ impl App {
 
     pub fn is_settings_open(&self) -> bool {
         self.settings.is_some()
+    }
+
+    /// Returns the recommended session and displayed countdown while autostart is pending.
+    pub fn pending_autostart(&self) -> Option<(SessionKind, u64)> {
+        self.pending_autostart.map(|pending| {
+            let seconds = pending.remaining.as_secs();
+            let rounded_up = seconds + u64::from(pending.remaining.subsec_nanos() > 0);
+            (pending.session, rounded_up)
+        })
     }
 
     /// Reports whether Focus is actively counting down.
@@ -840,6 +965,36 @@ impl App {
             return AppOutcome::None;
         }
 
+        if self.pending_autostart.is_some() && matches!(target, ClickTarget::SessionControl(_)) {
+            self.pending_autostart = None;
+            self.completion_audio_active = false;
+            if let ClickTarget::SessionControl(session) = target {
+                self.focus(UiFocus::Clock);
+                self.timer.select_session(session);
+                self.last_click = Some((target, now));
+            }
+            return Self::autostart_transition_outcome(prior_timer_state, self.timer.state());
+        }
+
+        if self.pending_autostart.is_some()
+            && target == ClickTarget::Clock
+            && self.is_double_click(target, now)
+        {
+            self.pending_autostart = None;
+            self.completion_audio_active = false;
+            self.focus(UiFocus::Clock);
+            self.timer.primary_action();
+            self.clear_pending_click();
+            return Self::autostart_transition_outcome(prior_timer_state, self.timer.state());
+        }
+
+        let stop_completion_audio = self.completion_audio_active
+            && (matches!(target, ClickTarget::SessionControl(_))
+                || target == ClickTarget::Clock && self.is_double_click(target, now));
+        if stop_completion_audio {
+            self.completion_audio_active = false;
+        }
+
         let tasks_changed = match target {
             ClickTarget::Clock => {
                 self.focus(UiFocus::Clock);
@@ -904,7 +1059,16 @@ impl App {
         if tasks_changed {
             AppOutcome::TasksChanged
         } else {
-            Self::timer_transition_outcome(prior_timer_state, self.timer.state(), AppOutcome::None)
+            let outcome = Self::timer_transition_outcome(
+                prior_timer_state,
+                self.timer.state(),
+                AppOutcome::None,
+            );
+            if stop_completion_audio {
+                Self::with_completion_stop(outcome)
+            } else {
+                outcome
+            }
         }
     }
 
@@ -1298,6 +1462,158 @@ mod tests {
             assert_eq!(app.tick(duration), AppOutcome::SessionCompleted(session));
             assert_eq!(app.tick(Duration::from_secs(1)), AppOutcome::None);
         }
+    }
+
+    fn autostart_app(breaks: bool, focus: bool) -> App {
+        let timer = TimerConfig::default().with_autostart(breaks, focus);
+        App::from_config(&Config::new(timer).unwrap())
+    }
+
+    #[test]
+    fn configured_break_autostart_counts_down_and_starts_the_recommendation() {
+        let mut app = autostart_app(true, false);
+        let _ = app.dispatch(Action::PrimaryAction);
+
+        assert_eq!(
+            app.tick(Duration::from_secs(25 * 60)),
+            AppOutcome::SessionCompleted(SessionKind::Focus)
+        );
+        assert_eq!(app.pending_autostart(), Some((SessionKind::ShortBreak, 5)));
+        assert_eq!(app.tick(Duration::from_millis(4_999)), AppOutcome::None);
+        assert_eq!(app.pending_autostart(), Some((SessionKind::ShortBreak, 1)));
+        assert_eq!(
+            app.tick(Duration::from_millis(1)),
+            AppOutcome::TimerEffects {
+                focus_audio: None,
+                stop_completion_audio: true,
+            }
+        );
+        assert_eq!(
+            app.timer().state(),
+            TimerState::Running(SessionKind::ShortBreak)
+        );
+    }
+
+    #[test]
+    fn focus_autostart_is_independent_from_break_autostart() {
+        let mut app = autostart_app(false, true);
+        double_click_session(&mut app, SessionKind::ShortBreak, Instant::now());
+
+        assert_eq!(
+            app.tick(Duration::from_secs(5 * 60)),
+            AppOutcome::SessionCompleted(SessionKind::ShortBreak)
+        );
+        assert_eq!(app.pending_autostart(), Some((SessionKind::Focus, 5)));
+        assert_eq!(
+            app.tick(Duration::from_secs(5)),
+            AppOutcome::TimerEffects {
+                focus_audio: Some(FocusAudioAction::StartOrResume),
+                stop_completion_audio: true,
+            }
+        );
+        assert_eq!(app.timer().state(), TimerState::Running(SessionKind::Focus));
+    }
+
+    #[test]
+    fn primary_starts_pending_session_while_escape_and_cycle_cancel_it() {
+        let mut immediate = autostart_app(true, false);
+        let _ = immediate.dispatch(Action::PrimaryAction);
+        let _ = immediate.tick(Duration::from_secs(25 * 60));
+        assert_eq!(
+            immediate.dispatch(Action::PrimaryAction),
+            AppOutcome::TimerEffects {
+                focus_audio: None,
+                stop_completion_audio: true,
+            }
+        );
+        assert_eq!(
+            immediate.timer().state(),
+            TimerState::Running(SessionKind::ShortBreak)
+        );
+
+        let mut cancelled = autostart_app(true, false);
+        let _ = cancelled.dispatch(Action::PrimaryAction);
+        let _ = cancelled.tick(Duration::from_secs(25 * 60));
+        let _ = cancelled.dispatch(Action::CancelPendingAction);
+        assert_eq!(cancelled.pending_autostart(), None);
+        assert_eq!(
+            cancelled.timer().state(),
+            TimerState::Ready(SessionKind::ShortBreak)
+        );
+
+        let mut cycled = autostart_app(true, false);
+        let _ = cycled.dispatch(Action::PrimaryAction);
+        let _ = cycled.tick(Duration::from_secs(25 * 60));
+        let _ = cycled.dispatch(Action::CycleSession);
+        assert_eq!(cycled.pending_autostart(), None);
+        assert_eq!(
+            cycled.timer().state(),
+            TimerState::Ready(SessionKind::LongBreak)
+        );
+    }
+
+    #[test]
+    fn manual_start_stops_completion_audio_without_autostart() {
+        let mut app = App::new();
+        let _ = app.dispatch(Action::PrimaryAction);
+        let _ = app.tick(Duration::from_secs(25 * 60));
+
+        assert_eq!(
+            app.dispatch(Action::PrimaryAction),
+            AppOutcome::TimerEffects {
+                focus_audio: None,
+                stop_completion_audio: true,
+            }
+        );
+    }
+
+    #[test]
+    fn selecting_another_session_cancels_autostart_and_leaves_it_ready() {
+        let mut app = autostart_app(true, false);
+        let _ = app.dispatch(Action::PrimaryAction);
+        let _ = app.tick(Duration::from_secs(25 * 60));
+
+        assert_eq!(
+            app.handle_click_target(
+                ClickTarget::SessionControl(SessionKind::LongBreak),
+                Instant::now()
+            ),
+            AppOutcome::TimerEffects {
+                focus_audio: None,
+                stop_completion_audio: true,
+            }
+        );
+        assert_eq!(app.pending_autostart(), None);
+        assert_eq!(
+            app.timer().state(),
+            TimerState::Ready(SessionKind::LongBreak)
+        );
+    }
+
+    #[test]
+    fn double_clicking_clock_starts_pending_session_immediately() {
+        let mut app = autostart_app(true, false);
+        let _ = app.dispatch(Action::PrimaryAction);
+        let _ = app.tick(Duration::from_secs(25 * 60));
+        let now = Instant::now();
+
+        assert_eq!(
+            app.handle_click_target(ClickTarget::Clock, now),
+            AppOutcome::None
+        );
+        assert_eq!(app.pending_autostart(), Some((SessionKind::ShortBreak, 5)));
+        assert_eq!(
+            app.handle_click_target(ClickTarget::Clock, now + Duration::from_millis(100)),
+            AppOutcome::TimerEffects {
+                focus_audio: None,
+                stop_completion_audio: true,
+            }
+        );
+        assert_eq!(app.pending_autostart(), None);
+        assert_eq!(
+            app.timer().state(),
+            TimerState::Running(SessionKind::ShortBreak)
+        );
     }
 
     #[test]

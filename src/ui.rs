@@ -108,7 +108,11 @@ pub fn draw(frame: &mut Frame, app: &mut App, theme: Theme, keys: &KeysConfig) {
     frame.render_widget(clock_block, layout.clock);
     let clock_layout = clock_layout(layout.clock);
 
-    let state = Paragraph::new(format_state(app.timer().state())).alignment(Alignment::Center);
+    let state_text = app.pending_autostart().map_or_else(
+        || format_state(app.timer().state()).to_string(),
+        |(session, seconds)| format!("Next: {} (autostart in {seconds}s)", session_label(session)),
+    );
+    let state = Paragraph::new(state_text).alignment(Alignment::Center);
     let remaining = Paragraph::new(format_big_duration_at_scale(
         app.timer().remaining(),
         clock_layout.glyph_scale,
@@ -486,6 +490,15 @@ fn controls_text(app: &App, keys: &KeysConfig) -> String {
         return format!("{prompt}  [y/Enter] confirm  [n/Esc] cancel");
     }
 
+    if let Some((session, seconds)) = app.pending_autostart() {
+        return format!(
+            "Next: {} in {seconds}s  [{}] start now  [{}] cycle/cancel  [Esc] cancel",
+            session_label(session),
+            format_key(first_key(keys.clock_primary())),
+            format_key(first_key(keys.cycle_session())),
+        );
+    }
+
     match app.edit_mode() {
         EditMode::Adding => format!("Add task: {}_", app.input()),
         EditMode::Editing { .. } => format!("Edit task: {}_", app.input()),
@@ -739,6 +752,14 @@ fn setting_row(field: SettingField, settings: &crate::settings::SettingsOverlay)
         SettingField::LongBreakInterval => (
             "  Long break interval",
             config.timer().long_break_interval().to_string(),
+        ),
+        SettingField::AutostartBreaks => (
+            "  Autostart breaks",
+            on_off(config.timer().autostart_breaks()).to_string(),
+        ),
+        SettingField::AutostartFocus => (
+            "  Autostart Focus",
+            on_off(config.timer().autostart_focus()).to_string(),
         ),
         SettingField::NotificationEnabled => (
             "  Desktop notifications",
@@ -1302,13 +1323,21 @@ mod tests {
         let area = Rect::new(0, 0, 80, 24);
         let footer = settings_footer(app.settings().unwrap());
         let (list, _) = settings_parts(area, &footer);
-        let selected_row = settings_visual_row(25);
+        let selection = SettingField::ALL.len() - 1;
+        let selected_row = settings_visual_row(selection);
         let first_visible = settings_offset(selected_row, usize::from(list.height));
-        let expected = settings_field_row(first_visible).unwrap();
+        let row = (first_visible..)
+            .find(|row| settings_field_row(*row).is_some())
+            .unwrap();
+        let expected = settings_field_row(row).unwrap();
         app.set_settings_offset(first_visible);
 
         assert_eq!(
-            click_target(area, (list.x, list.y), &app),
+            click_target(
+                area,
+                (list.x, list.y + u16::try_from(row - first_visible).unwrap()),
+                &app
+            ),
             ClickTarget::SettingsRow(expected)
         );
         assert_eq!(click_target(area, (0, 0), &app), ClickTarget::Outside);
@@ -1338,8 +1367,22 @@ mod tests {
     #[test]
     fn settings_group_first_fields_scroll_with_their_heading() {
         assert_eq!(settings_scroll_anchor(0), 0);
-        assert_eq!(settings_scroll_anchor(4), 5);
-        assert_eq!(settings_scroll_anchor(5), 7);
+        let notification = SettingField::ALL
+            .iter()
+            .position(|field| *field == SettingField::NotificationEnabled)
+            .unwrap();
+        let completion_sound = SettingField::ALL
+            .iter()
+            .position(|field| *field == SettingField::CompletionSoundEnabled)
+            .unwrap();
+        assert_eq!(
+            settings_scroll_anchor(notification),
+            settings_visual_row(notification) - 1
+        );
+        assert_eq!(
+            settings_scroll_anchor(completion_sound),
+            settings_visual_row(completion_sound) - 1
+        );
         assert_eq!(settings_scroll_anchor(1), settings_visual_row(1));
     }
 

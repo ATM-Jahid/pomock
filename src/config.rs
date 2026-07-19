@@ -368,6 +368,10 @@ struct StoredTimerConfig {
     short_break_minutes: u64,
     long_break_minutes: u64,
     long_break_interval: u32,
+    #[serde(default)]
+    autostart_breaks: bool,
+    #[serde(default)]
+    autostart_focus: bool,
 }
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -401,7 +405,8 @@ impl TryFrom<StoredConfig> for Config {
                 stored.timer.short_break_minutes,
                 stored.timer.long_break_minutes,
                 stored.timer.long_break_interval,
-            )?,
+            )?
+            .with_autostart(stored.timer.autostart_breaks, stored.timer.autostart_focus),
             TasksConfig::with_numbering(stored.tasks.persist, stored.tasks.show_numbers),
             stored.theme,
             stored.keys,
@@ -420,6 +425,8 @@ impl From<&Config> for StoredConfig {
                 short_break_minutes: timer.short_break_minutes,
                 long_break_minutes: timer.long_break_minutes,
                 long_break_interval: timer.long_break_interval,
+                autostart_breaks: timer.autostart_breaks,
+                autostart_focus: timer.autostart_focus,
             },
             notification: config.notification(),
             sound: config.sound().clone(),
@@ -465,6 +472,8 @@ mod tests {
         assert_eq!(config.timer().short_break_duration().as_secs(), 5 * 60);
         assert_eq!(config.timer().long_break_duration().as_secs(), 15 * 60);
         assert_eq!(config.timer().long_break_interval().get(), 4);
+        assert!(!config.timer().autostart_breaks());
+        assert!(!config.timer().autostart_focus());
         assert!(config.tasks().persist());
         assert!(config.tasks().show_numbers());
         assert_eq!(config.theme(), &ThemeConfig::default());
@@ -509,6 +518,8 @@ mod tests {
                 "short_break_minutes = 5\n",
                 "long_break_minutes = 15\n",
                 "long_break_interval = 4\n",
+                "autostart_breaks = false\n",
+                "autostart_focus = false\n",
                 "\n",
                 "[notification]\n",
                 "enabled = true\n",
@@ -687,7 +698,9 @@ mod tests {
     fn saves_and_loads_a_valid_toml_round_trip() {
         let path = temp_path("round-trip/config.toml");
         let config = Config::with_settings(
-            TimerConfig::new(50, 10, 30, 3).unwrap(),
+            TimerConfig::new(50, 10, 30, 3)
+                .unwrap()
+                .with_autostart(true, false),
             TasksConfig::with_numbering(false, false),
             ThemeConfig::new(
                 ThemeColor::LightBlue,
@@ -709,6 +722,8 @@ mod tests {
         let contents = fs::read_to_string(&path).unwrap();
         assert!(contents.contains("[timer]"));
         assert!(contents.contains("focus_minutes = 50"));
+        assert!(contents.contains("autostart_breaks = true"));
+        assert!(contents.contains("autostart_focus = false"));
         assert!(contents.contains("[tasks]"));
         assert!(contents.contains("persist = false"));
         assert!(contents.contains("show_numbers = false"));

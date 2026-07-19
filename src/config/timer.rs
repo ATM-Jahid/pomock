@@ -11,6 +11,8 @@ pub struct TimerConfig {
     pub(super) short_break_minutes: u64,
     pub(super) long_break_minutes: u64,
     pub(super) long_break_interval: u32,
+    pub(super) autostart_breaks: bool,
+    pub(super) autostart_focus: bool,
 }
 
 impl TimerConfig {
@@ -25,9 +27,25 @@ impl TimerConfig {
             short_break_minutes,
             long_break_minutes,
             long_break_interval,
+            autostart_breaks: false,
+            autostart_focus: false,
         };
         timer.validate()?;
         Ok(timer)
+    }
+
+    pub fn with_autostart(mut self, breaks: bool, focus: bool) -> Self {
+        self.autostart_breaks = breaks;
+        self.autostart_focus = focus;
+        self
+    }
+
+    pub fn autostart_breaks(&self) -> bool {
+        self.autostart_breaks
+    }
+
+    pub fn autostart_focus(&self) -> bool {
+        self.autostart_focus
     }
 
     pub fn focus_duration(&self) -> Duration {
@@ -88,6 +106,8 @@ impl Default for TimerConfig {
             short_break_minutes: 5,
             long_break_minutes: 15,
             long_break_interval: 4,
+            autostart_breaks: false,
+            autostart_focus: false,
         }
     }
 }

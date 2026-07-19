@@ -11,6 +11,8 @@ pub(crate) enum SettingField {
     ShortBreakMinutes,
     LongBreakMinutes,
     LongBreakInterval,
+    AutostartBreaks,
+    AutostartFocus,
     NotificationEnabled,
     CompletionSoundEnabled,
     CompletionSoundFile,
@@ -23,11 +25,13 @@ pub(crate) enum SettingField {
 }
 
 impl SettingField {
-    const TIMER: [Self; 4] = [
+    const TIMER: [Self; 6] = [
         Self::FocusMinutes,
         Self::ShortBreakMinutes,
         Self::LongBreakMinutes,
         Self::LongBreakInterval,
+        Self::AutostartBreaks,
+        Self::AutostartFocus,
     ];
     const NOTIFICATION: [Self; 1] = [Self::NotificationEnabled];
     const SOUND: [Self; 4] = [
@@ -199,6 +203,14 @@ impl SettingsOverlay {
             SettingField::NotificationEnabled => {
                 self.set_notification(!self.config.notification().enabled());
             }
+            SettingField::AutostartBreaks => self.set_autostart(
+                !self.config.timer().autostart_breaks(),
+                self.config.timer().autostart_focus(),
+            ),
+            SettingField::AutostartFocus => self.set_autostart(
+                self.config.timer().autostart_breaks(),
+                !self.config.timer().autostart_focus(),
+            ),
             SettingField::CompletionSoundEnabled => {
                 self.set_sound_enabled(!self.config.sound().completion().enabled(), false);
             }
@@ -258,7 +270,9 @@ impl SettingsOverlay {
             self.error = None;
         } else {
             match field {
-                SettingField::NotificationEnabled
+                SettingField::AutostartBreaks
+                | SettingField::AutostartFocus
+                | SettingField::NotificationEnabled
                 | SettingField::CompletionSoundEnabled
                 | SettingField::FocusSoundEnabled
                 | SettingField::PersistTasks
@@ -397,6 +411,15 @@ impl SettingsOverlay {
         self.replace(
             self.config.timer().to_owned(),
             TasksConfig::with_numbering(persist, show_numbers),
+            *self.config.theme(),
+            self.config.keys().clone(),
+        );
+    }
+
+    fn set_autostart(&mut self, breaks: bool, focus: bool) {
+        self.replace(
+            self.config.timer().to_owned().with_autostart(breaks, focus),
+            *self.config.tasks(),
             *self.config.theme(),
             self.config.keys().clone(),
         );
@@ -686,10 +709,16 @@ mod tests {
         let original_focus = original.theme().color(ThemeRole::Focus);
         select(&mut settings, SettingField::PersistTasks);
         settings.adjust(true);
+        select(&mut settings, SettingField::AutostartBreaks);
+        settings.adjust(true);
+        select(&mut settings, SettingField::AutostartFocus);
+        settings.activate();
         select(&mut settings, SettingField::Theme(ThemeRole::FocusedBorder));
         settings.adjust(true);
 
         assert!(!settings.config().tasks().persist());
+        assert!(settings.config().timer().autostart_breaks());
+        assert!(settings.config().timer().autostart_focus());
         assert_eq!(
             settings.config().theme().color(ThemeRole::FocusedBorder),
             original_border.cycle(true)

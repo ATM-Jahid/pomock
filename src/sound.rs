@@ -2,12 +2,15 @@
 
 use std::{fs::File, path::Path};
 
-use rodio::{Decoder, OutputStream, OutputStreamBuilder, Sink, Source, play};
+use rodio::{Decoder, OutputStream, OutputStreamBuilder, Sink, Source};
 
 /// Plays user-selected sound files outside the application domain.
 pub trait SoundPlayer {
     /// Plays a one-shot completion sound without blocking the event loop.
     fn play_completion(&mut self, file: &Path);
+
+    /// Stops any still-playing one-shot completion sound.
+    fn stop_completion(&mut self);
 
     /// Starts a Focus loop or resumes the already installed loop.
     fn start_or_resume_focus(&mut self, file: &Path);
@@ -24,6 +27,7 @@ pub trait SoundPlayer {
 pub struct FileSoundPlayer {
     stream: Option<OutputStream>,
     focus_sink: Option<Sink>,
+    completion_sink: Option<Sink>,
 }
 
 impl SoundPlayer for FileSoundPlayer {
@@ -31,11 +35,22 @@ impl SoundPlayer for FileSoundPlayer {
         let Ok(input) = File::open(file) else {
             return;
         };
+        let Ok(source) = Decoder::try_from(input) else {
+            return;
+        };
         self.ensure_stream();
-        if let Some(stream) = &self.stream
-            && let Ok(sink) = play(stream.mixer(), input)
-        {
-            sink.detach();
+        self.stop_completion();
+        let Some(stream) = &self.stream else {
+            return;
+        };
+        let sink = Sink::connect_new(stream.mixer());
+        sink.append(source.take_duration(std::time::Duration::from_secs(5)));
+        self.completion_sink = Some(sink);
+    }
+
+    fn stop_completion(&mut self) {
+        if let Some(sink) = self.completion_sink.take() {
+            sink.stop();
         }
     }
 
