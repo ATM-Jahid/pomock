@@ -43,7 +43,8 @@ Controls are contextual to the focused box.
   between the clock, to-do, and completed-task boxes.
 - `q` — quit when not adding or editing a task.
   Running or paused sessions ask for confirmation after 10 seconds of progress.
-- `s` or `Esc` — open the settings overlay.
+- `s` — open/close the settings overlay.
+- `Esc` — cancel pending autostart.
 
 ### Clock
 
@@ -95,6 +96,8 @@ focus_duration = "25:00"
 short_break_duration = "05:00"
 long_break_duration = "15:00"
 long_break_interval = 4
+autostart_breaks = false
+autostart_focus = false
 
 [notification]
 enabled = true
