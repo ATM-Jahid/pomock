@@ -2,14 +2,14 @@ use std::path::{Path, PathBuf};
 
 use crate::config::{
     CompletionSoundConfig, Config, ConfigKey, ConfigValidationError, FocusSoundConfig, KeyAction,
-    NotificationConfig, TasksConfig, ThemeRole, TimerConfig,
+    NotificationConfig, TasksConfig, ThemeRole, TimerConfig, format_duration, parse_duration,
 };
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum SettingField {
-    FocusMinutes,
-    ShortBreakMinutes,
-    LongBreakMinutes,
+    FocusDuration,
+    ShortBreakDuration,
+    LongBreakDuration,
     LongBreakInterval,
     AutostartBreaks,
     AutostartFocus,
@@ -26,9 +26,9 @@ pub(crate) enum SettingField {
 
 impl SettingField {
     const TIMER: [Self; 6] = [
-        Self::FocusMinutes,
-        Self::ShortBreakMinutes,
-        Self::LongBreakMinutes,
+        Self::FocusDuration,
+        Self::ShortBreakDuration,
+        Self::LongBreakDuration,
         Self::LongBreakInterval,
         Self::AutostartBreaks,
         Self::AutostartFocus,
@@ -86,7 +86,7 @@ impl SettingField {
     pub(crate) const ALL: [Self; Self::FIELD_COUNT] = Self::flatten_groups();
 
     const fn flatten_groups() -> [Self; Self::FIELD_COUNT] {
-        let mut all = [Self::FocusMinutes; Self::FIELD_COUNT];
+        let mut all = [Self::FocusDuration; Self::FIELD_COUNT];
         let mut all_index = 0;
         let mut group_index = 0;
         while group_index < Self::GROUPS.len() {
@@ -103,17 +103,19 @@ impl SettingField {
     }
 
     fn is_number(self) -> bool {
+        matches!(self, Self::LongBreakInterval)
+    }
+
+    fn is_duration(self) -> bool {
         matches!(
             self,
-            Self::FocusMinutes
-                | Self::ShortBreakMinutes
-                | Self::LongBreakMinutes
-                | Self::LongBreakInterval
+            Self::FocusDuration | Self::ShortBreakDuration | Self::LongBreakDuration
         )
     }
 
     fn is_text(self) -> bool {
         self.is_number()
+            || self.is_duration()
             || matches!(
                 self,
                 Self::CompletionSoundFile | Self::FocusSoundFile | Self::Theme(_)
@@ -244,6 +246,15 @@ impl SettingsOverlay {
                 };
                 self.set_number(field, next.to_string());
             }
+            _ if field.is_duration() => {
+                let current = self.duration_value(field).as_secs();
+                let next = if forward {
+                    current.saturating_add(60)
+                } else {
+                    current.saturating_sub(60).max(1)
+                };
+                self.set_duration(field, format_duration(std::time::Duration::from_secs(next)));
+            }
             _ => {}
         }
     }
@@ -265,6 +276,7 @@ impl SettingsOverlay {
                     .focus()
                     .file()
                     .map_or_else(String::new, |path| path.display().to_string()),
+                _ if field.is_duration() => format_duration(self.duration_value(field)),
                 _ => self.number_value(field).to_string(),
             });
             self.error = None;
@@ -306,6 +318,7 @@ impl SettingsOverlay {
             SettingField::Theme(role) => self.set_color(role, value),
             SettingField::CompletionSoundFile => self.set_sound_file(value, false),
             SettingField::FocusSoundFile => self.set_sound_file(value, true),
+            field if field.is_duration() => self.set_duration(field, value),
             field => self.set_number(field, value),
         }
     }
@@ -347,9 +360,6 @@ impl SettingsOverlay {
 
     fn number_value(&self, field: SettingField) -> u64 {
         match field {
-            SettingField::FocusMinutes => self.config.timer().focus_minutes(),
-            SettingField::ShortBreakMinutes => self.config.timer().short_break_minutes(),
-            SettingField::LongBreakMinutes => self.config.timer().long_break_minutes(),
             SettingField::LongBreakInterval => {
                 u64::from(self.config.timer().long_break_interval().get())
             }
@@ -357,44 +367,76 @@ impl SettingsOverlay {
         }
     }
 
-    fn set_number(&mut self, field: SettingField, value: String) {
+    fn duration_value(&self, field: SettingField) -> std::time::Duration {
+        match field {
+            SettingField::FocusDuration => self.config.timer().focus_duration(),
+            SettingField::ShortBreakDuration => self.config.timer().short_break_duration(),
+            SettingField::LongBreakDuration => self.config.timer().long_break_duration(),
+            _ => std::time::Duration::ZERO,
+        }
+    }
+
+    fn set_duration(&mut self, field: SettingField, value: String) {
+        let field_name = match field {
+            SettingField::FocusDuration => "focus_duration",
+            SettingField::ShortBreakDuration => "short_break_duration",
+            SettingField::LongBreakDuration => "long_break_duration",
+            _ => return,
+        };
+        let result = parse_duration(&value, field_name).and_then(|value| {
+            let timer = self.config.timer();
+            let (focus, short, long) = match field {
+                SettingField::FocusDuration => (
+                    value,
+                    timer.short_break_duration().as_secs(),
+                    timer.long_break_duration().as_secs(),
+                ),
+                SettingField::ShortBreakDuration => (
+                    timer.focus_duration().as_secs(),
+                    value,
+                    timer.long_break_duration().as_secs(),
+                ),
+                SettingField::LongBreakDuration => (
+                    timer.focus_duration().as_secs(),
+                    timer.short_break_duration().as_secs(),
+                    value,
+                ),
+                _ => unreachable!(),
+            };
+            TimerConfig::from_seconds(focus, short, long, timer.long_break_interval().get()).map(
+                |updated| updated.with_autostart(timer.autostart_breaks(), timer.autostart_focus()),
+            )
+        });
+        match result {
+            Ok(timer) => self.replace(
+                timer,
+                *self.config.tasks(),
+                *self.config.theme(),
+                self.config.keys().clone(),
+            ),
+            Err(error) => self.error = Some(error.to_string()),
+        }
+    }
+
+    fn set_number(&mut self, _field: SettingField, value: String) {
         let parsed = value
             .parse::<u64>()
             .map_err(|_| ConfigValidationError::ZeroDuration { field: "setting" });
         let result = parsed.and_then(|value| {
-            let timer = self.config.timer();
-            let (focus, short, long, interval) = match field {
-                SettingField::FocusMinutes => (
-                    value,
-                    timer.short_break_minutes(),
-                    timer.long_break_minutes(),
-                    u64::from(timer.long_break_interval().get()),
-                ),
-                SettingField::ShortBreakMinutes => (
-                    timer.focus_minutes(),
-                    value,
-                    timer.long_break_minutes(),
-                    u64::from(timer.long_break_interval().get()),
-                ),
-                SettingField::LongBreakMinutes => (
-                    timer.focus_minutes(),
-                    timer.short_break_minutes(),
-                    value,
-                    u64::from(timer.long_break_interval().get()),
-                ),
-                SettingField::LongBreakInterval => (
-                    timer.focus_minutes(),
-                    timer.short_break_minutes(),
-                    timer.long_break_minutes(),
-                    value,
-                ),
-                _ => return Ok(self.config.timer().to_owned()),
-            };
             let interval =
-                u32::try_from(interval).map_err(|_| ConfigValidationError::DurationOverflow {
+                u32::try_from(value).map_err(|_| ConfigValidationError::DurationOverflow {
                     field: "long_break_interval",
                 })?;
-            TimerConfig::new(focus, short, long, interval)
+            let timer = self.config.timer();
+            TimerConfig::from_seconds(
+                timer.focus_duration().as_secs(),
+                timer.short_break_duration().as_secs(),
+                timer.long_break_duration().as_secs(),
+                interval,
+            )
+            .map(|updated| {
+                updated.with_autostart(timer.autostart_breaks(), timer.autostart_focus())
+            })
         });
         match result {
             Ok(timer) => self.replace(
@@ -595,18 +637,63 @@ mod tests {
         settings.pop_input();
         settings.submit_input();
 
-        assert_eq!(settings.config().timer().focus_minutes(), 25);
+        assert_eq!(
+            settings.config().timer().focus_duration().as_secs(),
+            25 * 60
+        );
         assert!(settings.error().is_some());
 
         settings.activate();
-        settings.pop_input();
-        settings.pop_input();
-        settings.push_input('4');
-        settings.push_input('0');
+        for _ in 0..5 {
+            settings.pop_input();
+        }
+        for character in "40:30".chars() {
+            settings.push_input(character);
+        }
         settings.submit_input();
 
-        assert_eq!(settings.config().timer().focus_minutes(), 40);
+        assert_eq!(
+            settings.config().timer().focus_duration().as_secs(),
+            40 * 60 + 30
+        );
         assert!(settings.error().is_none());
+    }
+
+    #[test]
+    fn duration_edits_require_mm_ss_and_reject_invalid_seconds() {
+        let mut settings = SettingsOverlay::new(&Config::default());
+
+        for invalid in ["5:30", "05:60", "00:00", "05"] {
+            settings.activate();
+            for _ in 0..settings.input().unwrap().len() {
+                settings.pop_input();
+            }
+            for character in invalid.chars() {
+                settings.push_input(character);
+            }
+            settings.submit_input();
+
+            assert_eq!(
+                settings.config().timer().focus_duration().as_secs(),
+                25 * 60
+            );
+            assert!(settings.error().is_some(), "{invalid} should be rejected");
+        }
+    }
+
+    #[test]
+    fn timer_value_edits_preserve_autostart_settings() {
+        let config = Config::new(TimerConfig::default().with_autostart(true, true)).unwrap();
+        let mut settings = SettingsOverlay::new(&config);
+
+        settings.set_duration(SettingField::FocusDuration, "20:30".to_string());
+        assert!(settings.config().timer().autostart_breaks());
+        assert!(settings.config().timer().autostart_focus());
+
+        select(&mut settings, SettingField::LongBreakInterval);
+        settings.set_number(SettingField::LongBreakInterval, "5".to_string());
+        assert!(settings.config().timer().autostart_breaks());
+        assert!(settings.config().timer().autostart_focus());
     }
 
     #[test]

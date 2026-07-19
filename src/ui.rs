@@ -724,6 +724,9 @@ fn settings_footer(settings: &crate::settings::SettingsOverlay) -> String {
             SettingField::CompletionSoundFile | SettingField::FocusSoundFile => {
                 "Type an absolute or ~/ path; leave empty to disable"
             }
+            SettingField::FocusDuration
+            | SettingField::ShortBreakDuration
+            | SettingField::LongBreakDuration => "Type a duration as MM:SS",
             _ => "Type a positive number",
         };
         format!("{prompt}  [Enter] apply  [Esc] cancel")
@@ -737,17 +740,17 @@ fn settings_footer(settings: &crate::settings::SettingsOverlay) -> String {
 fn setting_row(field: SettingField, settings: &crate::settings::SettingsOverlay) -> String {
     let config = settings.config();
     let (label, value) = match field {
-        SettingField::FocusMinutes => (
-            "  Focus minutes",
-            config.timer().focus_minutes().to_string(),
+        SettingField::FocusDuration => (
+            "  Focus duration",
+            crate::config::format_duration(config.timer().focus_duration()),
         ),
-        SettingField::ShortBreakMinutes => (
-            "  Short break minutes",
-            config.timer().short_break_minutes().to_string(),
+        SettingField::ShortBreakDuration => (
+            "  Short break duration",
+            crate::config::format_duration(config.timer().short_break_duration()),
         ),
-        SettingField::LongBreakMinutes => (
-            "  Long break minutes",
-            config.timer().long_break_minutes().to_string(),
+        SettingField::LongBreakDuration => (
+            "  Long break duration",
+            crate::config::format_duration(config.timer().long_break_duration()),
         ),
         SettingField::LongBreakInterval => (
             "  Long break interval",
@@ -1400,7 +1403,7 @@ mod tests {
             !setting_row(SettingField::Theme(ThemeRole::FocusedBorder), settings)
                 .contains("Theme /")
         );
-        assert!(!setting_row(SettingField::FocusMinutes, settings).contains("Timer /"));
+        assert!(!setting_row(SettingField::FocusDuration, settings).contains("Timer /"));
         assert!(!setting_row(SettingField::PersistTasks, settings).contains("Tasks /"));
         assert!(!setting_row(SettingField::Key(KeyAction::FocusLeft), settings).contains("Keys /"));
 

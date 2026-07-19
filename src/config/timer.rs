@@ -4,12 +4,49 @@ use super::ConfigValidationError;
 
 const SECONDS_PER_MINUTE: u64 = 60;
 
-/// Timer values as presented in the user configuration file.
+pub(crate) fn format_duration(duration: Duration) -> String {
+    let seconds = duration.as_secs();
+    format!(
+        "{:02}:{:02}",
+        seconds / SECONDS_PER_MINUTE,
+        seconds % SECONDS_PER_MINUTE
+    )
+}
+
+pub(crate) fn parse_duration(
+    value: &str,
+    field: &'static str,
+) -> Result<u64, ConfigValidationError> {
+    let (minutes, seconds) = value
+        .split_once(':')
+        .ok_or(ConfigValidationError::InvalidDuration { field })?;
+    if minutes.len() < 2
+        || seconds.len() != 2
+        || !value.chars().all(|c| c.is_ascii_digit() || c == ':')
+    {
+        return Err(ConfigValidationError::InvalidDuration { field });
+    }
+    let minutes = minutes
+        .parse::<u64>()
+        .map_err(|_| ConfigValidationError::DurationOverflow { field })?;
+    let seconds = seconds
+        .parse::<u64>()
+        .map_err(|_| ConfigValidationError::InvalidDuration { field })?;
+    if seconds >= SECONDS_PER_MINUTE {
+        return Err(ConfigValidationError::InvalidDuration { field });
+    }
+    minutes
+        .checked_mul(SECONDS_PER_MINUTE)
+        .and_then(|total| total.checked_add(seconds))
+        .ok_or(ConfigValidationError::DurationOverflow { field })
+}
+
+/// Validated timer presets used by the application.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct TimerConfig {
-    pub(super) focus_minutes: u64,
-    pub(super) short_break_minutes: u64,
-    pub(super) long_break_minutes: u64,
+    pub(super) focus_seconds: u64,
+    pub(super) short_break_seconds: u64,
+    pub(super) long_break_seconds: u64,
     pub(super) long_break_interval: u32,
     pub(super) autostart_breaks: bool,
     pub(super) autostart_focus: bool,
@@ -22,10 +59,39 @@ impl TimerConfig {
         long_break_minutes: u64,
         long_break_interval: u32,
     ) -> Result<Self, ConfigValidationError> {
+        let focus_seconds = focus_minutes.checked_mul(SECONDS_PER_MINUTE).ok_or(
+            ConfigValidationError::DurationOverflow {
+                field: "focus_duration",
+            },
+        )?;
+        let short_break_seconds = short_break_minutes.checked_mul(SECONDS_PER_MINUTE).ok_or(
+            ConfigValidationError::DurationOverflow {
+                field: "short_break_duration",
+            },
+        )?;
+        let long_break_seconds = long_break_minutes.checked_mul(SECONDS_PER_MINUTE).ok_or(
+            ConfigValidationError::DurationOverflow {
+                field: "long_break_duration",
+            },
+        )?;
+        Self::from_seconds(
+            focus_seconds,
+            short_break_seconds,
+            long_break_seconds,
+            long_break_interval,
+        )
+    }
+
+    pub fn from_seconds(
+        focus_seconds: u64,
+        short_break_seconds: u64,
+        long_break_seconds: u64,
+        long_break_interval: u32,
+    ) -> Result<Self, ConfigValidationError> {
         let timer = Self {
-            focus_minutes,
-            short_break_minutes,
-            long_break_minutes,
+            focus_seconds,
+            short_break_seconds,
+            long_break_seconds,
             long_break_interval,
             autostart_breaks: false,
             autostart_focus: false,
@@ -49,27 +115,15 @@ impl TimerConfig {
     }
 
     pub fn focus_duration(&self) -> Duration {
-        Duration::from_secs(self.focus_minutes * SECONDS_PER_MINUTE)
-    }
-
-    pub fn focus_minutes(&self) -> u64 {
-        self.focus_minutes
-    }
-
-    pub fn short_break_minutes(&self) -> u64 {
-        self.short_break_minutes
-    }
-
-    pub fn long_break_minutes(&self) -> u64 {
-        self.long_break_minutes
+        Duration::from_secs(self.focus_seconds)
     }
 
     pub fn short_break_duration(&self) -> Duration {
-        Duration::from_secs(self.short_break_minutes * SECONDS_PER_MINUTE)
+        Duration::from_secs(self.short_break_seconds)
     }
 
     pub fn long_break_duration(&self) -> Duration {
-        Duration::from_secs(self.long_break_minutes * SECONDS_PER_MINUTE)
+        Duration::from_secs(self.long_break_seconds)
     }
 
     pub fn long_break_interval(&self) -> NonZeroU32 {
@@ -78,16 +132,13 @@ impl TimerConfig {
     }
 
     pub(super) fn validate(&self) -> Result<(), ConfigValidationError> {
-        for (field, minutes) in [
-            ("focus_minutes", self.focus_minutes),
-            ("short_break_minutes", self.short_break_minutes),
-            ("long_break_minutes", self.long_break_minutes),
+        for (field, seconds) in [
+            ("focus_duration", self.focus_seconds),
+            ("short_break_duration", self.short_break_seconds),
+            ("long_break_duration", self.long_break_seconds),
         ] {
-            if minutes == 0 {
+            if seconds == 0 {
                 return Err(ConfigValidationError::ZeroDuration { field });
-            }
-            if minutes.checked_mul(SECONDS_PER_MINUTE).is_none() {
-                return Err(ConfigValidationError::DurationOverflow { field });
             }
         }
 
@@ -102,9 +153,9 @@ impl TimerConfig {
 impl Default for TimerConfig {
     fn default() -> Self {
         Self {
-            focus_minutes: 25,
-            short_break_minutes: 5,
-            long_break_minutes: 15,
+            focus_seconds: 25 * SECONDS_PER_MINUTE,
+            short_break_seconds: 5 * SECONDS_PER_MINUTE,
+            long_break_seconds: 15 * SECONDS_PER_MINUTE,
             long_break_interval: 4,
             autostart_breaks: false,
             autostart_focus: false,

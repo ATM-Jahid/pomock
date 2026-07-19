@@ -91,9 +91,9 @@ On first run,
 
 ```toml
 [timer]
-focus_minutes = 25
-short_break_minutes = 5
-long_break_minutes = 15
+focus_duration = "25:00"
+short_break_duration = "05:00"
+long_break_duration = "15:00"
 long_break_interval = 4
 
 [notification]

@@ -20,6 +20,7 @@ pub use sound::{CompletionSoundConfig, FocusSoundConfig, SoundConfig};
 pub use tasks::TasksConfig;
 pub use theme::{ThemeColor, ThemeConfig, ThemeRole};
 pub use timer::TimerConfig;
+pub(crate) use timer::{format_duration, parse_duration};
 
 #[cfg(test)]
 use keys::KeyBindings;
@@ -38,7 +39,7 @@ pub struct Config {
 }
 
 impl Config {
-    /// Creates and validates configuration expressed in whole minutes.
+    /// Creates and validates configuration with explicit timer settings.
     pub fn new(timer: TimerConfig) -> Result<Self, ConfigValidationError> {
         Self::with_tasks(timer, TasksConfig::default())
     }
@@ -211,6 +212,9 @@ pub enum ConfigValidationError {
     DurationOverflow {
         field: &'static str,
     },
+    InvalidDuration {
+        field: &'static str,
+    },
     ZeroLongBreakInterval,
     EmptyKeyBindings {
         field: &'static str,
@@ -240,6 +244,12 @@ impl fmt::Display for ConfigValidationError {
         match self {
             Self::ZeroDuration { field } => write!(formatter, "{field} must be greater than zero"),
             Self::DurationOverflow { field } => write!(formatter, "{field} is too large"),
+            Self::InvalidDuration { field } => {
+                write!(
+                    formatter,
+                    "{field} must use MM:SS with seconds from 00 to 59"
+                )
+            }
             Self::ZeroLongBreakInterval => {
                 formatter.write_str("long_break_interval must be greater than zero")
             }
@@ -364,9 +374,9 @@ struct StoredConfig {
 #[derive(Debug, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 struct StoredTimerConfig {
-    focus_minutes: u64,
-    short_break_minutes: u64,
-    long_break_minutes: u64,
+    focus_duration: String,
+    short_break_duration: String,
+    long_break_duration: String,
     long_break_interval: u32,
     #[serde(default)]
     autostart_breaks: bool,
@@ -400,10 +410,10 @@ impl TryFrom<StoredConfig> for Config {
 
     fn try_from(stored: StoredConfig) -> Result<Self, Self::Error> {
         Self::with_all_settings(
-            TimerConfig::new(
-                stored.timer.focus_minutes,
-                stored.timer.short_break_minutes,
-                stored.timer.long_break_minutes,
+            TimerConfig::from_seconds(
+                parse_duration(&stored.timer.focus_duration, "focus_duration")?,
+                parse_duration(&stored.timer.short_break_duration, "short_break_duration")?,
+                parse_duration(&stored.timer.long_break_duration, "long_break_duration")?,
                 stored.timer.long_break_interval,
             )?
             .with_autostart(stored.timer.autostart_breaks, stored.timer.autostart_focus),
@@ -421,9 +431,9 @@ impl From<&Config> for StoredConfig {
         let timer = config.timer();
         Self {
             timer: StoredTimerConfig {
-                focus_minutes: timer.focus_minutes,
-                short_break_minutes: timer.short_break_minutes,
-                long_break_minutes: timer.long_break_minutes,
+                focus_duration: format_duration(timer.focus_duration()),
+                short_break_duration: format_duration(timer.short_break_duration()),
+                long_break_duration: format_duration(timer.long_break_duration()),
                 long_break_interval: timer.long_break_interval,
                 autostart_breaks: timer.autostart_breaks,
                 autostart_focus: timer.autostart_focus,
@@ -514,9 +524,9 @@ mod tests {
             contents,
             concat!(
                 "[timer]\n",
-                "focus_minutes = 25\n",
-                "short_break_minutes = 5\n",
-                "long_break_minutes = 15\n",
+                "focus_duration = \"25:00\"\n",
+                "short_break_duration = \"05:00\"\n",
+                "long_break_duration = \"15:00\"\n",
                 "long_break_interval = 4\n",
                 "autostart_breaks = false\n",
                 "autostart_focus = false\n",
@@ -577,7 +587,7 @@ mod tests {
         let path = temp_path("partial-sound.toml");
         fs::write(
             &path,
-            "[timer]\nfocus_minutes = 25\nshort_break_minutes = 5\nlong_break_minutes = 15\nlong_break_interval = 4\n\n[sound.completion]\nfile = \"~/complete.wav\"\n\n[sound.focus]\nfile = \"~/focus.wav\"\n",
+            "[timer]\nfocus_duration = \"25:00\"\nshort_break_duration = \"05:00\"\nlong_break_duration = \"15:00\"\nlong_break_interval = 4\n\n[sound.completion]\nfile = \"~/complete.wav\"\n\n[sound.focus]\nfile = \"~/focus.wav\"\n",
         )
         .unwrap();
 
@@ -664,7 +674,7 @@ mod tests {
         let path = temp_path("relative-sound.toml");
         fs::write(
             &path,
-            "[timer]\nfocus_minutes = 25\nshort_break_minutes = 5\nlong_break_minutes = 15\nlong_break_interval = 4\n\n[sound.completion]\nenabled = true\nfile = \"sounds/done.wav\"\n",
+            "[timer]\nfocus_duration = \"25:00\"\nshort_break_duration = \"05:00\"\nlong_break_duration = \"15:00\"\nlong_break_interval = 4\n\n[sound.completion]\nenabled = true\nfile = \"sounds/done.wav\"\n",
         )
         .unwrap();
 
@@ -682,7 +692,7 @@ mod tests {
         let path = temp_path("relative-focus-sound.toml");
         fs::write(
             &path,
-            "[timer]\nfocus_minutes = 25\nshort_break_minutes = 5\nlong_break_minutes = 15\nlong_break_interval = 4\n\n[sound.focus]\nenabled = true\nfile = \"sounds/focus.wav\"\n",
+            "[timer]\nfocus_duration = \"25:00\"\nshort_break_duration = \"05:00\"\nlong_break_duration = \"15:00\"\nlong_break_interval = 4\n\n[sound.focus]\nenabled = true\nfile = \"sounds/focus.wav\"\n",
         )
         .unwrap();
 
@@ -698,7 +708,7 @@ mod tests {
     fn saves_and_loads_a_valid_toml_round_trip() {
         let path = temp_path("round-trip/config.toml");
         let config = Config::with_settings(
-            TimerConfig::new(50, 10, 30, 3)
+            TimerConfig::from_seconds(50 * 60 + 30, 10 * 60 + 15, 30 * 60 + 45, 3)
                 .unwrap()
                 .with_autostart(true, false),
             TasksConfig::with_numbering(false, false),
@@ -721,7 +731,7 @@ mod tests {
 
         let contents = fs::read_to_string(&path).unwrap();
         assert!(contents.contains("[timer]"));
-        assert!(contents.contains("focus_minutes = 50"));
+        assert!(contents.contains("focus_duration = \"50:30\""));
         assert!(contents.contains("autostart_breaks = true"));
         assert!(contents.contains("autostart_focus = false"));
         assert!(contents.contains("[tasks]"));
@@ -741,7 +751,7 @@ mod tests {
         let path = temp_path("legacy.toml");
         fs::write(
             &path,
-            "[timer]\nfocus_minutes = 25\nshort_break_minutes = 5\nlong_break_minutes = 15\nlong_break_interval = 4\n",
+            "[timer]\nfocus_duration = \"25:00\"\nshort_break_duration = \"05:00\"\nlong_break_duration = \"15:00\"\nlong_break_interval = 4\n",
         )
         .unwrap();
 
@@ -759,7 +769,7 @@ mod tests {
         let path = temp_path("partial-keys.toml");
         fs::write(
             &path,
-            "[timer]\nfocus_minutes = 25\nshort_break_minutes = 5\nlong_break_minutes = 15\nlong_break_interval = 4\n\n[keys]\ncycle_session = \"n\"\nclock_primary = \"enter\"\n",
+            "[timer]\nfocus_duration = \"25:00\"\nshort_break_duration = \"05:00\"\nlong_break_duration = \"15:00\"\nlong_break_interval = 4\n\n[keys]\ncycle_session = \"n\"\nclock_primary = \"enter\"\n",
         )
         .unwrap();
 
@@ -777,7 +787,7 @@ mod tests {
         let path = temp_path("multiple-keys.toml");
         fs::write(
             &path,
-            "[timer]\nfocus_minutes = 25\nshort_break_minutes = 5\nlong_break_minutes = 15\nlong_break_interval = 4\n\n[keys]\nlist_down = [\"j\", \"down\"]\nlist_up = [\"k\", \"up\"]\nquit = \"q\"\n",
+            "[timer]\nfocus_duration = \"25:00\"\nshort_break_duration = \"05:00\"\nlong_break_duration = \"15:00\"\nlong_break_interval = 4\n\n[keys]\nlist_down = [\"j\", \"down\"]\nlist_up = [\"k\", \"up\"]\nquit = \"q\"\n",
         )
         .unwrap();
 
@@ -805,7 +815,7 @@ mod tests {
         let path = temp_path("empty-keys.toml");
         fs::write(
             &path,
-            "[timer]\nfocus_minutes = 25\nshort_break_minutes = 5\nlong_break_minutes = 15\nlong_break_interval = 4\n\n[keys]\nquit = []\n",
+            "[timer]\nfocus_duration = \"25:00\"\nshort_break_duration = \"05:00\"\nlong_break_duration = \"15:00\"\nlong_break_interval = 4\n\n[keys]\nquit = []\n",
         )
         .unwrap();
 
@@ -822,7 +832,7 @@ mod tests {
         let path = temp_path("conflicting-secondary-key.toml");
         fs::write(
             &path,
-            "[timer]\nfocus_minutes = 25\nshort_break_minutes = 5\nlong_break_minutes = 15\nlong_break_interval = 4\n\n[keys]\ncycle_session = [\"c\", \"q\"]\n",
+            "[timer]\nfocus_duration = \"25:00\"\nshort_break_duration = \"05:00\"\nlong_break_duration = \"15:00\"\nlong_break_interval = 4\n\n[keys]\ncycle_session = [\"c\", \"q\"]\n",
         )
         .unwrap();
 
@@ -839,7 +849,7 @@ mod tests {
         let path = temp_path("reserved-escape.toml");
         fs::write(
             &path,
-            "[timer]\nfocus_minutes = 25\nshort_break_minutes = 5\nlong_break_minutes = 15\nlong_break_interval = 4\n\n[keys]\ncycle_session = \"esc\"\n",
+            "[timer]\nfocus_duration = \"25:00\"\nshort_break_duration = \"05:00\"\nlong_break_duration = \"15:00\"\nlong_break_interval = 4\n\n[keys]\ncycle_session = \"esc\"\n",
         )
         .unwrap();
 
@@ -857,7 +867,7 @@ mod tests {
         let path = temp_path("settings-overlay-key.toml");
         fs::write(
             &path,
-            "[timer]\nfocus_minutes = 25\nshort_break_minutes = 5\nlong_break_minutes = 15\nlong_break_interval = 4\n\n[keys]\nsettings = \"enter\"\n",
+            "[timer]\nfocus_duration = \"25:00\"\nshort_break_duration = \"05:00\"\nlong_break_duration = \"15:00\"\nlong_break_interval = 4\n\n[keys]\nsettings = \"enter\"\n",
         )
         .unwrap();
 
@@ -922,7 +932,7 @@ mod tests {
         let path = temp_path("invalid-key.toml");
         fs::write(
             &path,
-            "[timer]\nfocus_minutes = 25\nshort_break_minutes = 5\nlong_break_minutes = 15\nlong_break_interval = 4\n\n[keys]\ncycle_session = \"page_down\"\n",
+            "[timer]\nfocus_duration = \"25:00\"\nshort_break_duration = \"05:00\"\nlong_break_duration = \"15:00\"\nlong_break_interval = 4\n\n[keys]\ncycle_session = \"page_down\"\n",
         )
         .unwrap();
 
@@ -940,7 +950,7 @@ mod tests {
         let path = temp_path("conflicting-keys.toml");
         fs::write(
             &path,
-            "[timer]\nfocus_minutes = 25\nshort_break_minutes = 5\nlong_break_minutes = 15\nlong_break_interval = 4\n\n[keys]\ncycle_session = \"q\"\n",
+            "[timer]\nfocus_duration = \"25:00\"\nshort_break_duration = \"05:00\"\nlong_break_duration = \"15:00\"\nlong_break_interval = 4\n\n[keys]\ncycle_session = \"q\"\n",
         )
         .unwrap();
 
@@ -958,7 +968,7 @@ mod tests {
         let path = temp_path("conflicting-task-movement-key.toml");
         fs::write(
             &path,
-            "[timer]\nfocus_minutes = 25\nshort_break_minutes = 5\nlong_break_minutes = 15\nlong_break_interval = 4\n\n[keys]\nmove_task_up = \"a\"\nmove_task_down = \"d\"\n",
+            "[timer]\nfocus_duration = \"25:00\"\nshort_break_duration = \"05:00\"\nlong_break_duration = \"15:00\"\nlong_break_interval = 4\n\n[keys]\nmove_task_up = \"a\"\nmove_task_down = \"d\"\n",
         )
         .unwrap();
 
@@ -993,7 +1003,7 @@ mod tests {
         let path = temp_path("partial-theme.toml");
         fs::write(
             &path,
-            "[timer]\nfocus_minutes = 25\nshort_break_minutes = 5\nlong_break_minutes = 15\nlong_break_interval = 4\n\n[theme]\nfocused_border = \"light_cyan\"\n",
+            "[timer]\nfocus_duration = \"25:00\"\nshort_break_duration = \"05:00\"\nlong_break_duration = \"15:00\"\nlong_break_interval = 4\n\n[theme]\nfocused_border = \"light_cyan\"\n",
         )
         .unwrap();
 
@@ -1010,7 +1020,7 @@ mod tests {
         let path = temp_path("hex-theme.toml");
         fs::write(
             &path,
-            "[timer]\nfocus_minutes = 25\nshort_break_minutes = 5\nlong_break_minutes = 15\nlong_break_interval = 4\n\n[theme]\nfocused_border = \"#5FD7fF\"\n",
+            "[timer]\nfocus_duration = \"25:00\"\nshort_break_duration = \"05:00\"\nlong_break_duration = \"15:00\"\nlong_break_interval = 4\n\n[theme]\nfocused_border = \"#5FD7fF\"\n",
         )
         .unwrap();
 
@@ -1034,7 +1044,7 @@ mod tests {
         let path = temp_path("invalid-theme.toml");
         fs::write(
             &path,
-            "[timer]\nfocus_minutes = 25\nshort_break_minutes = 5\nlong_break_minutes = 15\nlong_break_interval = 4\n\n[theme]\nfocused_border = \"orange\"\nunfocused_border = \"dark_gray\"\ntodo_highlight = \"yellow\"\ndone_highlight = \"green\"\n",
+            "[timer]\nfocus_duration = \"25:00\"\nshort_break_duration = \"05:00\"\nlong_break_duration = \"15:00\"\nlong_break_interval = 4\n\n[theme]\nfocused_border = \"orange\"\nunfocused_border = \"dark_gray\"\ntodo_highlight = \"yellow\"\ndone_highlight = \"green\"\n",
         )
         .unwrap();
 
@@ -1051,7 +1061,7 @@ mod tests {
         let path = temp_path("tasks-without-numbering.toml");
         fs::write(
             &path,
-            "[timer]\nfocus_minutes = 25\nshort_break_minutes = 5\nlong_break_minutes = 15\nlong_break_interval = 4\n\n[tasks]\npersist = false\n",
+            "[timer]\nfocus_duration = \"25:00\"\nshort_break_duration = \"05:00\"\nlong_break_duration = \"15:00\"\nlong_break_interval = 4\n\n[tasks]\npersist = false\n",
         )
         .unwrap();
 
@@ -1065,7 +1075,7 @@ mod tests {
     #[test]
     fn malformed_toml_reports_its_path_and_parse_error() {
         let path = temp_path("malformed.toml");
-        fs::write(&path, "[timer\nfocus_minutes = 25").unwrap();
+        fs::write(&path, "[timer\nfocus_duration = \"25:00\"").unwrap();
 
         let error = Config::load_from(&path).unwrap_err();
 
@@ -1081,7 +1091,7 @@ mod tests {
         assert_eq!(
             error,
             ConfigValidationError::ZeroDuration {
-                field: "focus_minutes"
+                field: "focus_duration"
             }
         );
     }
@@ -1098,7 +1108,7 @@ mod tests {
         let path = temp_path("invalid.toml");
         fs::write(
             &path,
-            "[timer]\nfocus_minutes = 25\nshort_break_minutes = 5\nlong_break_minutes = 15\nlong_break_interval = 0\n",
+            "[timer]\nfocus_duration = \"25:00\"\nshort_break_duration = \"05:00\"\nlong_break_duration = \"15:00\"\nlong_break_interval = 0\n",
         )
         .unwrap();
 

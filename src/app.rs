@@ -2486,15 +2486,17 @@ mod tests {
         let _ = app.tick(Duration::from_secs(10));
         let _ = app.dispatch(Action::OpenSettings);
         let _ = app.dispatch(Action::SettingsActivate);
-        let _ = app.dispatch(Action::SettingsPopInput);
-        let _ = app.dispatch(Action::SettingsPopInput);
-        let _ = app.dispatch(Action::SettingsPushInput('3'));
-        let _ = app.dispatch(Action::SettingsPushInput('0'));
+        for _ in 0..5 {
+            let _ = app.dispatch(Action::SettingsPopInput);
+        }
+        for character in "30:00".chars() {
+            let _ = app.dispatch(Action::SettingsPushInput(character));
+        }
         let outcome = app.dispatch(Action::SettingsSubmitInput);
         let AppOutcome::SettingsChanged(config) = outcome else {
             panic!("timer setting was not emitted")
         };
-        assert_eq!(config.timer().focus_minutes(), 30);
+        assert_eq!(config.timer().focus_duration().as_secs(), 30 * 60);
         assert_eq!(app.timer().state(), TimerState::Running(SessionKind::Focus));
         assert_eq!(app.timer().progress(), Duration::from_secs(10));
         assert_eq!(app.timer().remaining(), Duration::from_secs(25 * 60 - 10));
@@ -2509,10 +2511,12 @@ mod tests {
         let mut app = App::new();
         let _ = app.dispatch(Action::OpenSettings);
         let _ = app.dispatch(Action::SettingsActivate);
-        let _ = app.dispatch(Action::SettingsPopInput);
-        let _ = app.dispatch(Action::SettingsPopInput);
-        let _ = app.dispatch(Action::SettingsPushInput('3'));
-        let _ = app.dispatch(Action::SettingsPushInput('0'));
+        for _ in 0..5 {
+            let _ = app.dispatch(Action::SettingsPopInput);
+        }
+        for character in "30:00".chars() {
+            let _ = app.dispatch(Action::SettingsPushInput(character));
+        }
 
         assert!(matches!(
             app.dispatch(Action::SettingsSubmitInput),
