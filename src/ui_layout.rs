@@ -10,13 +10,14 @@ use crate::{
     display::{BIG_DURATION_HEIGHT, big_duration_width},
 };
 
-const MIN_CLOCK_HEIGHT: u16 = 10;
+// Border, state, duration, completed count, and session controls.
+const MIN_CLOCK_HEIGHT: u16 = 6;
 const MIN_TASK_HEIGHT: u16 = 3;
 const MIN_TASK_WIDTH: u16 = 24;
 const RESERVED_HELP_HEIGHT: u16 = 2;
 const SPACED_CLOCK_MIN_INNER_HEIGHT: u16 = 12;
-// Two gaps, two outer padding rows, and the status, count, and controls rows.
-const NON_GLYPH_SPACED_HEIGHT: u16 = 7;
+const NON_GLYPH_HEIGHT: u16 = 3;
+const SCALED_GLYPH_PADDING_HEIGHT: u16 = 7;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum WorkspaceMode {
@@ -34,7 +35,19 @@ pub(crate) struct ClockGeometry {
     pub(crate) remaining: Rect,
     pub(crate) completed_sessions: Rect,
     pub(crate) session_controls: [Rect; 3],
-    pub(crate) glyph_scale: u16,
+    pub(crate) face: ClockFace,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum ClockFace {
+    Text,
+    Glyphs { scale: u16 },
+}
+
+#[derive(Debug, Clone, Copy)]
+pub(crate) struct TextClockGeometry {
+    pub(crate) area: Rect,
+    pub(crate) remaining: Rect,
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -61,7 +74,7 @@ enum WorkspaceGeometry {
     },
     CompactClock(ClockGeometry),
     CompactTask(TaskGeometry),
-    TinyClock(Rect),
+    TinyClock(TextClockGeometry),
 }
 
 /// Exact rectangles used to render one application frame.
@@ -136,7 +149,7 @@ impl FrameGeometry {
         }
     }
 
-    pub(crate) fn compact_clock(self) -> Option<Rect> {
+    pub(crate) fn compact_clock(self) -> Option<TextClockGeometry> {
         match self.workspace {
             WorkspaceGeometry::TinyClock(area) => Some(area),
             _ => None,
@@ -178,8 +191,10 @@ pub(crate) fn resolve(request: LayoutRequest) -> FrameGeometry {
 }
 
 fn classify(inner_area: Rect, duration: Duration) -> WorkspaceMode {
-    let single_width = big_duration_width(duration).saturating_add(2);
-    let split_width = single_width.max(MIN_TASK_WIDTH.saturating_mul(2));
+    let single_width = u16::try_from(crate::display::format_duration(duration).len())
+        .unwrap_or(u16::MAX)
+        .saturating_add(2);
+    let split_width = MIN_TASK_WIDTH.saturating_mul(2);
     let stacked_height = MIN_CLOCK_HEIGHT.saturating_add(MIN_TASK_HEIGHT);
     let classifiable_height = inner_area.height.saturating_sub(RESERVED_HELP_HEIGHT);
     let can_show_single =
@@ -201,18 +216,16 @@ fn budget_help(mode: WorkspaceMode, inner_area: Rect, desired_height: u16) -> u1
     let minimum_workspace_height = match mode {
         WorkspaceMode::Full | WorkspaceMode::Narrow => stacked_height,
         WorkspaceMode::Short | WorkspaceMode::Compact => MIN_CLOCK_HEIGHT,
-        WorkspaceMode::Tiny => 0,
+        // A boxed text clock needs its two borders and one printable timer row.
+        WorkspaceMode::Tiny => 3,
     };
+    let available_help_height = inner_area.height.saturating_sub(minimum_workspace_height);
+    let clock_can_show_text = mode != WorkspaceMode::Tiny || inner_area.width >= 7;
 
-    if mode == WorkspaceMode::Tiny {
-        let available_help_height = inner_area.height.saturating_sub(1);
-        if inner_area.width >= 5 && desired_height <= available_help_height {
-            desired_height
-        } else {
-            0
-        }
+    if clock_can_show_text && desired_height <= available_help_height {
+        desired_height
     } else {
-        desired_height.min(inner_area.height.saturating_sub(minimum_workspace_height))
+        0
     }
 }
 
@@ -257,7 +270,10 @@ fn allocate_workspace(
             UiFocus::Todo => WorkspaceGeometry::CompactTask(TaskGeometry::Todo(area)),
             UiFocus::Done => WorkspaceGeometry::CompactTask(TaskGeometry::Done(area)),
         },
-        WorkspaceMode::Tiny => WorkspaceGeometry::TinyClock(area),
+        WorkspaceMode::Tiny => {
+            let remaining = Block::default().borders(Borders::ALL).inner(area);
+            WorkspaceGeometry::TinyClock(TextClockGeometry { area, remaining })
+        }
     }
 }
 
@@ -284,9 +300,21 @@ fn split_clock_and_tasks(area: Rect) -> [Rect; 2] {
 pub(crate) fn clock_geometry(area: Rect, duration: Duration) -> ClockGeometry {
     let inner = Block::default().borders(Borders::ALL).inner(area);
     let scale_for_width = inner.width / big_duration_width(duration);
-    let scale_for_height =
-        inner.height.saturating_sub(NON_GLYPH_SPACED_HEIGHT) / BIG_DURATION_HEIGHT;
-    let glyph_scale = scale_for_width.min(scale_for_height).max(1);
+    let scale_for_height = if inner.height >= NON_GLYPH_HEIGHT + BIG_DURATION_HEIGHT {
+        (inner.height.saturating_sub(SCALED_GLYPH_PADDING_HEIGHT) / BIG_DURATION_HEIGHT).max(1)
+    } else {
+        0
+    };
+    let glyph_scale = scale_for_width.min(scale_for_height);
+    let face = if glyph_scale == 0 {
+        ClockFace::Text
+    } else {
+        ClockFace::Glyphs { scale: glyph_scale }
+    };
+    let duration_height = match face {
+        ClockFace::Text => 1,
+        ClockFace::Glyphs { scale } => BIG_DURATION_HEIGHT.saturating_mul(scale),
+    };
     let content_gap = u16::from(inner.height >= SPACED_CLOCK_MIN_INNER_HEIGHT);
     let chunks = Layout::default()
         .direction(Direction::Vertical)
@@ -294,7 +322,7 @@ pub(crate) fn clock_geometry(area: Rect, duration: Duration) -> ClockGeometry {
             Constraint::Fill(1),
             Constraint::Length(1),
             Constraint::Length(content_gap),
-            Constraint::Length(BIG_DURATION_HEIGHT * glyph_scale),
+            Constraint::Length(duration_height),
             Constraint::Length(content_gap),
             Constraint::Length(1),
             Constraint::Fill(1),
@@ -316,7 +344,7 @@ pub(crate) fn clock_geometry(area: Rect, duration: Duration) -> ClockGeometry {
         remaining: chunks[3],
         completed_sessions: chunks[5],
         session_controls: [controls[0], controls[1], controls[2]],
-        glyph_scale,
+        face,
     }
 }
 
@@ -339,12 +367,12 @@ mod tests {
     #[test]
     fn exact_default_duration_boundaries_select_each_mode() {
         for (width, height, expected) in [
-            (50, 17, WorkspaceMode::Full),
-            (50, 16, WorkspaceMode::Short),
-            (49, 17, WorkspaceMode::Narrow),
-            (34, 14, WorkspaceMode::Compact),
-            (33, 14, WorkspaceMode::Tiny),
-            (34, 13, WorkspaceMode::Tiny),
+            (50, 13, WorkspaceMode::Full),
+            (50, 12, WorkspaceMode::Short),
+            (49, 13, WorkspaceMode::Narrow),
+            (9, 12, WorkspaceMode::Compact),
+            (8, 12, WorkspaceMode::Tiny),
+            (9, 9, WorkspaceMode::Tiny),
         ] {
             assert_eq!(
                 resolve(request(width, height)).mode(),
@@ -372,9 +400,58 @@ mod tests {
     }
 
     #[test]
+    fn contextual_help_is_complete_or_omitted_in_every_workspace_mode() {
+        for (width, height, desired_height, expected_mode, expected_height) in [
+            (50, 13, 2, WorkspaceMode::Full, 2),
+            (50, 13, 3, WorkspaceMode::Full, 0),
+            (50, 12, 4, WorkspaceMode::Short, 4),
+            (50, 12, 5, WorkspaceMode::Short, 0),
+            (20, 13, 2, WorkspaceMode::Narrow, 2),
+            (20, 13, 3, WorkspaceMode::Narrow, 0),
+            (20, 10, 2, WorkspaceMode::Compact, 2),
+            (20, 10, 3, WorkspaceMode::Compact, 0),
+            (80, 9, 4, WorkspaceMode::Tiny, 4),
+            (80, 9, 5, WorkspaceMode::Tiny, 0),
+        ] {
+            let geometry = resolve(LayoutRequest {
+                controls_height: desired_height,
+                ..request(width, height)
+            });
+
+            assert_eq!(geometry.mode(), expected_mode, "terminal: {width}x{height}");
+            assert_eq!(
+                geometry.controls().height,
+                expected_height,
+                "terminal: {width}x{height}, desired help: {desired_height}"
+            );
+        }
+    }
+
+    #[test]
+    fn clock_face_steps_from_text_through_every_fitting_glyph_scale() {
+        let duration = DEFAULT_DURATION;
+
+        assert_eq!(
+            clock_geometry(Rect::new(0, 0, 20, 10), duration).face,
+            ClockFace::Text
+        );
+        assert_eq!(
+            clock_geometry(Rect::new(0, 0, 32, 10), duration).face,
+            ClockFace::Glyphs { scale: 1 }
+        );
+        assert_eq!(
+            clock_geometry(Rect::new(0, 0, 62, 19), duration).face,
+            ClockFace::Glyphs { scale: 2 }
+        );
+    }
+
+    #[test]
     fn generated_regions_stay_inside_the_terminal_at_all_small_sizes() {
-        for width in 0..=100 {
-            for height in 0..=40 {
+        const WIDTHS: [u16; 15] = [0, 1, 2, 8, 9, 10, 31, 32, 33, 49, 50, 51, 62, 63, 100];
+        const HEIGHTS: [u16; 16] = [0, 1, 2, 3, 4, 8, 9, 10, 11, 12, 13, 14, 18, 19, 20, 40];
+
+        for width in WIDTHS {
+            for height in HEIGHTS {
                 let geometry = resolve(request(width, height));
                 let terminal = geometry.area();
                 let mut regions = vec![geometry.controls()];
@@ -389,7 +466,9 @@ mod tests {
                 }
                 regions.extend(geometry.todo());
                 regions.extend(geometry.done());
-                regions.extend(geometry.compact_clock());
+                if let Some(clock) = geometry.compact_clock() {
+                    regions.extend([clock.area, clock.remaining]);
+                }
 
                 for region in regions {
                     assert!(

@@ -24,7 +24,7 @@ use pomock::{
     notification::{DesktopNotifier, Notifier},
     persistence::{TaskPersistenceError, TaskStore},
     sound::{FileSoundPlayer, SoundPlayer},
-    ui::{FrameGeometry, Theme, click_target, draw, scroll_target},
+    ui::{FrameGeometry, Theme, action_target_visible, click_target, draw, scroll_target},
 };
 
 fn handle_mouse(
@@ -401,7 +401,8 @@ fn run_app(
                         app.is_confirmation_open(),
                         app.settings_mode(),
                         app.input_keys(),
-                    ) {
+                    ) && action_target_visible(&frame_geometry, app.ui_focus(), &action)
+                    {
                         let outcome = app.dispatch(action);
                         if handle_outcome(
                             outcome,
