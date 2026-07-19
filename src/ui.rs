@@ -15,13 +15,13 @@ use crate::{
     display::{format_big_duration_at_scale, format_duration, format_key, format_state},
     settings::SettingField,
     timer::{SessionKind, TimerState},
-    ui_layout::{ClockFace, LayoutRequest, WorkspaceMode, resolve},
+    ui_layout::{ClockFace, LayoutRequest, resolve},
 };
 
 pub use crate::ui_layout::FrameGeometry;
 
 #[cfg(test)]
-use crate::ui_layout::clock_geometry;
+use crate::ui_layout::{WorkspaceMode, clock_geometry};
 
 #[derive(Debug, Clone, Copy)]
 pub struct Theme {
@@ -236,33 +236,6 @@ pub fn draw(frame: &mut Frame, app: &mut App, theme: Theme, keys: &KeysConfig) -
     if let Some(done_area) = layout.done() {
         frame.render_stateful_widget(done, done_area, &mut done_state);
     }
-    if layout.mode() == WorkspaceMode::Tiny
-        && let Some(compact_clock) = layout.compact_clock()
-    {
-        frame.render_widget(
-            focused_block("Clock", app.ui_focus() == UiFocus::Clock, theme),
-            compact_clock.area,
-        );
-        let duration_text = format_duration(remaining_duration);
-        let detailed_text = format!("{state_text}  {duration_text}");
-        let compact_text = if usize::from(compact_clock.remaining.width) >= detailed_text.len() {
-            detailed_text
-        } else if compact_clock.remaining.width >= 5 {
-            duration_text
-        } else {
-            String::new()
-        };
-        frame.render_widget(
-            Paragraph::new(compact_text)
-                .alignment(Alignment::Center)
-                .style(
-                    Style::default()
-                        .fg(theme.session(current_session))
-                        .add_modifier(Modifier::BOLD),
-                ),
-            compact_clock.remaining,
-        );
-    }
     if layout.controls().width > 0 && layout.controls().height > 0 {
         frame.render_widget(controls, layout.controls());
     }
@@ -362,9 +335,6 @@ pub fn click_target(layout: &FrameGeometry, position: (u16, u16), app: &App) -> 
     } else if layout
         .clock()
         .is_some_and(|clock| clock.area.contains(point))
-        || layout
-            .compact_clock()
-            .is_some_and(|clock| clock.area.contains(point))
     {
         ClickTarget::Clock
     } else if let Some(area) = layout.todo().filter(|area| area.contains(point)) {
@@ -429,7 +399,7 @@ pub fn action_target_visible(layout: &FrameGeometry, focus: UiFocus, action: &Ac
     }
 
     match focus {
-        UiFocus::Clock => layout.clock().is_some() || layout.compact_clock().is_some(),
+        UiFocus::Clock => layout.clock().is_some(),
         UiFocus::Todo => layout.todo().is_some(),
         UiFocus::Done => layout.done().is_some(),
     }
@@ -1032,10 +1002,10 @@ mod tests {
         let app = App::new();
         for (area, expected) in [
             (Rect::new(0, 0, 80, 24), WorkspaceMode::Full),
-            (Rect::new(0, 0, 80, 12), WorkspaceMode::Short),
+            (Rect::new(0, 0, 80, 10), WorkspaceMode::Short),
             (Rect::new(0, 0, 40, 24), WorkspaceMode::Narrow),
-            (Rect::new(0, 0, 40, 12), WorkspaceMode::Compact),
-            (Rect::new(0, 0, 20, 9), WorkspaceMode::Tiny),
+            (Rect::new(0, 0, 40, 10), WorkspaceMode::Compact),
+            (Rect::new(0, 0, 20, 9), WorkspaceMode::Compact),
         ] {
             assert_eq!(app_layout(area, &app).mode(), expected, "area: {area:?}");
         }
@@ -1045,10 +1015,10 @@ mod tests {
     fn responsive_mode_is_stable_when_focus_changes_the_help_height() {
         for (area, expected) in [
             (Rect::new(0, 0, 80, 24), WorkspaceMode::Full),
-            (Rect::new(0, 0, 80, 12), WorkspaceMode::Short),
+            (Rect::new(0, 0, 80, 10), WorkspaceMode::Short),
             (Rect::new(0, 0, 40, 24), WorkspaceMode::Narrow),
-            (Rect::new(0, 0, 40, 12), WorkspaceMode::Compact),
-            (Rect::new(0, 0, 20, 9), WorkspaceMode::Tiny),
+            (Rect::new(0, 0, 40, 10), WorkspaceMode::Compact),
+            (Rect::new(0, 0, 20, 9), WorkspaceMode::Compact),
         ] {
             let mut app = App::new();
             assert_eq!(app_layout(area, &app).mode(), expected);
@@ -1066,7 +1036,7 @@ mod tests {
 
     #[test]
     fn short_layout_switches_between_clock_and_the_task_split() {
-        let area = Rect::new(0, 0, 80, 12);
+        let area = Rect::new(0, 0, 80, 10);
         let mut app = App::new();
 
         let clock = app_layout(area, &app);
@@ -1085,7 +1055,7 @@ mod tests {
 
     #[test]
     fn hit_testing_uses_the_layout_of_the_last_rendered_frame() {
-        let area = Rect::new(0, 0, 80, 12);
+        let area = Rect::new(0, 0, 80, 10);
         let mut app = App::new();
         let rendered = app_layout(area, &app);
         let clock = rendered.clock().unwrap().area;
@@ -1125,7 +1095,7 @@ mod tests {
 
     #[test]
     fn compact_layout_shows_only_the_focused_panel() {
-        let area = Rect::new(0, 0, 40, 12);
+        let area = Rect::new(0, 0, 40, 10);
         let mut app = App::new();
 
         let clock = app_layout(area, &app);
@@ -1146,28 +1116,28 @@ mod tests {
     }
 
     #[test]
-    fn tiny_layout_exposes_only_its_boxed_clock_hit_target() {
+    fn smallest_compact_clock_exposes_only_its_boxed_hit_target() {
         let app = App::new();
         let area = Rect::new(0, 0, 20, 9);
         let layout = app_layout(area, &app);
 
-        assert_eq!(layout.mode(), WorkspaceMode::Tiny);
-        assert!(layout.compact_clock().is_some());
+        assert_eq!(layout.mode(), WorkspaceMode::Compact);
+        assert!(layout.clock().is_some());
         assert_eq!(click_target(&layout, (10, 5), &app), ClickTarget::Clock);
         assert_eq!(scroll_target(&layout, (10, 5), &app), None);
     }
 
     #[test]
-    fn tiny_layout_shows_complete_help_when_it_fits_beside_the_text_clock() {
+    fn short_text_clock_shows_complete_help_when_it_fits() {
         let mut app = App::new();
-        let area = Rect::new(0, 0, 80, 9);
+        let area = Rect::new(0, 0, 80, 10);
         let help = wrap_help(&controls_text(&app, app.input_keys()), inner_width(area));
         let layout = app_layout(area, &app);
 
-        assert_eq!(layout.mode(), WorkspaceMode::Tiny);
+        assert_eq!(layout.mode(), WorkspaceMode::Short);
         assert_eq!(layout.controls().height, text_height(&help));
         assert!(layout.controls().height > 0);
-        assert!(layout.compact_clock().unwrap().remaining.height > 0);
+        assert!(layout.clock().unwrap().remaining.height > 0);
 
         let theme = Theme::from(&ThemeConfig::default());
         let keys = KeysConfig::default();
@@ -1188,14 +1158,14 @@ mod tests {
     }
 
     #[test]
-    fn tiny_layout_omits_help_when_it_would_displace_the_text_clock() {
+    fn one_row_compact_clock_omits_help_instead_of_displacing_the_timer() {
         let app = App::new();
-        let area = Rect::new(0, 0, 30, 4);
+        let area = Rect::new(0, 0, 30, 5);
         let layout = app_layout(area, &app);
 
-        assert_eq!(layout.mode(), WorkspaceMode::Tiny);
+        assert_eq!(layout.mode(), WorkspaceMode::Compact);
         assert_eq!(layout.controls().height, 0);
-        assert_eq!(layout.compact_clock().unwrap().area.height, 2);
+        assert_eq!(layout.clock().unwrap().remaining.height, 1);
     }
 
     #[test]
@@ -1212,7 +1182,7 @@ mod tests {
     }
 
     #[test]
-    fn tiny_layout_renders_the_text_duration_instead_of_big_glyphs() {
+    fn smallest_compact_clock_renders_text_duration_instead_of_big_glyphs() {
         let mut app = App::new();
         let area = Rect::new(0, 0, 20, 9);
         let theme = Theme::from(&ThemeConfig::default());
@@ -1236,7 +1206,7 @@ mod tests {
         assert!(rendered.contains("Clock"));
         assert!(!rendered.contains('█'));
 
-        let clock = app_layout(area, &app).compact_clock().unwrap();
+        let clock = app_layout(area, &app).clock().unwrap();
         let buffer = terminal.backend().buffer();
         assert_eq!(buffer[(clock.area.x, clock.area.y)].symbol(), "┌");
         let duration_x = clock.remaining.x + (clock.remaining.width - 5) / 2;
@@ -1246,7 +1216,7 @@ mod tests {
     #[test]
     fn full_clock_falls_back_to_text_without_removing_other_rows() {
         let app = App::new();
-        let layout = app_layout(Rect::new(0, 0, 9, 12), &app);
+        let layout = app_layout(Rect::new(0, 0, 9, 10), &app);
         let clock = layout.clock().unwrap();
 
         assert_eq!(layout.mode(), WorkspaceMode::Compact);
@@ -1258,10 +1228,10 @@ mod tests {
     }
 
     #[test]
-    fn actions_cannot_mutate_a_list_that_is_not_rendered() {
+    fn compact_actions_are_available_only_for_the_rendered_panel() {
         let mut app = App::new();
         let _ = app.dispatch(Action::NavigateFocus(Direction::Down));
-        let tiny = app_layout(Rect::new(0, 0, 20, 9), &app);
+        let compact = app_layout(Rect::new(0, 0, 20, 9), &app);
 
         for action in [
             Action::BeginAdd,
@@ -1271,15 +1241,15 @@ mod tests {
             Action::MoveSelection(Direction::Down),
             Action::MoveSelectedTask(Direction::Up),
         ] {
-            assert!(!action_target_visible(&tiny, UiFocus::Todo, &action));
+            assert!(action_target_visible(&compact, UiFocus::Todo, &action));
         }
         assert!(action_target_visible(
-            &tiny,
+            &compact,
             UiFocus::Todo,
             &Action::NavigateFocus(Direction::Up)
         ));
-        assert!(action_target_visible(
-            &tiny,
+        assert!(!action_target_visible(
+            &compact,
             UiFocus::Clock,
             &Action::PrimaryAction
         ));

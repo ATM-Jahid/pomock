@@ -14,7 +14,6 @@ use crate::{
 const MIN_CLOCK_HEIGHT: u16 = 6;
 const MIN_TASK_HEIGHT: u16 = 3;
 const MIN_TASK_WIDTH: u16 = 24;
-const RESERVED_HELP_HEIGHT: u16 = 2;
 const SPACED_CLOCK_MIN_INNER_HEIGHT: u16 = 12;
 const NON_GLYPH_HEIGHT: u16 = 3;
 const SCALED_GLYPH_PADDING_HEIGHT: u16 = 7;
@@ -25,7 +24,6 @@ pub(crate) enum WorkspaceMode {
     Short,
     Narrow,
     Compact,
-    Tiny,
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -42,12 +40,6 @@ pub(crate) struct ClockGeometry {
 pub(crate) enum ClockFace {
     Text,
     Glyphs { scale: u16 },
-}
-
-#[derive(Debug, Clone, Copy)]
-pub(crate) struct TextClockGeometry {
-    pub(crate) area: Rect,
-    pub(crate) remaining: Rect,
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -74,14 +66,12 @@ enum WorkspaceGeometry {
     },
     CompactClock(ClockGeometry),
     CompactTask(TaskGeometry),
-    TinyClock(TextClockGeometry),
 }
 
 /// Exact rectangles used to render one application frame.
 #[derive(Debug, Clone, Copy)]
 pub struct FrameGeometry {
     area: Rect,
-    mode: WorkspaceMode,
     workspace: WorkspaceGeometry,
     controls: Rect,
 }
@@ -91,8 +81,18 @@ impl FrameGeometry {
         self.area
     }
 
+    #[cfg(test)]
     pub(crate) fn mode(self) -> WorkspaceMode {
-        self.mode
+        match self.workspace {
+            WorkspaceGeometry::Full { .. } => WorkspaceMode::Full,
+            WorkspaceGeometry::ShortClock(_) | WorkspaceGeometry::ShortTasks { .. } => {
+                WorkspaceMode::Short
+            }
+            WorkspaceGeometry::Narrow { .. } => WorkspaceMode::Narrow,
+            WorkspaceGeometry::CompactClock(_) | WorkspaceGeometry::CompactTask(_) => {
+                WorkspaceMode::Compact
+            }
+        }
     }
 
     pub(crate) fn clock(self) -> Option<ClockGeometry> {
@@ -101,9 +101,7 @@ impl FrameGeometry {
             | WorkspaceGeometry::ShortClock(clock)
             | WorkspaceGeometry::Narrow { clock, .. }
             | WorkspaceGeometry::CompactClock(clock) => Some(clock),
-            WorkspaceGeometry::ShortTasks { .. }
-            | WorkspaceGeometry::CompactTask(_)
-            | WorkspaceGeometry::TinyClock(_) => None,
+            WorkspaceGeometry::ShortTasks { .. } | WorkspaceGeometry::CompactTask(_) => None,
         }
     }
 
@@ -123,8 +121,7 @@ impl FrameGeometry {
                 ..
             }
             | WorkspaceGeometry::CompactClock(_)
-            | WorkspaceGeometry::CompactTask(TaskGeometry::Done(_))
-            | WorkspaceGeometry::TinyClock(_) => None,
+            | WorkspaceGeometry::CompactTask(TaskGeometry::Done(_)) => None,
         }
     }
 
@@ -144,15 +141,7 @@ impl FrameGeometry {
                 ..
             }
             | WorkspaceGeometry::CompactClock(_)
-            | WorkspaceGeometry::CompactTask(TaskGeometry::Todo(_))
-            | WorkspaceGeometry::TinyClock(_) => None,
-        }
-    }
-
-    pub(crate) fn compact_clock(self) -> Option<TextClockGeometry> {
-        match self.workspace {
-            WorkspaceGeometry::TinyClock(area) => Some(area),
-            _ => None,
+            | WorkspaceGeometry::CompactTask(TaskGeometry::Todo(_)) => None,
         }
     }
 
@@ -173,7 +162,7 @@ pub(crate) struct LayoutRequest {
 pub(crate) fn resolve(request: LayoutRequest) -> FrameGeometry {
     let inner_area = Block::default().borders(Borders::ALL).inner(request.area);
     let mode = classify(inner_area, request.duration);
-    let controls_height = budget_help(mode, inner_area, request.controls_height);
+    let controls_height = budget_help(mode, inner_area, request);
     let vertical = Layout::default()
         .direction(Direction::Vertical)
         .constraints([Constraint::Min(0), Constraint::Length(controls_height)])
@@ -184,7 +173,6 @@ pub(crate) fn resolve(request: LayoutRequest) -> FrameGeometry {
 
     FrameGeometry {
         area: request.area,
-        mode,
         workspace,
         controls,
     }
@@ -196,34 +184,36 @@ fn classify(inner_area: Rect, duration: Duration) -> WorkspaceMode {
         .saturating_add(2);
     let split_width = MIN_TASK_WIDTH.saturating_mul(2);
     let stacked_height = MIN_CLOCK_HEIGHT.saturating_add(MIN_TASK_HEIGHT);
-    let classifiable_height = inner_area.height.saturating_sub(RESERVED_HELP_HEIGHT);
-    let can_show_single =
-        inner_area.width >= single_width && classifiable_height >= MIN_CLOCK_HEIGHT;
+    let can_show_single = inner_area.width >= single_width && inner_area.height >= MIN_TASK_HEIGHT;
     let can_split_width = inner_area.width >= split_width;
-    let can_stack_height = classifiable_height >= stacked_height;
+    let can_stack_height = inner_area.height >= stacked_height;
 
     match (can_show_single, can_split_width, can_stack_height) {
         (true, true, true) => WorkspaceMode::Full,
         (true, true, false) => WorkspaceMode::Short,
         (true, false, true) => WorkspaceMode::Narrow,
-        (true, false, false) => WorkspaceMode::Compact,
-        (false, _, _) => WorkspaceMode::Tiny,
+        _ => WorkspaceMode::Compact,
     }
 }
 
-fn budget_help(mode: WorkspaceMode, inner_area: Rect, desired_height: u16) -> u16 {
+fn budget_help(mode: WorkspaceMode, inner_area: Rect, request: LayoutRequest) -> u16 {
     let stacked_height = MIN_CLOCK_HEIGHT.saturating_add(MIN_TASK_HEIGHT);
     let minimum_workspace_height = match mode {
         WorkspaceMode::Full | WorkspaceMode::Narrow => stacked_height,
-        WorkspaceMode::Short | WorkspaceMode::Compact => MIN_CLOCK_HEIGHT,
-        // A boxed text clock needs its two borders and one printable timer row.
-        WorkspaceMode::Tiny => 3,
+        WorkspaceMode::Short | WorkspaceMode::Compact if request.focus == UiFocus::Clock => {
+            MIN_CLOCK_HEIGHT
+        }
+        WorkspaceMode::Short | WorkspaceMode::Compact => MIN_TASK_HEIGHT,
     };
     let available_help_height = inner_area.height.saturating_sub(minimum_workspace_height);
-    let clock_can_show_text = mode != WorkspaceMode::Tiny || inner_area.width >= 7;
+    let clock_can_show_text = request.focus != UiFocus::Clock
+        || inner_area.width
+            >= u16::try_from(crate::display::format_duration(request.duration).len())
+                .unwrap_or(u16::MAX)
+                .saturating_add(2);
 
-    if clock_can_show_text && desired_height <= available_help_height {
-        desired_height
+    if clock_can_show_text && request.controls_height <= available_help_height {
+        request.controls_height
     } else {
         0
     }
@@ -270,10 +260,6 @@ fn allocate_workspace(
             UiFocus::Todo => WorkspaceGeometry::CompactTask(TaskGeometry::Todo(area)),
             UiFocus::Done => WorkspaceGeometry::CompactTask(TaskGeometry::Done(area)),
         },
-        WorkspaceMode::Tiny => {
-            let remaining = Block::default().borders(Borders::ALL).inner(area);
-            WorkspaceGeometry::TinyClock(TextClockGeometry { area, remaining })
-        }
     }
 }
 
@@ -312,21 +298,25 @@ pub(crate) fn clock_geometry(area: Rect, duration: Duration) -> ClockGeometry {
         ClockFace::Glyphs { scale: glyph_scale }
     };
     let duration_height = match face {
-        ClockFace::Text => 1,
+        ClockFace::Text => u16::from(inner.height > 0),
         ClockFace::Glyphs { scale } => BIG_DURATION_HEIGHT.saturating_mul(scale),
     };
+    let state_height = u16::from(inner.height > duration_height);
+    let controls_height = u16::from(inner.height > duration_height + state_height);
+    let completed_height =
+        u16::from(inner.height > duration_height + state_height + controls_height);
     let content_gap = u16::from(inner.height >= SPACED_CLOCK_MIN_INNER_HEIGHT);
     let chunks = Layout::default()
         .direction(Direction::Vertical)
         .constraints([
             Constraint::Fill(1),
-            Constraint::Length(1),
+            Constraint::Length(state_height),
             Constraint::Length(content_gap),
             Constraint::Length(duration_height),
             Constraint::Length(content_gap),
-            Constraint::Length(1),
+            Constraint::Length(completed_height),
             Constraint::Fill(1),
-            Constraint::Length(1),
+            Constraint::Length(controls_height),
         ])
         .split(inner);
     let controls = Layout::default()
@@ -367,12 +357,12 @@ mod tests {
     #[test]
     fn exact_default_duration_boundaries_select_each_mode() {
         for (width, height, expected) in [
-            (50, 13, WorkspaceMode::Full),
-            (50, 12, WorkspaceMode::Short),
-            (49, 13, WorkspaceMode::Narrow),
-            (9, 12, WorkspaceMode::Compact),
-            (8, 12, WorkspaceMode::Tiny),
-            (9, 9, WorkspaceMode::Tiny),
+            (50, 11, WorkspaceMode::Full),
+            (50, 10, WorkspaceMode::Short),
+            (49, 11, WorkspaceMode::Narrow),
+            (9, 10, WorkspaceMode::Compact),
+            (8, 12, WorkspaceMode::Compact),
+            (9, 9, WorkspaceMode::Compact),
         ] {
             assert_eq!(
                 resolve(request(width, height)).mode(),
@@ -404,14 +394,13 @@ mod tests {
         for (width, height, desired_height, expected_mode, expected_height) in [
             (50, 13, 2, WorkspaceMode::Full, 2),
             (50, 13, 3, WorkspaceMode::Full, 0),
-            (50, 12, 4, WorkspaceMode::Short, 4),
-            (50, 12, 5, WorkspaceMode::Short, 0),
+            (50, 10, 2, WorkspaceMode::Short, 2),
+            (50, 10, 3, WorkspaceMode::Short, 0),
             (20, 13, 2, WorkspaceMode::Narrow, 2),
             (20, 13, 3, WorkspaceMode::Narrow, 0),
             (20, 10, 2, WorkspaceMode::Compact, 2),
             (20, 10, 3, WorkspaceMode::Compact, 0),
-            (80, 9, 4, WorkspaceMode::Tiny, 4),
-            (80, 9, 5, WorkspaceMode::Tiny, 0),
+            (8, 12, 2, WorkspaceMode::Compact, 0),
         ] {
             let geometry = resolve(LayoutRequest {
                 controls_height: desired_height,
@@ -446,6 +435,42 @@ mod tests {
     }
 
     #[test]
+    fn compact_clock_adds_rows_in_content_priority_order() {
+        let one_row = clock_geometry(Rect::new(0, 0, 20, 3), DEFAULT_DURATION);
+        assert_eq!(one_row.remaining.height, 1);
+        assert_eq!(one_row.state.height, 0);
+        assert_eq!(one_row.session_controls[0].height, 0);
+        assert_eq!(one_row.completed_sessions.height, 0);
+
+        let two_rows = clock_geometry(Rect::new(0, 0, 20, 4), DEFAULT_DURATION);
+        assert_eq!(two_rows.remaining.height, 1);
+        assert_eq!(two_rows.state.height, 1);
+        assert_eq!(two_rows.session_controls[0].height, 0);
+        assert_eq!(two_rows.completed_sessions.height, 0);
+
+        let three_rows = clock_geometry(Rect::new(0, 0, 20, 5), DEFAULT_DURATION);
+        assert_eq!(three_rows.session_controls[0].height, 1);
+        assert_eq!(three_rows.completed_sessions.height, 0);
+
+        let four_rows = clock_geometry(Rect::new(0, 0, 20, 6), DEFAULT_DURATION);
+        assert_eq!(four_rows.completed_sessions.height, 1);
+    }
+
+    #[test]
+    fn compact_task_keeps_one_printable_list_row() {
+        let geometry = resolve(LayoutRequest {
+            focus: UiFocus::Todo,
+            controls_height: u16::MAX,
+            ..request(20, 5)
+        });
+        let todo = geometry.todo().unwrap();
+
+        assert_eq!(geometry.mode(), WorkspaceMode::Compact);
+        assert_eq!(Block::default().borders(Borders::ALL).inner(todo).height, 1);
+        assert_eq!(geometry.controls().height, 0);
+    }
+
+    #[test]
     fn generated_regions_stay_inside_the_terminal_at_all_small_sizes() {
         const WIDTHS: [u16; 15] = [0, 1, 2, 8, 9, 10, 31, 32, 33, 49, 50, 51, 62, 63, 100];
         const HEIGHTS: [u16; 16] = [0, 1, 2, 3, 4, 8, 9, 10, 11, 12, 13, 14, 18, 19, 20, 40];
@@ -466,10 +491,6 @@ mod tests {
                 }
                 regions.extend(geometry.todo());
                 regions.extend(geometry.done());
-                if let Some(clock) = geometry.compact_clock() {
-                    regions.extend([clock.area, clock.remaining]);
-                }
-
                 for region in regions {
                     assert!(
                         region.x >= terminal.x
