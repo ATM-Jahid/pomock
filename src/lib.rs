@@ -11,6 +11,7 @@
 //! stable third-party library interface.
 
 pub mod app;
+mod atomic_write;
 pub mod config;
 mod display;
 pub mod input;

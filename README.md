@@ -12,16 +12,12 @@ and [Crossterm](https://github.com/crossterm-rs/crossterm).
 - Focus and break countdown sessions
   with start, pause, resume, reset, and cycle-session controls.
 - Editable to-do and completed-task lists.
-- Independently ordered, persistent to-do and done lists.
 - Keyboard and mouse navigation.
-- Native desktop notifications when a session completes.
 - Independently configurable native notifications, completion audio,
   and looping Focus audio.
 - TOML configuration for session durations, task behavior, and theme colors.
 - An in-app settings overlay for timer, notification, sound, task, key,
   and theme settings.
-
-The completed-focus count remains runtime-only and resets when `pomock` exits.
 
 ## Run from source
 
@@ -152,6 +148,11 @@ The `tasks.toml` file lives under
 the platform's standard per-user application data directory
 (for example, `$XDG_DATA_HOME/pomock` or `~/.local/share/pomock` on Linux).
 
+If `config.toml` or `tasks.toml` contains invalid data,
+`pomock` reports the problem before opening the interface
+and offers to delete the invalid file and continue with defaults,
+or quit without changing it.
+
 The `[theme]` section is optional.
 Colors accept `#RRGGBB` values or portable terminal names:
 `black`, `red`, `green`, `yellow`, `blue`, `magenta`, `cyan`, `gray`, `dark_gray`,
@@ -168,7 +169,7 @@ and for cancel/back behavior in modal contexts.
 Native desktop notifications are enabled by default
 and can be toggled with `notification.enabled`.
 Both sound types are disabled and have no selected file by default.
-Completion audio is a one-shot effect;
+Completion audio is played once for a maximum of five seconds;
 Focus audio loops only while a Focus session is running.
 
 ```toml

@@ -1,7 +1,8 @@
 use std::{
     error::Error,
-    fmt,
-    io::{self, Stdout},
+    fmt, fs,
+    io::{self, BufRead, Stdout, Write},
+    path::{Path, PathBuf},
 };
 
 use crossterm::{
@@ -116,12 +117,15 @@ fn handle_outcome(
         AppOutcome::SettingsChanged(updated) => {
             let focus_file_changed =
                 config.sound().focus().playback_file() != updated.sound().focus().playback_file();
-            updated.save()?;
-            *config = *updated;
-            *task_store = task_store_for_config(config)?;
-            if let Some(task_store) = task_store.as_ref() {
-                task_store.save(&app.task_state())?;
-            }
+            let next_task_store = task_store_for_config(&updated)?;
+            commit_settings_change(
+                *updated,
+                &app.task_state(),
+                config,
+                task_store,
+                next_task_store,
+                Config::save,
+            )?;
             if focus_file_changed {
                 sound_player.stop_focus();
                 if app.is_focus_running()
@@ -140,12 +144,28 @@ fn handle_outcome(
     }
 }
 
-fn task_store_for_config(config: &Config) -> Result<Option<TaskStore>, TaskPersistenceError> {
-    config.tasks().persist().then(TaskStore::user).transpose()
+fn commit_settings_change(
+    updated: Config,
+    task_state: &TaskState,
+    config: &mut Config,
+    task_store: &mut Option<TaskStore>,
+    next_task_store: Option<TaskStore>,
+    save_config: impl FnOnce(&Config) -> Result<(), ConfigError>,
+) -> Result<(), RunError> {
+    let enabling_task_persistence = !config.tasks().persist() && updated.tasks().persist();
+
+    if enabling_task_persistence && let Some(store) = next_task_store.as_ref() {
+        store.save(task_state)?;
+    }
+
+    save_config(&updated)?;
+    *config = updated;
+    *task_store = next_task_store;
+    Ok(())
 }
 
-fn load_task_state(task_store: Option<&TaskStore>) -> Result<TaskState, TaskPersistenceError> {
-    task_store.map_or_else(|| Ok(TaskState::default()), TaskStore::load)
+fn task_store_for_config(config: &Config) -> Result<Option<TaskStore>, TaskPersistenceError> {
+    config.tasks().persist().then(TaskStore::user).transpose()
 }
 
 fn should_handle_key_event(kind: KeyEventKind) -> bool {
@@ -159,14 +179,177 @@ fn advance_timer(app: &mut App, last_tick: &mut Instant, now: Instant) -> AppOut
 }
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
-    let config = Config::load()?;
+    let mut stdin = io::stdin().lock();
+    let mut stdout = io::stdout();
+    let Some(config) = load_config_for_startup(&mut stdin, &mut stdout)? else {
+        return Ok(());
+    };
     let task_store = task_store_for_config(&config)?;
-    let task_state = load_task_state(task_store.as_ref())?;
+    let Some(task_state) = load_tasks_for_startup(task_store.as_ref(), &mut stdin, &mut stdout)?
+    else {
+        return Ok(());
+    };
     let mut session = TerminalSession::start()?;
     let run_result = run_app(session.terminal_mut(), config, task_store, task_state);
     let restore_result = session.restore();
 
     Ok(combine_run_and_restore_results(run_result, restore_result)?)
+}
+
+fn load_config_for_startup(
+    reader: &mut impl BufRead,
+    writer: &mut impl Write,
+) -> Result<Option<Config>, StartupError> {
+    let path = Config::path()?;
+    load_config_path_for_startup(&path, reader, writer)
+}
+
+fn load_config_path_for_startup(
+    path: &Path,
+    reader: &mut impl BufRead,
+    writer: &mut impl Write,
+) -> Result<Option<Config>, StartupError> {
+    match Config::load_from(path) {
+        Ok(config) => Ok(Some(config)),
+        Err(error) if is_invalid_config(&error) => {
+            let recovered = recover_invalid_file(reader, writer, "configuration", path, &error)?;
+            Ok(recovered.then_some(Config::default()))
+        }
+        Err(error) => Err(error.into()),
+    }
+}
+
+fn load_tasks_for_startup(
+    task_store: Option<&TaskStore>,
+    reader: &mut impl BufRead,
+    writer: &mut impl Write,
+) -> Result<Option<TaskState>, StartupError> {
+    let Some(task_store) = task_store else {
+        return Ok(Some(TaskState::default()));
+    };
+
+    match task_store.load() {
+        Ok(state) => Ok(Some(state)),
+        Err(error) if is_invalid_task_file(&error) => {
+            let recovered =
+                recover_invalid_file(reader, writer, "task data", task_store.path(), &error)?;
+            Ok(recovered.then_some(TaskState::default()))
+        }
+        Err(error) => Err(error.into()),
+    }
+}
+
+fn is_invalid_config(error: &ConfigError) -> bool {
+    matches!(
+        error,
+        ConfigError::Parse { .. } | ConfigError::Validation { .. }
+    )
+}
+
+fn is_invalid_task_file(error: &TaskPersistenceError) -> bool {
+    matches!(
+        error,
+        TaskPersistenceError::Parse { .. }
+            | TaskPersistenceError::Validation { .. }
+            | TaskPersistenceError::UnsupportedVersion { .. }
+    )
+}
+
+fn recover_invalid_file(
+    reader: &mut impl BufRead,
+    writer: &mut impl Write,
+    description: &str,
+    path: &Path,
+    error: &impl fmt::Display,
+) -> Result<bool, StartupError> {
+    writeln!(
+        writer,
+        "pomock could not load the {description} file at {}:\n{error}",
+        path.display()
+    )?;
+
+    loop {
+        write!(
+            writer,
+            "\n[d] Delete the invalid file and continue\n[q] Quit\nChoice: "
+        )?;
+        writer.flush()?;
+
+        let mut choice = String::new();
+        if reader.read_line(&mut choice)? == 0 {
+            return Ok(false);
+        }
+
+        match choice.trim().to_ascii_lowercase().as_str() {
+            "d" | "delete" => {
+                match fs::remove_file(path) {
+                    Ok(()) => {}
+                    Err(source) if source.kind() == io::ErrorKind::NotFound => {}
+                    Err(source) => {
+                        return Err(StartupError::DeleteInvalidFile {
+                            path: path.to_owned(),
+                            source,
+                        });
+                    }
+                }
+                writeln!(writer, "Deleted {}.", path.display())?;
+                return Ok(true);
+            }
+            "q" | "quit" => return Ok(false),
+            _ => writeln!(writer, "Enter d to delete the file or q to quit.")?,
+        }
+    }
+}
+
+#[derive(Debug)]
+enum StartupError {
+    Config(ConfigError),
+    TaskPersistence(TaskPersistenceError),
+    Io(io::Error),
+    DeleteInvalidFile { path: PathBuf, source: io::Error },
+}
+
+impl fmt::Display for StartupError {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::Config(error) => error.fmt(formatter),
+            Self::TaskPersistence(error) => error.fmt(formatter),
+            Self::Io(error) => error.fmt(formatter),
+            Self::DeleteInvalidFile { path, source } => write!(
+                formatter,
+                "could not delete invalid file {}: {source}",
+                path.display()
+            ),
+        }
+    }
+}
+
+impl Error for StartupError {
+    fn source(&self) -> Option<&(dyn Error + 'static)> {
+        match self {
+            Self::Config(error) => Some(error),
+            Self::TaskPersistence(error) => Some(error),
+            Self::Io(error) | Self::DeleteInvalidFile { source: error, .. } => Some(error),
+        }
+    }
+}
+
+impl From<ConfigError> for StartupError {
+    fn from(error: ConfigError) -> Self {
+        Self::Config(error)
+    }
+}
+
+impl From<TaskPersistenceError> for StartupError {
+    fn from(error: TaskPersistenceError) -> Self {
+        Self::TaskPersistence(error)
+    }
+}
+
+impl From<io::Error> for StartupError {
+    fn from(error: io::Error) -> Self {
+        Self::Io(error)
+    }
 }
 
 #[derive(Debug)]
@@ -440,7 +623,9 @@ fn run_app(
 #[cfg(test)]
 mod tests {
     use std::{
+        cell::Cell,
         fs,
+        io::Cursor,
         path::PathBuf,
         sync::atomic::{AtomicU64, Ordering},
     };
@@ -502,11 +687,93 @@ mod tests {
         ))
     }
 
+    fn task_state(description: &str) -> TaskState {
+        let mut app = App::new();
+        let _ = app.dispatch(Action::NavigateFocus(Direction::Down));
+        let _ = app.dispatch(Action::BeginAdd);
+        for character in description.chars() {
+            let _ = app.dispatch(Action::PushInput(character));
+        }
+        let _ = app.dispatch(Action::SubmitEdit);
+        app.task_state()
+    }
+
     #[test]
     fn key_releases_are_ignored_while_presses_and_repeats_are_handled() {
         assert!(should_handle_key_event(KeyEventKind::Press));
         assert!(should_handle_key_event(KeyEventKind::Repeat));
         assert!(!should_handle_key_event(KeyEventKind::Release));
+    }
+
+    #[test]
+    fn invalid_config_can_be_deleted_and_replaced_with_defaults() {
+        let path = temp_path("invalid-config.toml");
+        fs::write(&path, "not valid toml =").unwrap();
+        let mut input = Cursor::new(b"invalid\ndelete\n");
+        let mut output = Vec::new();
+
+        let config = load_config_path_for_startup(&path, &mut input, &mut output)
+            .unwrap()
+            .unwrap();
+
+        assert_eq!(config, Config::default());
+        assert!(!path.exists());
+        let output = String::from_utf8(output).unwrap();
+        assert!(output.contains("could not load the configuration file"));
+        assert!(output.contains("Enter d to delete the file or q to quit."));
+        assert!(output.contains("Deleted"));
+    }
+
+    #[test]
+    fn invalid_config_can_be_left_in_place_when_quitting() {
+        let path = temp_path("invalid-config-quit.toml");
+        let contents = "not valid toml =";
+        fs::write(&path, contents).unwrap();
+        let mut input = Cursor::new(b"q\n");
+        let mut output = Vec::new();
+
+        let config = load_config_path_for_startup(&path, &mut input, &mut output).unwrap();
+
+        assert!(config.is_none());
+        assert_eq!(fs::read_to_string(&path).unwrap(), contents);
+        fs::remove_file(path).unwrap();
+    }
+
+    #[test]
+    fn invalid_task_file_can_be_deleted_and_started_empty() {
+        let path = temp_path("invalid-tasks.toml");
+        fs::write(&path, "version = 2\ntodo = []\ndone = []\n").unwrap();
+        let store = TaskStore::at(&path);
+        let mut input = Cursor::new(b"d\n");
+        let mut output = Vec::new();
+
+        let state = load_tasks_for_startup(Some(&store), &mut input, &mut output)
+            .unwrap()
+            .unwrap();
+
+        assert_eq!(state, TaskState::default());
+        assert!(!path.exists());
+        assert!(
+            String::from_utf8(output)
+                .unwrap()
+                .contains("could not load the task data file")
+        );
+    }
+
+    #[test]
+    fn task_read_errors_do_not_offer_to_delete_the_path() {
+        let path = temp_path("task-read-error");
+        fs::create_dir(&path).unwrap();
+        let store = TaskStore::at(&path);
+        let mut input = Cursor::new(b"d\n");
+        let mut output = Vec::new();
+
+        let error = load_tasks_for_startup(Some(&store), &mut input, &mut output).unwrap_err();
+
+        assert!(matches!(error, StartupError::TaskPersistence(_)));
+        assert!(output.is_empty());
+        assert!(path.is_dir());
+        fs::remove_dir(path).unwrap();
     }
 
     #[test]
@@ -600,7 +867,13 @@ mod tests {
         store.save(&persisted).unwrap();
 
         assert_eq!(
-            load_task_state(disabled_store.as_ref()).unwrap(),
+            load_tasks_for_startup(
+                disabled_store.as_ref(),
+                &mut Cursor::new(Vec::new()),
+                &mut Vec::new(),
+            )
+            .unwrap()
+            .unwrap(),
             TaskState::default()
         );
 
@@ -627,6 +900,88 @@ mod tests {
         assert_eq!(store.load().unwrap(), persisted);
 
         fs::remove_file(path).unwrap();
+    }
+
+    #[test]
+    fn enabling_persistence_saves_tasks_before_config() {
+        let path = temp_path("enable-persistence/tasks.toml");
+        let next_store = TaskStore::at(&path);
+        let state = task_state("Current task");
+        let mut config =
+            Config::with_tasks(TimerConfig::default(), TasksConfig::new(false)).unwrap();
+        let updated = Config::default();
+        let mut task_store = None;
+
+        commit_settings_change(
+            updated.clone(),
+            &state,
+            &mut config,
+            &mut task_store,
+            Some(next_store),
+            |_| {
+                assert_eq!(TaskStore::at(&path).load().unwrap(), state);
+                Ok(())
+            },
+        )
+        .unwrap();
+
+        assert_eq!(config, updated);
+        assert_eq!(task_store.unwrap().load().unwrap(), state);
+        fs::remove_dir_all(path.parent().unwrap()).unwrap();
+    }
+
+    #[test]
+    fn failed_task_snapshot_does_not_commit_persistence_setting() {
+        let parent = temp_path("enable-persistence-parent-is-file");
+        fs::write(&parent, "not a directory").unwrap();
+        let next_store = TaskStore::at(parent.join("tasks.toml"));
+        let mut config =
+            Config::with_tasks(TimerConfig::default(), TasksConfig::new(false)).unwrap();
+        let original = config.clone();
+        let mut task_store = None;
+        let config_saved = Cell::new(false);
+
+        let result = commit_settings_change(
+            Config::default(),
+            &task_state("Unsaved"),
+            &mut config,
+            &mut task_store,
+            Some(next_store),
+            |_| {
+                config_saved.set(true);
+                Ok(())
+            },
+        );
+
+        assert!(matches!(result, Err(RunError::TaskPersistence(_))));
+        assert!(!config_saved.get());
+        assert_eq!(config, original);
+        assert!(task_store.is_none());
+        fs::remove_file(parent).unwrap();
+    }
+
+    #[test]
+    fn unrelated_settings_changes_do_not_rewrite_tasks() {
+        let path = temp_path("unchanged-persistence/tasks.toml");
+        let next_store = TaskStore::at(&path);
+        let mut config = Config::default();
+        let updated = config
+            .clone()
+            .with_notification(pomock::config::NotificationConfig::new(false));
+        let mut task_store = Some(next_store.clone());
+
+        commit_settings_change(
+            updated.clone(),
+            &task_state("In memory"),
+            &mut config,
+            &mut task_store,
+            Some(next_store),
+            |_| Ok(()),
+        )
+        .unwrap();
+
+        assert_eq!(config, updated);
+        assert!(!path.exists());
     }
 
     #[test]

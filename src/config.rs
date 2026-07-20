@@ -7,6 +7,8 @@ use std::{
 use directories::ProjectDirs;
 use serde::{Deserialize, Serialize};
 
+use crate::atomic_write;
+
 mod keys;
 mod notification;
 mod sound;
@@ -197,7 +199,7 @@ impl Config {
 
         let contents =
             toml::to_string_pretty(&StoredConfig::from(self)).map_err(ConfigError::Serialize)?;
-        fs::write(path, contents).map_err(|source| ConfigError::Write {
+        atomic_write::write(path, contents.as_bytes()).map_err(|source| ConfigError::Write {
             path: path.to_owned(),
             source,
         })

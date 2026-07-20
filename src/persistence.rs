@@ -7,7 +7,7 @@ use std::{
 use directories::ProjectDirs;
 use serde::{Deserialize, Serialize};
 
-use crate::app::TaskState;
+use crate::{app::TaskState, atomic_write};
 
 const TASKS_FILE_NAME: &str = "tasks.toml";
 const TASK_FILE_VERSION: u32 = 1;
@@ -80,9 +80,11 @@ impl TaskStore {
             done: state.done().map(str::to_owned).collect(),
         };
         let contents = toml::to_string_pretty(&stored).map_err(TaskPersistenceError::Serialize)?;
-        fs::write(&self.path, contents).map_err(|source| TaskPersistenceError::Write {
-            path: self.path.clone(),
-            source,
+        atomic_write::write(&self.path, contents.as_bytes()).map_err(|source| {
+            TaskPersistenceError::Write {
+                path: self.path.clone(),
+                source,
+            }
         })
     }
 
