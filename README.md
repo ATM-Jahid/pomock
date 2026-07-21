@@ -12,6 +12,7 @@ and [Crossterm](https://github.com/crossterm-rs/crossterm).
 - Focus and break countdown sessions
   with start, pause, resume, reset, and cycle-session controls.
 - Editable to-do and completed-task lists.
+- Named task workspaces for running independent `pomock` instances.
 - Keyboard and mouse navigation.
 - Independently configurable native notifications, completion audio,
   and looping Focus audio.
@@ -19,15 +20,35 @@ and [Crossterm](https://github.com/crossterm-rs/crossterm).
 - An in-app settings overlay for timer, notification, sound, task, key,
   and theme settings.
 
-## Run from source
+## Installation
 
 `pomock` currently targets Rust 2024 and requires a recent stable Rust toolchain.
+If Rust is not installed, install it with [rustup](https://rustup.rs/).
 
 ```sh
 git clone https://github.com/ATM-Jahid/pomock.git
 cd pomock
+cargo build --release
+sudo install -Dm755 target/release/pomock /usr/local/bin/pomock
+```
+
+To run the program directly from the checkout without installing it, use:
+
+```sh
 cargo run
 ```
+
+To use an independent named task workspace, pass `--wspace`:
+
+```sh
+pomock --wspace foo
+# OR
+cargo run -- --wspace foo
+```
+
+Named workspaces are created on first use. Opening another instance on the
+same workspace displays a warning and requires confirmation before the app
+starts.
 
 ## Controls
 
@@ -147,6 +168,8 @@ after every successful task change.
 The `tasks.toml` file lives under
 the platform's standard per-user application data directory
 (for example, `$XDG_DATA_HOME/pomock` or `~/.local/share/pomock` on Linux).
+For a named workspace, it lives in the workspace's child directory,
+such as `~/.local/share/pomock/foo/tasks.toml`.
 
 If `config.toml` or `tasks.toml` contains invalid data,
 `pomock` reports the problem before opening the interface

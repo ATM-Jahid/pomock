@@ -1,7 +1,10 @@
 use std::{
     error::Error,
-    fmt, fs, io,
+    fmt, fs,
+    fs::{File, OpenOptions, TryLockError},
+    io,
     path::{Path, PathBuf},
+    sync::atomic::{AtomicU64, Ordering},
 };
 
 use directories::ProjectDirs;
@@ -11,6 +14,9 @@ use crate::{app::TaskState, atomic_write};
 
 const TASKS_FILE_NAME: &str = "tasks.toml";
 const TASK_FILE_VERSION: u32 = 1;
+const INSTANCE_DIRECTORY_NAME: &str = ".instances";
+const INSTANCE_FILE_PREFIX: &str = "instance-";
+static NEXT_INSTANCE_FILE: AtomicU64 = AtomicU64::new(0);
 
 /// Filesystem boundary for durable task state.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -21,8 +27,19 @@ pub struct TaskStore {
 impl TaskStore {
     /// Uses the platform-appropriate per-user application data path.
     pub fn user() -> Result<Self, TaskPersistenceError> {
+        Self::user_in_workspace(None)
+    }
+
+    /// Uses the per-user task file for an optional named workspace.
+    pub fn user_in_workspace(workspace: Option<&str>) -> Result<Self, TaskPersistenceError> {
         let path = ProjectDirs::from("", "", "pomock")
-            .map(|dirs| dirs.data_local_dir().join(TASKS_FILE_NAME))
+            .map(|dirs| {
+                let directory = workspace.map_or_else(
+                    || dirs.data_local_dir().to_owned(),
+                    |name| dirs.data_local_dir().join(name),
+                );
+                directory.join(TASKS_FILE_NAME)
+            })
             .ok_or(TaskPersistenceError::DirectoryUnavailable)?;
         Ok(Self { path })
     }
@@ -93,6 +110,49 @@ impl TaskStore {
         &self.path
     }
 
+    /// Registers this process as an instance using this task location.
+    pub fn register_instance(&self) -> Result<WorkspaceInstance, TaskPersistenceError> {
+        let workspace_directory = self
+            .path
+            .parent()
+            .ok_or(TaskPersistenceError::DirectoryUnavailable)?;
+        let instance_directory = workspace_directory.join(INSTANCE_DIRECTORY_NAME);
+        fs::create_dir_all(&instance_directory).map_err(|source| {
+            TaskPersistenceError::CreateDirectory {
+                path: instance_directory.clone(),
+                source,
+            }
+        })?;
+
+        let registry_path = instance_directory.join("registry.lock");
+        let registry = open_lock_file(&registry_path)?;
+        registry
+            .lock()
+            .map_err(|source| TaskPersistenceError::Lock {
+                path: registry_path.clone(),
+                source,
+            })?;
+
+        let already_open = find_live_instance(&instance_directory)?;
+        let (path, file) = create_instance_file(&instance_directory)?;
+        file.lock().map_err(|source| TaskPersistenceError::Lock {
+            path: path.clone(),
+            source,
+        })?;
+        registry
+            .unlock()
+            .map_err(|source| TaskPersistenceError::Lock {
+                path: registry_path,
+                source,
+            })?;
+
+        Ok(WorkspaceInstance {
+            file,
+            path,
+            already_open,
+        })
+    }
+
     fn validate_list(
         path: &Path,
         list: &'static str,
@@ -121,6 +181,99 @@ impl TaskStore {
     }
 }
 
+/// A process-lifetime registration for one task workspace.
+#[derive(Debug)]
+pub struct WorkspaceInstance {
+    file: File,
+    path: PathBuf,
+    already_open: bool,
+}
+
+impl WorkspaceInstance {
+    /// Whether another process had already registered this workspace.
+    pub fn already_open(&self) -> bool {
+        self.already_open
+    }
+}
+
+impl Drop for WorkspaceInstance {
+    fn drop(&mut self) {
+        let _ = self.file.unlock();
+        let _ = fs::remove_file(&self.path);
+    }
+}
+
+fn open_lock_file(path: &Path) -> Result<File, TaskPersistenceError> {
+    OpenOptions::new()
+        .read(true)
+        .write(true)
+        .create(true)
+        .truncate(false)
+        .open(path)
+        .map_err(|source| TaskPersistenceError::OpenLock {
+            path: path.to_owned(),
+            source,
+        })
+}
+
+fn find_live_instance(directory: &Path) -> Result<bool, TaskPersistenceError> {
+    let entries =
+        fs::read_dir(directory).map_err(|source| TaskPersistenceError::ReadDirectory {
+            path: directory.to_owned(),
+            source,
+        })?;
+    let mut already_open = false;
+
+    for entry in entries {
+        let entry = entry.map_err(|source| TaskPersistenceError::ReadDirectory {
+            path: directory.to_owned(),
+            source,
+        })?;
+        let name = entry.file_name();
+        let Some(name) = name.to_str() else {
+            continue;
+        };
+        if !name.starts_with(INSTANCE_FILE_PREFIX) || !name.ends_with(".lock") {
+            continue;
+        }
+
+        let path = entry.path();
+        let file = open_lock_file(&path)?;
+        match file.try_lock() {
+            Ok(()) => {
+                let _ = file.unlock();
+                let _ = fs::remove_file(path);
+            }
+            Err(TryLockError::WouldBlock) => already_open = true,
+            Err(TryLockError::Error(source)) => {
+                return Err(TaskPersistenceError::Lock { path, source });
+            }
+        }
+    }
+
+    Ok(already_open)
+}
+
+fn create_instance_file(directory: &Path) -> Result<(PathBuf, File), TaskPersistenceError> {
+    loop {
+        let sequence = NEXT_INSTANCE_FILE.fetch_add(1, Ordering::Relaxed);
+        let path = directory.join(format!(
+            "{INSTANCE_FILE_PREFIX}{}-{sequence}.lock",
+            std::process::id()
+        ));
+        match OpenOptions::new()
+            .read(true)
+            .write(true)
+            .create_new(true)
+            .open(&path)
+        {
+            Ok(file) => return Ok((path, file)),
+            Err(source) if source.kind() == io::ErrorKind::AlreadyExists => {}
+            Err(source) => return Err(TaskPersistenceError::OpenLock { path, source }),
+        }
+    }
+}
+
 #[derive(Debug)]
 pub enum TaskPersistenceError {
     DirectoryUnavailable,
@@ -142,6 +295,18 @@ pub enum TaskPersistenceError {
         found: u32,
     },
     CreateDirectory {
+        path: PathBuf,
+        source: io::Error,
+    },
+    ReadDirectory {
+        path: PathBuf,
+        source: io::Error,
+    },
+    OpenLock {
+        path: PathBuf,
+        source: io::Error,
+    },
+    Lock {
         path: PathBuf,
         source: io::Error,
     },
@@ -188,6 +353,21 @@ impl fmt::Display for TaskPersistenceError {
                 "could not create task data directory {}: {source}",
                 path.display()
             ),
+            Self::ReadDirectory { path, source } => write!(
+                formatter,
+                "could not inspect workspace instances in {}: {source}",
+                path.display()
+            ),
+            Self::OpenLock { path, source } => write!(
+                formatter,
+                "could not open workspace instance lock {}: {source}",
+                path.display()
+            ),
+            Self::Lock { path, source } => write!(
+                formatter,
+                "could not lock workspace instance file {}: {source}",
+                path.display()
+            ),
             Self::Serialize(source) => write!(formatter, "could not serialize tasks: {source}"),
             Self::Write { path, source } => {
                 write!(
@@ -208,6 +388,9 @@ impl Error for TaskPersistenceError {
             | Self::UnsupportedVersion { .. } => None,
             Self::Read { source, .. }
             | Self::CreateDirectory { source, .. }
+            | Self::ReadDirectory { source, .. }
+            | Self::OpenLock { source, .. }
+            | Self::Lock { source, .. }
             | Self::Write { source, .. } => Some(source),
             Self::Parse { source, .. } => Some(source),
             Self::Serialize(source) => Some(source),
@@ -251,6 +434,58 @@ mod tests {
         let store = TaskStore::at(temp_path("missing.toml"));
 
         assert_eq!(store.load().unwrap(), TaskState::default());
+    }
+
+    #[test]
+    fn named_workspace_uses_a_child_of_the_default_data_directory() {
+        let default_store = TaskStore::user().unwrap();
+        let named_store = TaskStore::user_in_workspace(Some("client-one")).unwrap();
+
+        assert_eq!(
+            named_store.path(),
+            default_store
+                .path()
+                .parent()
+                .unwrap()
+                .join("client-one")
+                .join("tasks.toml")
+        );
+    }
+
+    #[test]
+    fn instance_registration_detects_every_live_instance() {
+        let path = temp_path("instance-detection/tasks.toml");
+        let store = TaskStore::at(&path);
+
+        let first = store.register_instance().unwrap();
+        assert!(!first.already_open());
+        let second = store.register_instance().unwrap();
+        assert!(second.already_open());
+        drop(first);
+        let third = store.register_instance().unwrap();
+        assert!(third.already_open());
+        drop(second);
+        drop(third);
+
+        let after_all_closed = store.register_instance().unwrap();
+        assert!(!after_all_closed.already_open());
+        drop(after_all_closed);
+        fs::remove_dir_all(path.parent().unwrap()).unwrap();
+    }
+
+    #[test]
+    fn different_workspaces_do_not_report_each_other() {
+        let first_path = temp_path("separate-one/tasks.toml");
+        let second_path = temp_path("separate-two/tasks.toml");
+        let first = TaskStore::at(&first_path).register_instance().unwrap();
+        let second = TaskStore::at(&second_path).register_instance().unwrap();
+
+        assert!(!first.already_open());
+        assert!(!second.already_open());
+        drop(first);
+        drop(second);
+        fs::remove_dir_all(first_path.parent().unwrap()).unwrap();
+        fs::remove_dir_all(second_path.parent().unwrap()).unwrap();
     }
 
     #[test]

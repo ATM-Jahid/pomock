@@ -1,5 +1,7 @@
 use std::{
+    env,
     error::Error,
+    ffi::OsString,
     fmt, fs,
     io::{self, BufRead, Stdout, Write},
     path::{Path, PathBuf},
@@ -59,6 +61,7 @@ fn handle_outcome(
     app: &App,
     config: &mut Config,
     task_store: &mut Option<TaskStore>,
+    workspace_store: &TaskStore,
     notifier: &mut impl Notifier,
     sound_player: &mut impl SoundPlayer,
 ) -> Result<bool, RunError> {
@@ -117,7 +120,7 @@ fn handle_outcome(
         AppOutcome::SettingsChanged(updated) => {
             let focus_file_changed =
                 config.sound().focus().playback_file() != updated.sound().focus().playback_file();
-            let next_task_store = task_store_for_config(&updated)?;
+            let next_task_store = task_store_for_config(&updated, workspace_store);
             commit_settings_change(
                 *updated,
                 &app.task_state(),
@@ -164,8 +167,8 @@ fn commit_settings_change(
     Ok(())
 }
 
-fn task_store_for_config(config: &Config) -> Result<Option<TaskStore>, TaskPersistenceError> {
-    config.tasks().persist().then(TaskStore::user).transpose()
+fn task_store_for_config(config: &Config, workspace_store: &TaskStore) -> Option<TaskStore> {
+    config.tasks().persist().then(|| workspace_store.clone())
 }
 
 fn should_handle_key_event(kind: KeyEventKind) -> bool {
@@ -181,19 +184,155 @@ fn advance_timer(app: &mut App, last_tick: &mut Instant, now: Instant) -> AppOut
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     let mut stdin = io::stdin().lock();
     let mut stdout = io::stdout();
+    let command = CliCommand::parse(env::args_os().skip(1))?;
+    let CliCommand::Run { workspace } = command else {
+        write_help(&mut stdout)?;
+        return Ok(());
+    };
+    let workspace_store = TaskStore::user_in_workspace(workspace.as_deref())?;
+    let workspace_instance = workspace_store.register_instance()?;
+    if workspace_instance.already_open()
+        && !confirm_shared_workspace(workspace.as_deref(), &mut stdin, &mut stdout)?
+    {
+        return Ok(());
+    }
     let Some(config) = load_config_for_startup(&mut stdin, &mut stdout)? else {
         return Ok(());
     };
-    let task_store = task_store_for_config(&config)?;
+    let task_store = task_store_for_config(&config, &workspace_store);
     let Some(task_state) = load_tasks_for_startup(task_store.as_ref(), &mut stdin, &mut stdout)?
     else {
         return Ok(());
     };
     let mut session = TerminalSession::start()?;
-    let run_result = run_app(session.terminal_mut(), config, task_store, task_state);
+    let run_result = run_app(
+        session.terminal_mut(),
+        config,
+        task_store,
+        task_state,
+        workspace_store,
+    );
     let restore_result = session.restore();
 
     Ok(combine_run_and_restore_results(run_result, restore_result)?)
+}
+
+#[derive(Debug, PartialEq, Eq)]
+enum CliCommand {
+    Run { workspace: Option<String> },
+    Help,
+}
+
+impl CliCommand {
+    fn parse(arguments: impl IntoIterator<Item = OsString>) -> Result<Self, CliError> {
+        let mut arguments = arguments.into_iter();
+        let mut workspace = None;
+
+        while let Some(argument) = arguments.next() {
+            let argument = argument
+                .into_string()
+                .map_err(|_| CliError::NonUnicodeArgument)?;
+            match argument.as_str() {
+                "-h" | "--help" => return Ok(Self::Help),
+                "--wspace" => {
+                    if workspace.is_some() {
+                        return Err(CliError::DuplicateWorkspace);
+                    }
+                    let name = arguments.next().ok_or(CliError::MissingWorkspaceName)?;
+                    let name = name
+                        .into_string()
+                        .map_err(|_| CliError::NonUnicodeArgument)?;
+                    validate_workspace_name(&name)?;
+                    workspace = Some(name);
+                }
+                _ if argument.starts_with("--wspace=") => {
+                    if workspace.is_some() {
+                        return Err(CliError::DuplicateWorkspace);
+                    }
+                    let name = argument.trim_start_matches("--wspace=");
+                    validate_workspace_name(name)?;
+                    workspace = Some(name.to_owned());
+                }
+                _ => return Err(CliError::UnexpectedArgument(argument)),
+            }
+        }
+
+        Ok(Self::Run { workspace })
+    }
+}
+
+#[derive(Debug, PartialEq, Eq)]
+enum CliError {
+    MissingWorkspaceName,
+    DuplicateWorkspace,
+    InvalidWorkspaceName(String),
+    UnexpectedArgument(String),
+    NonUnicodeArgument,
+}
+
+impl fmt::Display for CliError {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::MissingWorkspaceName => formatter.write_str("--wspace requires a workspace name"),
+            Self::DuplicateWorkspace => formatter.write_str("--wspace may only be specified once"),
+            Self::InvalidWorkspaceName(name) => write!(
+                formatter,
+                "invalid workspace name {name:?}; use letters, numbers, '.', '-', or '_'"
+            ),
+            Self::UnexpectedArgument(argument) => write!(
+                formatter,
+                "unexpected argument {argument:?}; run `pomock --help` for usage"
+            ),
+            Self::NonUnicodeArgument => formatter.write_str("arguments must be valid Unicode"),
+        }
+    }
+}
+
+impl Error for CliError {}
+
+fn validate_workspace_name(name: &str) -> Result<(), CliError> {
+    let valid = !name.is_empty()
+        && name != "."
+        && name != ".."
+        && name
+            .bytes()
+            .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'.' | b'-' | b'_'));
+    valid
+        .then_some(())
+        .ok_or_else(|| CliError::InvalidWorkspaceName(name.to_owned()))
+}
+
+fn write_help(writer: &mut impl Write) -> io::Result<()> {
+    writeln!(
+        writer,
+        "pomock - a Pomodoro timer and task workspace\n\nUsage: pomock [--wspace NAME]\n\nOptions:\n  --wspace NAME  Use or create a named task workspace\n  -h, --help     Show this help"
+    )
+}
+
+fn confirm_shared_workspace(
+    workspace: Option<&str>,
+    reader: &mut impl BufRead,
+    writer: &mut impl Write,
+) -> io::Result<bool> {
+    let label = workspace.unwrap_or("default");
+    writeln!(
+        writer,
+        "Warning: workspace {label:?} is already open. Multiple instances can overwrite each other's task changes."
+    )?;
+
+    loop {
+        write!(writer, "Open it anyway? [y/N]: ")?;
+        writer.flush()?;
+        let mut choice = String::new();
+        if reader.read_line(&mut choice)? == 0 {
+            return Ok(false);
+        }
+        match choice.trim().to_ascii_lowercase().as_str() {
+            "y" | "yes" => return Ok(true),
+            "" | "n" | "no" => return Ok(false),
+            _ => writeln!(writer, "Enter y to continue or n to quit.")?,
+        }
+    }
 }
 
 fn load_config_for_startup(
@@ -528,6 +667,7 @@ fn run_app(
     mut config: Config,
     mut task_store: Option<TaskStore>,
     task_state: TaskState,
+    workspace_store: TaskStore,
 ) -> Result<(), RunError> {
     let mut app = App::from_config_and_tasks(&config, task_state);
     let mut notifier = DesktopNotifier;
@@ -543,6 +683,7 @@ fn run_app(
             &app,
             &mut config,
             &mut task_store,
+            &workspace_store,
             &mut notifier,
             &mut sound_player,
         )? {
@@ -569,6 +710,7 @@ fn run_app(
                 &app,
                 &mut config,
                 &mut task_store,
+                &workspace_store,
                 &mut notifier,
                 &mut sound_player,
             )? {
@@ -592,6 +734,7 @@ fn run_app(
                             &app,
                             &mut config,
                             &mut task_store,
+                            &workspace_store,
                             &mut notifier,
                             &mut sound_player,
                         )? {
@@ -606,6 +749,7 @@ fn run_app(
                         &app,
                         &mut config,
                         &mut task_store,
+                        &workspace_store,
                         &mut notifier,
                         &mut sound_player,
                     )? {
@@ -703,6 +847,66 @@ mod tests {
         assert!(should_handle_key_event(KeyEventKind::Press));
         assert!(should_handle_key_event(KeyEventKind::Repeat));
         assert!(!should_handle_key_event(KeyEventKind::Release));
+    }
+
+    #[test]
+    fn workspace_argument_accepts_separate_and_equals_forms() {
+        assert_eq!(
+            CliCommand::parse([OsString::from("--wspace"), OsString::from("client-one")]).unwrap(),
+            CliCommand::Run {
+                workspace: Some("client-one".to_owned())
+            }
+        );
+        assert_eq!(
+            CliCommand::parse([OsString::from("--wspace=personal.2026")]).unwrap(),
+            CliCommand::Run {
+                workspace: Some("personal.2026".to_owned())
+            }
+        );
+        assert_eq!(
+            CliCommand::parse(Vec::<OsString>::new()).unwrap(),
+            CliCommand::Run { workspace: None }
+        );
+    }
+
+    #[test]
+    fn workspace_argument_rejects_missing_unsafe_and_duplicate_names() {
+        assert_eq!(
+            CliCommand::parse([OsString::from("--wspace")]).unwrap_err(),
+            CliError::MissingWorkspaceName
+        );
+        assert!(matches!(
+            CliCommand::parse([OsString::from("--wspace=../shared")]).unwrap_err(),
+            CliError::InvalidWorkspaceName(_)
+        ));
+        assert_eq!(
+            CliCommand::parse([
+                OsString::from("--wspace=one"),
+                OsString::from("--wspace=two")
+            ])
+            .unwrap_err(),
+            CliError::DuplicateWorkspace
+        );
+    }
+
+    #[test]
+    fn shared_workspace_warning_requires_explicit_acceptance() {
+        let mut accepted_output = Vec::new();
+        assert!(
+            confirm_shared_workspace(
+                Some("client"),
+                &mut Cursor::new(b"maybe\nyes\n"),
+                &mut accepted_output,
+            )
+            .unwrap()
+        );
+        let accepted_output = String::from_utf8(accepted_output).unwrap();
+        assert!(accepted_output.contains("workspace \"client\" is already open"));
+        assert!(accepted_output.contains("Enter y to continue or n to quit."));
+
+        assert!(
+            !confirm_shared_workspace(None, &mut Cursor::new(b"\n"), &mut Vec::new(),).unwrap()
+        );
     }
 
     #[test]
@@ -823,7 +1027,7 @@ mod tests {
         let outcome = app.dispatch(Action::SubmitEdit);
 
         let mut config = Config::default();
-        let mut task_store = Some(store);
+        let mut task_store = Some(store.clone());
         let mut notifier = RecordingNotifier::default();
         let mut sound_player = RecordingSoundPlayer::default();
 
@@ -833,6 +1037,7 @@ mod tests {
                 &app,
                 &mut config,
                 &mut task_store,
+                &store,
                 &mut notifier,
                 &mut sound_player,
             )
@@ -853,7 +1058,7 @@ mod tests {
         let path = temp_path("disabled-tasks.toml");
         let store = TaskStore::at(&path);
         let config = Config::with_tasks(TimerConfig::default(), TasksConfig::new(false)).unwrap();
-        let mut disabled_store = task_store_for_config(&config).unwrap();
+        let mut disabled_store = task_store_for_config(&config, &store);
         assert!(disabled_store.is_none());
 
         let mut persisted_app = App::new();
@@ -892,6 +1097,7 @@ mod tests {
                 &app,
                 &mut config,
                 &mut disabled_store,
+                &store,
                 &mut notifier,
                 &mut sound_player,
             )
@@ -994,6 +1200,7 @@ mod tests {
             ))
             .unwrap();
         let mut task_store = None;
+        let workspace_store = TaskStore::at(temp_path("completion-workspace/tasks.toml"));
         let mut notifier = RecordingNotifier::default();
         let mut sound_player = RecordingSoundPlayer::default();
 
@@ -1003,6 +1210,7 @@ mod tests {
                 &app,
                 &mut config,
                 &mut task_store,
+                &workspace_store,
                 &mut notifier,
                 &mut sound_player,
             )
@@ -1024,6 +1232,7 @@ mod tests {
             ))
             .unwrap();
         let mut task_store = None;
+        let workspace_store = TaskStore::at(temp_path("notification-workspace/tasks.toml"));
         let mut notifier = RecordingNotifier::default();
         let mut sound_player = RecordingSoundPlayer::default();
 
@@ -1032,6 +1241,7 @@ mod tests {
             &app,
             &mut config,
             &mut task_store,
+            &workspace_store,
             &mut notifier,
             &mut sound_player,
         )
@@ -1052,6 +1262,7 @@ mod tests {
             .unwrap();
         let app = App::from_config(&config);
         let mut task_store = None;
+        let workspace_store = TaskStore::at(temp_path("timer-effects-workspace/tasks.toml"));
         let mut notifier = RecordingNotifier::default();
         let mut sound = RecordingSoundPlayer::default();
 
@@ -1063,6 +1274,7 @@ mod tests {
             &app,
             &mut config,
             &mut task_store,
+            &workspace_store,
             &mut notifier,
             &mut sound,
         )
@@ -1082,6 +1294,7 @@ mod tests {
             ))
             .unwrap();
         let mut task_store = None;
+        let workspace_store = TaskStore::at(temp_path("focus-audio-workspace/tasks.toml"));
         let mut notifier = RecordingNotifier::default();
         let mut sound_player = RecordingSoundPlayer::default();
 
@@ -1095,6 +1308,7 @@ mod tests {
                 &app,
                 &mut config,
                 &mut task_store,
+                &workspace_store,
                 &mut notifier,
                 &mut sound_player,
             )
@@ -1110,6 +1324,7 @@ mod tests {
             &app,
             &mut disabled_config,
             &mut task_store,
+            &workspace_store,
             &mut notifier,
             &mut sound_player,
         )
@@ -1134,6 +1349,7 @@ mod tests {
             )
             .unwrap();
         let mut task_store = None;
+        let workspace_store = TaskStore::at(temp_path("disabled-sound-workspace/tasks.toml"));
         let mut notifier = RecordingNotifier::default();
         let mut sound_player = RecordingSoundPlayer::default();
 
@@ -1146,6 +1362,7 @@ mod tests {
                 &app,
                 &mut config,
                 &mut task_store,
+                &workspace_store,
                 &mut notifier,
                 &mut sound_player,
             )
