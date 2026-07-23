@@ -10,10 +10,14 @@ use crate::{
     display::{BIG_DURATION_HEIGHT, big_duration_width},
 };
 
-// Border, state, duration, completed count, and session controls.
-const MIN_CLOCK_HEIGHT: u16 = 6;
-const MIN_TASK_HEIGHT: u16 = 3;
-const MIN_TASK_WIDTH: u16 = 24;
+/// Suggested width of one task panel, including its border.
+pub(crate) const T_W: u16 = 24;
+/// Suggested height of every panel, including its border. At this height a
+/// sufficiently wide clock can render its glyph timer and all primary rows.
+pub(crate) const C_H: u16 = 10;
+const T_H: u16 = C_H;
+const D_H: u16 = C_H;
+const W_SUG: u16 = T_W.saturating_mul(2);
 const SPACED_CLOCK_MIN_INNER_HEIGHT: u16 = 12;
 const NON_GLYPH_HEIGHT: u16 = 3;
 const SCALED_GLYPH_PADDING_HEIGHT: u16 = 7;
@@ -23,7 +27,7 @@ pub(crate) enum WorkspaceMode {
     Full,
     Short,
     Narrow,
-    Compact,
+    Mono,
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -64,8 +68,8 @@ enum WorkspaceGeometry {
         clock: ClockGeometry,
         task: TaskGeometry,
     },
-    CompactClock(ClockGeometry),
-    CompactTask(TaskGeometry),
+    MonoClock(ClockGeometry),
+    MonoTask(TaskGeometry),
 }
 
 /// Exact rectangles used to render one application frame.
@@ -89,9 +93,7 @@ impl FrameGeometry {
                 WorkspaceMode::Short
             }
             WorkspaceGeometry::Narrow { .. } => WorkspaceMode::Narrow,
-            WorkspaceGeometry::CompactClock(_) | WorkspaceGeometry::CompactTask(_) => {
-                WorkspaceMode::Compact
-            }
+            WorkspaceGeometry::MonoClock(_) | WorkspaceGeometry::MonoTask(_) => WorkspaceMode::Mono,
         }
     }
 
@@ -100,8 +102,8 @@ impl FrameGeometry {
             WorkspaceGeometry::Full { clock, .. }
             | WorkspaceGeometry::ShortClock(clock)
             | WorkspaceGeometry::Narrow { clock, .. }
-            | WorkspaceGeometry::CompactClock(clock) => Some(clock),
-            WorkspaceGeometry::ShortTasks { .. } | WorkspaceGeometry::CompactTask(_) => None,
+            | WorkspaceGeometry::MonoClock(clock) => Some(clock),
+            WorkspaceGeometry::ShortTasks { .. } | WorkspaceGeometry::MonoTask(_) => None,
         }
     }
 
@@ -114,14 +116,14 @@ impl FrameGeometry {
                 task: TaskGeometry::Todo(area),
                 ..
             }
-            | WorkspaceGeometry::CompactTask(TaskGeometry::Todo(area)) => Some(area),
+            | WorkspaceGeometry::MonoTask(TaskGeometry::Todo(area)) => Some(area),
             WorkspaceGeometry::ShortClock(_)
             | WorkspaceGeometry::Narrow {
                 task: TaskGeometry::Done(_),
                 ..
             }
-            | WorkspaceGeometry::CompactClock(_)
-            | WorkspaceGeometry::CompactTask(TaskGeometry::Done(_)) => None,
+            | WorkspaceGeometry::MonoClock(_)
+            | WorkspaceGeometry::MonoTask(TaskGeometry::Done(_)) => None,
         }
     }
 
@@ -134,14 +136,14 @@ impl FrameGeometry {
                 task: TaskGeometry::Done(area),
                 ..
             }
-            | WorkspaceGeometry::CompactTask(TaskGeometry::Done(area)) => Some(area),
+            | WorkspaceGeometry::MonoTask(TaskGeometry::Done(area)) => Some(area),
             WorkspaceGeometry::ShortClock(_)
             | WorkspaceGeometry::Narrow {
                 task: TaskGeometry::Todo(_),
                 ..
             }
-            | WorkspaceGeometry::CompactClock(_)
-            | WorkspaceGeometry::CompactTask(TaskGeometry::Todo(_)) => None,
+            | WorkspaceGeometry::MonoClock(_)
+            | WorkspaceGeometry::MonoTask(TaskGeometry::Todo(_)) => None,
         }
     }
 
@@ -153,16 +155,33 @@ impl FrameGeometry {
 #[derive(Debug, Clone, Copy)]
 pub(crate) struct LayoutRequest {
     pub(crate) area: Rect,
-    pub(crate) controls_height: u16,
+    pub(crate) help_heights: HelpHeights,
     pub(crate) focus: UiFocus,
     pub(crate) last_task_focus: UiFocus,
     pub(crate) duration: Duration,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) struct HelpHeights {
+    pub(crate) clock: Option<u16>,
+    pub(crate) todo: Option<u16>,
+    pub(crate) done: Option<u16>,
+}
+
+impl HelpHeights {
+    fn reserve(self) -> u16 {
+        match (self.clock, self.todo, self.done) {
+            (Some(clock), Some(todo), Some(done)) => clock.max(todo).max(done),
+            _ => 0,
+        }
+    }
+}
+
 pub(crate) fn resolve(request: LayoutRequest) -> FrameGeometry {
     let inner_area = Block::default().borders(Borders::ALL).inner(request.area);
-    let mode = classify(inner_area, request.duration);
-    let controls_height = budget_help(mode, inner_area, request);
+    let help_reserve = request.help_heights.reserve();
+    let mode = classify(inner_area, help_reserve);
+    let controls_height = budget_help(mode, inner_area, help_reserve);
     let vertical = Layout::default()
         .direction(Direction::Vertical)
         .constraints([Constraint::Min(0), Constraint::Length(controls_height)])
@@ -178,42 +197,28 @@ pub(crate) fn resolve(request: LayoutRequest) -> FrameGeometry {
     }
 }
 
-fn classify(inner_area: Rect, duration: Duration) -> WorkspaceMode {
-    let single_width = u16::try_from(crate::display::format_duration(duration).len())
-        .unwrap_or(u16::MAX)
-        .saturating_add(2);
-    let split_width = MIN_TASK_WIDTH.saturating_mul(2);
-    let stacked_height = MIN_CLOCK_HEIGHT.saturating_add(MIN_TASK_HEIGHT);
-    let can_show_single = inner_area.width >= single_width && inner_area.height >= MIN_TASK_HEIGHT;
-    let can_split_width = inner_area.width >= split_width;
-    let can_stack_height = inner_area.height >= stacked_height;
-
-    match (can_show_single, can_split_width, can_stack_height) {
-        (true, true, true) => WorkspaceMode::Full,
-        (true, true, false) => WorkspaceMode::Short,
-        (true, false, true) => WorkspaceMode::Narrow,
-        _ => WorkspaceMode::Compact,
+fn classify(inner_area: Rect, help_reserve: u16) -> WorkspaceMode {
+    let h_sug = C_H
+        .saturating_add(T_H.max(D_H))
+        .saturating_add(help_reserve);
+    match (inner_area.width >= W_SUG, inner_area.height >= h_sug) {
+        (true, true) => WorkspaceMode::Full,
+        (true, false) => WorkspaceMode::Short,
+        (false, true) => WorkspaceMode::Narrow,
+        (false, false) => WorkspaceMode::Mono,
     }
 }
 
-fn budget_help(mode: WorkspaceMode, inner_area: Rect, request: LayoutRequest) -> u16 {
-    let stacked_height = MIN_CLOCK_HEIGHT.saturating_add(MIN_TASK_HEIGHT);
+fn budget_help(mode: WorkspaceMode, inner_area: Rect, help_reserve: u16) -> u16 {
     let minimum_workspace_height = match mode {
-        WorkspaceMode::Full | WorkspaceMode::Narrow => stacked_height,
-        WorkspaceMode::Short | WorkspaceMode::Compact if request.focus == UiFocus::Clock => {
-            MIN_CLOCK_HEIGHT
-        }
-        WorkspaceMode::Short | WorkspaceMode::Compact => MIN_TASK_HEIGHT,
+        WorkspaceMode::Full | WorkspaceMode::Narrow => C_H.saturating_add(T_H.max(D_H)),
+        WorkspaceMode::Short | WorkspaceMode::Mono => C_H,
     };
-    let available_help_height = inner_area.height.saturating_sub(minimum_workspace_height);
-    let clock_can_show_text = request.focus != UiFocus::Clock
-        || inner_area.width
-            >= u16::try_from(crate::display::format_duration(request.duration).len())
-                .unwrap_or(u16::MAX)
-                .saturating_add(2);
 
-    if clock_can_show_text && request.controls_height <= available_help_height {
-        request.controls_height
+    if help_reserve > 0
+        && inner_area.height >= minimum_workspace_height.saturating_add(help_reserve)
+    {
+        help_reserve
     } else {
         0
     }
@@ -253,12 +258,10 @@ fn allocate_workspace(
                 task,
             }
         }
-        WorkspaceMode::Compact => match request.focus {
-            UiFocus::Clock => {
-                WorkspaceGeometry::CompactClock(clock_geometry(area, request.duration))
-            }
-            UiFocus::Todo => WorkspaceGeometry::CompactTask(TaskGeometry::Todo(area)),
-            UiFocus::Done => WorkspaceGeometry::CompactTask(TaskGeometry::Done(area)),
+        WorkspaceMode::Mono => match request.focus {
+            UiFocus::Clock => WorkspaceGeometry::MonoClock(clock_geometry(area, request.duration)),
+            UiFocus::Todo => WorkspaceGeometry::MonoTask(TaskGeometry::Todo(area)),
+            UiFocus::Done => WorkspaceGeometry::MonoTask(TaskGeometry::Done(area)),
         },
     }
 }
@@ -272,13 +275,9 @@ fn split_tasks(area: Rect) -> [Rect; 2] {
 }
 
 fn split_clock_and_tasks(area: Rect) -> [Rect; 2] {
-    let proportional_clock_height = area.height.saturating_mul(55) / 100;
-    let clock_height = proportional_clock_height
-        .max(MIN_CLOCK_HEIGHT)
-        .min(area.height.saturating_sub(MIN_TASK_HEIGHT));
     let chunks = Layout::default()
         .direction(Direction::Vertical)
-        .constraints([Constraint::Length(clock_height), Constraint::Min(0)])
+        .constraints([Constraint::Percentage(50), Constraint::Percentage(50)])
         .split(area);
     [chunks[0], chunks[1]]
 }
@@ -344,10 +343,14 @@ mod tests {
 
     const DEFAULT_DURATION: Duration = Duration::from_secs(25 * 60);
 
-    fn request(width: u16, height: u16) -> LayoutRequest {
+    fn request_for_workspace(width: u16, height: u16) -> LayoutRequest {
         LayoutRequest {
-            area: Rect::new(0, 0, width, height),
-            controls_height: 2,
+            area: Rect::new(0, 0, width.saturating_add(2), height.saturating_add(2)),
+            help_heights: HelpHeights {
+                clock: Some(2),
+                todo: Some(3),
+                done: Some(4),
+            },
             focus: UiFocus::Clock,
             last_task_focus: UiFocus::Todo,
             duration: DEFAULT_DURATION,
@@ -355,87 +358,163 @@ mod tests {
     }
 
     #[test]
-    fn exact_default_duration_boundaries_select_each_mode() {
-        for (width, height, expected) in [
-            (50, 11, WorkspaceMode::Full),
-            (50, 10, WorkspaceMode::Short),
-            (49, 11, WorkspaceMode::Narrow),
-            (9, 10, WorkspaceMode::Compact),
-            (8, 12, WorkspaceMode::Compact),
-            (9, 9, WorkspaceMode::Compact),
-        ] {
-            assert_eq!(
-                resolve(request(width, height)).mode(),
-                expected,
-                "terminal: {width}x{height}"
-            );
-        }
-    }
-
-    #[test]
-    fn help_height_never_changes_the_space_class() {
-        for (width, height) in [(80, 24), (80, 14), (40, 24), (40, 16), (20, 10)] {
-            let baseline = resolve(request(width, height)).mode();
-            for controls_height in [0, 1, 10, u16::MAX] {
+    fn every_threshold_side_selects_the_expected_quadrant() {
+        let reserve = 4;
+        let h_sug = C_H + T_H + reserve;
+        for width in [W_SUG - 1, W_SUG, W_SUG + 1] {
+            for height in [h_sug - 1, h_sug, h_sug + 1] {
+                let expected = match (width >= W_SUG, height >= h_sug) {
+                    (true, true) => WorkspaceMode::Full,
+                    (true, false) => WorkspaceMode::Short,
+                    (false, true) => WorkspaceMode::Narrow,
+                    (false, false) => WorkspaceMode::Mono,
+                };
                 assert_eq!(
-                    resolve(LayoutRequest {
-                        controls_height,
-                        ..request(width, height)
-                    })
-                    .mode(),
-                    baseline
+                    resolve(request_for_workspace(width, height)).mode(),
+                    expected,
+                    "workspace: {width}x{height}"
                 );
             }
         }
     }
 
     #[test]
-    fn contextual_help_is_complete_or_omitted_in_every_workspace_mode() {
-        for (width, height, desired_height, expected_mode, expected_height) in [
-            (50, 13, 2, WorkspaceMode::Full, 2),
-            (50, 13, 3, WorkspaceMode::Full, 0),
-            (50, 10, 2, WorkspaceMode::Short, 2),
-            (50, 10, 3, WorkspaceMode::Short, 0),
-            (20, 13, 2, WorkspaceMode::Narrow, 2),
-            (20, 13, 3, WorkspaceMode::Narrow, 0),
-            (20, 10, 2, WorkspaceMode::Compact, 2),
-            (20, 10, 3, WorkspaceMode::Compact, 0),
-            (8, 12, 2, WorkspaceMode::Compact, 0),
-        ] {
-            let geometry = resolve(LayoutRequest {
-                controls_height: desired_height,
-                ..request(width, height)
-            });
+    fn stable_help_reserve_is_the_maximum_of_three_viable_heights() {
+        let geometry = resolve(request_for_workspace(W_SUG, C_H + T_H + 4));
+        assert_eq!(geometry.mode(), WorkspaceMode::Full);
+        assert_eq!(geometry.controls().height, 4);
+    }
 
-            assert_eq!(geometry.mode(), expected_mode, "terminal: {width}x{height}");
-            assert_eq!(
-                geometry.controls().height,
-                expected_height,
-                "terminal: {width}x{height}, desired help: {desired_height}"
+    #[test]
+    fn any_non_viable_help_variant_disables_the_footer_for_every_focus() {
+        for missing in 0..3 {
+            let mut heights = [Some(2), Some(3), Some(4)];
+            heights[missing] = None;
+            for focus in [UiFocus::Clock, UiFocus::Todo, UiFocus::Done] {
+                let geometry = resolve(LayoutRequest {
+                    help_heights: HelpHeights {
+                        clock: heights[0],
+                        todo: heights[1],
+                        done: heights[2],
+                    },
+                    focus,
+                    ..request_for_workspace(W_SUG, C_H + T_H)
+                });
+                assert_eq!(geometry.mode(), WorkspaceMode::Full);
+                assert_eq!(geometry.controls().height, 0);
+            }
+        }
+    }
+
+    #[test]
+    fn help_is_allocated_wholly_or_omitted_when_content_budget_is_too_small() {
+        for (height, expected) in [(C_H + 4, 4), (C_H + 3, 0), (C_H - 1, 0)] {
+            let geometry = resolve(request_for_workspace(W_SUG, height));
+            assert_eq!(geometry.mode(), WorkspaceMode::Short);
+            assert_eq!(geometry.controls().height, expected);
+        }
+
+        let reserve_exceeds_height = resolve(LayoutRequest {
+            help_heights: HelpHeights {
+                clock: Some(30),
+                todo: Some(29),
+                done: Some(28),
+            },
+            ..request_for_workspace(W_SUG, 25)
+        });
+        assert_eq!(reserve_exceeds_height.controls().height, 0);
+    }
+
+    #[test]
+    fn decreasing_height_never_reenters_a_larger_vertical_mode() {
+        for width in [W_SUG - 1, W_SUG] {
+            let modes: Vec<_> = (0..=30)
+                .rev()
+                .map(|height| resolve(request_for_workspace(width, height)).mode())
+                .collect();
+            let transition = if width >= W_SUG {
+                (WorkspaceMode::Short, WorkspaceMode::Full)
+            } else {
+                (WorkspaceMode::Mono, WorkspaceMode::Narrow)
+            };
+            assert!(
+                !modes
+                    .windows(2)
+                    .any(|pair| pair == [transition.0, transition.1])
             );
         }
     }
 
     #[test]
-    fn clock_face_steps_from_text_through_every_fitting_glyph_scale() {
-        let duration = DEFAULT_DURATION;
+    fn short_narrow_and_mono_panel_selection_is_focus_driven() {
+        let short_clock = resolve(request_for_workspace(W_SUG, C_H + 4 - 1));
+        assert!(short_clock.clock().is_some());
+        assert!(short_clock.todo().is_none());
 
+        let short_tasks = resolve(LayoutRequest {
+            focus: UiFocus::Todo,
+            ..request_for_workspace(W_SUG, C_H + 4 - 1)
+        });
+        assert!(short_tasks.clock().is_none());
+        assert!(short_tasks.todo().is_some() && short_tasks.done().is_some());
+
+        let narrow = resolve(LayoutRequest {
+            focus: UiFocus::Clock,
+            last_task_focus: UiFocus::Done,
+            ..request_for_workspace(W_SUG - 1, C_H + T_H + 4)
+        });
+        assert!(narrow.clock().is_some() && narrow.done().is_some());
+        assert!(narrow.todo().is_none());
+
+        for focus in [UiFocus::Clock, UiFocus::Todo, UiFocus::Done] {
+            let mono = resolve(LayoutRequest {
+                focus,
+                ..request_for_workspace(W_SUG - 1, C_H + 4 - 1)
+            });
+            assert_eq!(mono.clock().is_some(), focus == UiFocus::Clock);
+            assert_eq!(mono.todo().is_some(), focus == UiFocus::Todo);
+            assert_eq!(mono.done().is_some(), focus == UiFocus::Done);
+        }
+    }
+
+    #[test]
+    fn stacked_sections_are_equal_halves_including_odd_heights() {
+        for width in [W_SUG - 1, W_SUG] {
+            for height in [24, 25] {
+                let geometry = resolve(LayoutRequest {
+                    help_heights: HelpHeights {
+                        clock: None,
+                        todo: None,
+                        done: None,
+                    },
+                    ..request_for_workspace(width, height)
+                });
+                let clock = geometry.clock().unwrap().area;
+                let task = geometry.todo().unwrap();
+                assert!(clock.height.abs_diff(task.height) <= 1);
+                assert_eq!(clock.height.saturating_add(task.height), height);
+            }
+        }
+    }
+
+    #[test]
+    fn declared_clock_height_renders_glyphs_and_smaller_areas_degrade() {
         assert_eq!(
-            clock_geometry(Rect::new(0, 0, 20, 10), duration).face,
+            clock_geometry(Rect::new(0, 0, 32, C_H - 1), DEFAULT_DURATION).face,
             ClockFace::Text
         );
         assert_eq!(
-            clock_geometry(Rect::new(0, 0, 32, 10), duration).face,
+            clock_geometry(Rect::new(0, 0, 32, C_H), DEFAULT_DURATION).face,
             ClockFace::Glyphs { scale: 1 }
         );
         assert_eq!(
-            clock_geometry(Rect::new(0, 0, 62, 19), duration).face,
+            clock_geometry(Rect::new(0, 0, 62, 19), DEFAULT_DURATION).face,
             ClockFace::Glyphs { scale: 2 }
         );
     }
 
     #[test]
-    fn compact_clock_adds_rows_in_content_priority_order() {
+    fn tiny_clock_adds_rows_in_content_priority_order() {
         let one_row = clock_geometry(Rect::new(0, 0, 20, 3), DEFAULT_DURATION);
         assert_eq!(one_row.remaining.height, 1);
         assert_eq!(one_row.state.height, 0);
@@ -457,15 +536,19 @@ mod tests {
     }
 
     #[test]
-    fn compact_task_keeps_one_printable_list_row() {
+    fn mono_task_keeps_one_printable_list_row() {
         let geometry = resolve(LayoutRequest {
             focus: UiFocus::Todo,
-            controls_height: u16::MAX,
-            ..request(20, 5)
+            help_heights: HelpHeights {
+                clock: None,
+                todo: None,
+                done: None,
+            },
+            ..request_for_workspace(18, 3)
         });
         let todo = geometry.todo().unwrap();
 
-        assert_eq!(geometry.mode(), WorkspaceMode::Compact);
+        assert_eq!(geometry.mode(), WorkspaceMode::Mono);
         assert_eq!(Block::default().borders(Borders::ALL).inner(todo).height, 1);
         assert_eq!(geometry.controls().height, 0);
     }
@@ -477,7 +560,17 @@ mod tests {
 
         for width in WIDTHS {
             for height in HEIGHTS {
-                let geometry = resolve(request(width, height));
+                let geometry = resolve(LayoutRequest {
+                    area: Rect::new(0, 0, width, height),
+                    help_heights: HelpHeights {
+                        clock: None,
+                        todo: None,
+                        done: None,
+                    },
+                    focus: UiFocus::Clock,
+                    last_task_focus: UiFocus::Todo,
+                    duration: DEFAULT_DURATION,
+                });
                 let terminal = geometry.area();
                 let mut regions = vec![geometry.controls()];
                 if let Some(clock) = geometry.clock() {

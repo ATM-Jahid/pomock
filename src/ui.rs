@@ -15,7 +15,7 @@ use crate::{
     display::{format_big_duration_at_scale, format_duration, format_key, format_state},
     settings::SettingField,
     timer::{SessionKind, TimerState},
-    ui_layout::{ClockFace, LayoutRequest, resolve},
+    ui_layout::{ClockFace, HelpHeights, LayoutRequest, resolve},
 };
 
 pub use crate::ui_layout::FrameGeometry;
@@ -87,10 +87,11 @@ pub fn draw(frame: &mut Frame, app: &mut App, theme: Theme, keys: &KeysConfig) -
         .map_or(theme, |settings| Theme::from(settings.config().theme()));
     let area = frame.area();
     let controls_text = controls_text(app, keys);
-    let controls_text = wrap_help(&controls_text, inner_width(area));
+    let workspace_width = inner_width(area);
+    let controls_text = wrap_help(&controls_text, workspace_width);
     let layout = resolve(LayoutRequest {
         area,
-        controls_height: text_height(&controls_text),
+        help_heights: help_heights(app, keys, workspace_width),
         focus: app.ui_focus(),
         last_task_focus: app.last_task_focus(),
         duration: app.timer().remaining(),
@@ -427,6 +428,30 @@ fn text_height(text: &str) -> u16 {
     u16::try_from(text.lines().count()).unwrap_or(u16::MAX)
 }
 
+fn help_heights(app: &App, keys: &KeysConfig, width: u16) -> HelpHeights {
+    HelpHeights {
+        clock: viable_help_height(&controls_text_for_focus(app, keys, UiFocus::Clock), width),
+        todo: viable_help_height(&controls_text_for_focus(app, keys, UiFocus::Todo), width),
+        done: viable_help_height(&controls_text_for_focus(app, keys, UiFocus::Done), width),
+    }
+}
+
+fn viable_help_height(text: &str, width: u16) -> Option<u16> {
+    let width = usize::from(width);
+    if width == 0
+        || text
+            .split_whitespace()
+            .any(|token| Line::from(token).width() > width)
+    {
+        return None;
+    }
+
+    Some(text_height(&wrap_help(
+        text,
+        u16::try_from(width).unwrap_or(u16::MAX),
+    )))
+}
+
 fn wrap_help(text: &str, width: u16) -> String {
     if width == 0 {
         return String::new();
@@ -514,6 +539,10 @@ fn task_label(index: usize, description: &str, show_numbers: bool) -> String {
 }
 
 fn controls_text(app: &App, keys: &KeysConfig) -> String {
+    controls_text_for_focus(app, keys, app.ui_focus())
+}
+
+fn controls_text_for_focus(app: &App, keys: &KeysConfig, focus: UiFocus) -> String {
     if let Some(operation) = app.pending_confirmation() {
         let prompt = confirmation_prompt(operation);
         return format!("{prompt}  [y/Enter] confirm  [n/Esc] cancel");
@@ -546,7 +575,7 @@ fn controls_text(app: &App, keys: &KeysConfig) -> String {
             ]);
             let quit = format_key(first_key(keys.quit()));
             let settings = format_key(first_key(keys.settings()));
-            match app.ui_focus() {
+            match focus {
                 UiFocus::Clock => format!(
                     "[{focus_navigation}] box nav  [{}] start/pause  [{}] cycle session  [{}] reset  [{settings}] settings  [{quit}] quit",
                     format_key(first_key(keys.clock_primary())),
@@ -933,10 +962,10 @@ mod tests {
     }
 
     fn app_layout(area: Rect, app: &App) -> FrameGeometry {
-        let help = wrap_help(&controls_text(app, app.input_keys()), inner_width(area));
+        let workspace_width = inner_width(area);
         resolve(LayoutRequest {
             area,
-            controls_height: text_height(&help),
+            help_heights: help_heights(app, app.input_keys(), workspace_width),
             focus: app.ui_focus(),
             last_task_focus: app.last_task_focus(),
             duration: app.timer().remaining(),
@@ -998,14 +1027,37 @@ mod tests {
     }
 
     #[test]
+    fn focus_help_variants_have_distinct_measured_heights_and_a_shared_reserve() {
+        let app = App::new();
+        let heights = help_heights(&app, app.input_keys(), 14);
+
+        assert_eq!(heights.clock, Some(9));
+        assert_eq!(heights.todo, Some(12));
+        assert_eq!(heights.done, Some(11));
+        assert_eq!(
+            app_layout(Rect::new(0, 0, 16, 34), &app).controls().height,
+            12
+        );
+    }
+
+    #[test]
+    fn semantic_token_viability_has_an_explicit_width_boundary() {
+        let app = App::new();
+
+        assert_eq!(help_heights(&app, app.input_keys(), 0).clock, None);
+        assert_eq!(help_heights(&app, app.input_keys(), 10).clock, None);
+        assert_eq!(help_heights(&app, app.input_keys(), 11).clock, Some(10));
+    }
+
+    #[test]
     fn responsive_layout_selects_each_space_class() {
         let app = App::new();
         for (area, expected) in [
             (Rect::new(0, 0, 80, 24), WorkspaceMode::Full),
-            (Rect::new(0, 0, 80, 10), WorkspaceMode::Short),
-            (Rect::new(0, 0, 40, 24), WorkspaceMode::Narrow),
-            (Rect::new(0, 0, 40, 10), WorkspaceMode::Compact),
-            (Rect::new(0, 0, 20, 9), WorkspaceMode::Compact),
+            (Rect::new(0, 0, 80, 23), WorkspaceMode::Short),
+            (Rect::new(0, 0, 40, 26), WorkspaceMode::Narrow),
+            (Rect::new(0, 0, 40, 25), WorkspaceMode::Mono),
+            (Rect::new(0, 0, 20, 9), WorkspaceMode::Mono),
         ] {
             assert_eq!(app_layout(area, &app).mode(), expected, "area: {area:?}");
         }
@@ -1015,10 +1067,10 @@ mod tests {
     fn responsive_mode_is_stable_when_focus_changes_the_help_height() {
         for (area, expected) in [
             (Rect::new(0, 0, 80, 24), WorkspaceMode::Full),
-            (Rect::new(0, 0, 80, 10), WorkspaceMode::Short),
-            (Rect::new(0, 0, 40, 24), WorkspaceMode::Narrow),
-            (Rect::new(0, 0, 40, 10), WorkspaceMode::Compact),
-            (Rect::new(0, 0, 20, 9), WorkspaceMode::Compact),
+            (Rect::new(0, 0, 80, 23), WorkspaceMode::Short),
+            (Rect::new(0, 0, 40, 26), WorkspaceMode::Narrow),
+            (Rect::new(0, 0, 40, 25), WorkspaceMode::Mono),
+            (Rect::new(0, 0, 20, 9), WorkspaceMode::Mono),
         ] {
             let mut app = App::new();
             assert_eq!(app_layout(area, &app).mode(), expected);
@@ -1032,6 +1084,78 @@ mod tests {
             let _ = app.dispatch(Action::NavigateFocus(Direction::Up));
             assert_eq!(app_layout(area, &app).mode(), expected);
         }
+    }
+
+    #[test]
+    fn focus_changes_preserve_footer_and_workspace_rectangles_across_help_heights() {
+        let area = Rect::new(0, 0, 16, 34);
+        let mut app = App::new();
+        let clock_focus = app_layout(area, &app);
+
+        let _ = app.dispatch(Action::NavigateFocus(Direction::Down));
+        let todo_focus = app_layout(area, &app);
+        let _ = app.dispatch(Action::NavigateFocus(Direction::Right));
+        let done_focus = app_layout(area, &app);
+
+        assert_eq!(clock_focus.mode(), WorkspaceMode::Narrow);
+        assert_eq!(clock_focus.controls(), todo_focus.controls());
+        assert_eq!(todo_focus.controls(), done_focus.controls());
+        assert_eq!(
+            clock_focus.clock().unwrap().area,
+            todo_focus.clock().unwrap().area
+        );
+        assert_eq!(
+            todo_focus.clock().unwrap().area,
+            done_focus.clock().unwrap().area
+        );
+        assert_eq!(clock_focus.todo().unwrap(), todo_focus.todo().unwrap());
+        assert_eq!(todo_focus.todo().unwrap(), done_focus.done().unwrap());
+    }
+
+    #[test]
+    fn shorter_current_help_leaves_the_rest_of_the_stable_footer_blank() {
+        let area = Rect::new(0, 0, 16, 34);
+        let mut app = App::new();
+        let theme = Theme::from(&ThemeConfig::default());
+        let keys = KeysConfig::default();
+        let mut terminal = Terminal::new(TestBackend::new(area.width, area.height)).unwrap();
+
+        let layout = terminal
+            .draw(|frame| {
+                draw(frame, &mut app, theme, &keys);
+            })
+            .unwrap();
+        let footer = app_layout(layout.area, &app).controls();
+
+        assert_eq!(footer.height, 12);
+        for y in footer.y + 9..footer.bottom() {
+            for x in footer.x..footer.right() {
+                assert_eq!(terminal.backend().buffer()[(x, y)].symbol(), " ");
+            }
+        }
+    }
+
+    #[test]
+    fn wide_height_progression_is_full_then_short_then_footerless() {
+        let app = App::new();
+        let full = app_layout(Rect::new(0, 0, 50, 26), &app);
+        let short_with_help = app_layout(Rect::new(0, 0, 50, 25), &app);
+        let short_without_help = app_layout(Rect::new(0, 0, 50, 15), &app);
+        let below_clock_minimum = app_layout(Rect::new(0, 0, 50, 11), &app);
+
+        assert_eq!(
+            (full.mode(), full.controls().height),
+            (WorkspaceMode::Full, 4)
+        );
+        assert_eq!(
+            (short_with_help.mode(), short_with_help.controls().height),
+            (WorkspaceMode::Short, 4)
+        );
+        assert_eq!(short_without_help.mode(), WorkspaceMode::Short);
+        assert_eq!(short_without_help.controls().height, 0);
+        assert_eq!(below_clock_minimum.mode(), WorkspaceMode::Short);
+        assert_eq!(below_clock_minimum.controls().height, 0);
+        assert_eq!(below_clock_minimum.clock().unwrap().face, ClockFace::Text);
     }
 
     #[test]
@@ -1070,7 +1194,7 @@ mod tests {
 
     #[test]
     fn narrow_layout_retains_the_last_task_panel_while_clock_is_focused() {
-        let area = Rect::new(0, 0, 40, 24);
+        let area = Rect::new(0, 0, 40, 26);
         let mut app = App::new();
         let _ = app.dispatch(Action::NavigateFocus(Direction::Down));
         let _ = app.dispatch(Action::NavigateFocus(Direction::Right));
@@ -1094,12 +1218,12 @@ mod tests {
     }
 
     #[test]
-    fn compact_layout_shows_only_the_focused_panel() {
+    fn mono_layout_shows_only_the_focused_panel() {
         let area = Rect::new(0, 0, 40, 10);
         let mut app = App::new();
 
         let clock = app_layout(area, &app);
-        assert_eq!(clock.mode(), WorkspaceMode::Compact);
+        assert_eq!(clock.mode(), WorkspaceMode::Mono);
         assert!(clock.clock().is_some());
         assert!(clock.todo().is_none());
 
@@ -1116,12 +1240,12 @@ mod tests {
     }
 
     #[test]
-    fn smallest_compact_clock_exposes_only_its_boxed_hit_target() {
+    fn smallest_mono_clock_exposes_only_its_boxed_hit_target() {
         let app = App::new();
         let area = Rect::new(0, 0, 20, 9);
         let layout = app_layout(area, &app);
 
-        assert_eq!(layout.mode(), WorkspaceMode::Compact);
+        assert_eq!(layout.mode(), WorkspaceMode::Mono);
         assert!(layout.clock().is_some());
         assert_eq!(click_target(&layout, (10, 5), &app), ClickTarget::Clock);
         assert_eq!(scroll_target(&layout, (10, 5), &app), None);
@@ -1130,7 +1254,7 @@ mod tests {
     #[test]
     fn short_text_clock_shows_complete_help_when_it_fits() {
         let mut app = App::new();
-        let area = Rect::new(0, 0, 80, 10);
+        let area = Rect::new(0, 0, 80, 14);
         let help = wrap_help(&controls_text(&app, app.input_keys()), inner_width(area));
         let layout = app_layout(area, &app);
 
@@ -1158,31 +1282,31 @@ mod tests {
     }
 
     #[test]
-    fn one_row_compact_clock_omits_help_instead_of_displacing_the_timer() {
+    fn one_row_mono_clock_omits_help_instead_of_displacing_the_timer() {
         let app = App::new();
         let area = Rect::new(0, 0, 30, 5);
         let layout = app_layout(area, &app);
 
-        assert_eq!(layout.mode(), WorkspaceMode::Compact);
+        assert_eq!(layout.mode(), WorkspaceMode::Mono);
         assert_eq!(layout.controls().height, 0);
         assert_eq!(layout.clock().unwrap().remaining.height, 1);
     }
 
     #[test]
-    fn compact_text_clock_omits_help_instead_of_cutting_it_down() {
+    fn mono_text_clock_omits_help_instead_of_cutting_it_down() {
         let app = App::new();
         let area = Rect::new(0, 0, 20, 10);
         let help = wrap_help(&controls_text(&app, app.input_keys()), inner_width(area));
         let layout = app_layout(area, &app);
 
-        assert_eq!(layout.mode(), WorkspaceMode::Compact);
+        assert_eq!(layout.mode(), WorkspaceMode::Mono);
         assert_eq!(layout.clock().unwrap().face, ClockFace::Text);
         assert!(text_height(&help) > 2);
         assert_eq!(layout.controls().height, 0);
     }
 
     #[test]
-    fn smallest_compact_clock_renders_text_duration_instead_of_big_glyphs() {
+    fn smallest_mono_clock_renders_text_duration_instead_of_big_glyphs() {
         let mut app = App::new();
         let area = Rect::new(0, 0, 20, 9);
         let theme = Theme::from(&ThemeConfig::default());
@@ -1219,7 +1343,7 @@ mod tests {
         let layout = app_layout(Rect::new(0, 0, 9, 10), &app);
         let clock = layout.clock().unwrap();
 
-        assert_eq!(layout.mode(), WorkspaceMode::Compact);
+        assert_eq!(layout.mode(), WorkspaceMode::Mono);
         assert_eq!(clock.face, ClockFace::Text);
         assert_eq!(clock.state.height, 1);
         assert_eq!(clock.remaining.height, 1);
@@ -1228,10 +1352,10 @@ mod tests {
     }
 
     #[test]
-    fn compact_actions_are_available_only_for_the_rendered_panel() {
+    fn mono_actions_are_available_only_for_the_rendered_panel() {
         let mut app = App::new();
         let _ = app.dispatch(Action::NavigateFocus(Direction::Down));
-        let compact = app_layout(Rect::new(0, 0, 20, 9), &app);
+        let mono = app_layout(Rect::new(0, 0, 20, 9), &app);
 
         for action in [
             Action::BeginAdd,
@@ -1241,15 +1365,15 @@ mod tests {
             Action::MoveSelection(Direction::Down),
             Action::MoveSelectedTask(Direction::Up),
         ] {
-            assert!(action_target_visible(&compact, UiFocus::Todo, &action));
+            assert!(action_target_visible(&mono, UiFocus::Todo, &action));
         }
         assert!(action_target_visible(
-            &compact,
+            &mono,
             UiFocus::Todo,
             &Action::NavigateFocus(Direction::Up)
         ));
         assert!(!action_target_visible(
-            &compact,
+            &mono,
             UiFocus::Clock,
             &Action::PrimaryAction
         ));
@@ -1273,7 +1397,7 @@ mod tests {
     }
 
     #[test]
-    fn compact_clock_removes_internal_gaps_before_squeezing_content() {
+    fn mono_clock_removes_internal_gaps_before_squeezing_content() {
         let layout = clock_geometry(Rect::new(0, 0, 80, 10), Duration::from_secs(25 * 60));
 
         assert_eq!(layout.remaining.height, 5);
