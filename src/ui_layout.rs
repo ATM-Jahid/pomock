@@ -11,13 +11,11 @@ use crate::{
 };
 
 /// Suggested width of one task panel, including its border.
-pub(crate) const T_W: u16 = 24;
+pub(crate) const T_W_SUG: u16 = 24;
 /// Suggested height of every panel, including its border. At this height a
 /// sufficiently wide clock can render its glyph timer and all primary rows.
-pub(crate) const C_H: u16 = 10;
-const T_H: u16 = C_H;
-const D_H: u16 = C_H;
-const W_SUG: u16 = T_W.saturating_mul(2);
+pub(crate) const C_H_SUG: u16 = 10;
+const FULL_W_SUG: u16 = T_W_SUG.saturating_mul(2);
 const SPACED_CLOCK_MIN_INNER_HEIGHT: u16 = 12;
 const NON_GLYPH_HEIGHT: u16 = 3;
 const SCALED_GLYPH_PADDING_HEIGHT: u16 = 7;
@@ -156,6 +154,7 @@ impl FrameGeometry {
 pub(crate) struct LayoutRequest {
     pub(crate) area: Rect,
     pub(crate) help_heights: HelpHeights,
+    pub(crate) help_cutoff: u16,
     pub(crate) focus: UiFocus,
     pub(crate) last_task_focus: UiFocus,
     pub(crate) duration: Duration,
@@ -169,17 +168,18 @@ pub(crate) struct HelpHeights {
 }
 
 impl HelpHeights {
-    fn reserve(self) -> u16 {
+    pub(crate) fn reserve(self) -> Option<u16> {
         match (self.clock, self.todo, self.done) {
-            (Some(clock), Some(todo), Some(done)) => clock.max(todo).max(done),
-            _ => 0,
+            (Some(clock), Some(todo), Some(done)) => Some(clock.max(todo).max(done)),
+            _ => None,
         }
     }
 }
 
 pub(crate) fn resolve(request: LayoutRequest) -> FrameGeometry {
     let inner_area = Block::default().borders(Borders::ALL).inner(request.area);
-    let help_reserve = request.help_heights.reserve();
+    let help_reserve =
+        effective_help_height(inner_area.width, request.help_cutoff, request.help_heights);
     let mode = classify(inner_area, help_reserve);
     let controls_height = budget_help(mode, inner_area, help_reserve);
     let vertical = Layout::default()
@@ -197,11 +197,20 @@ pub(crate) fn resolve(request: LayoutRequest) -> FrameGeometry {
     }
 }
 
+/// `Q_h(w)` for classification and allocation. Help has no layout cost below
+/// its cutoff; at or above the cutoff every focus variant must be complete.
+fn effective_help_height(width: u16, cutoff: u16, heights: HelpHeights) -> u16 {
+    if width < cutoff {
+        0
+    } else {
+        heights.reserve().unwrap_or(0)
+    }
+}
+
 fn classify(inner_area: Rect, help_reserve: u16) -> WorkspaceMode {
-    let h_sug = C_H
-        .saturating_add(T_H.max(D_H))
-        .saturating_add(help_reserve);
-    match (inner_area.width >= W_SUG, inner_area.height >= h_sug) {
+    let h_sug = C_H_SUG.saturating_add(C_H_SUG).saturating_add(help_reserve);
+
+    match (inner_area.width >= FULL_W_SUG, inner_area.height >= h_sug) {
         (true, true) => WorkspaceMode::Full,
         (true, false) => WorkspaceMode::Short,
         (false, true) => WorkspaceMode::Narrow,
@@ -211,8 +220,8 @@ fn classify(inner_area: Rect, help_reserve: u16) -> WorkspaceMode {
 
 fn budget_help(mode: WorkspaceMode, inner_area: Rect, help_reserve: u16) -> u16 {
     let minimum_workspace_height = match mode {
-        WorkspaceMode::Full | WorkspaceMode::Narrow => C_H.saturating_add(T_H.max(D_H)),
-        WorkspaceMode::Short | WorkspaceMode::Mono => C_H,
+        WorkspaceMode::Full | WorkspaceMode::Narrow => C_H_SUG.saturating_mul(2),
+        WorkspaceMode::Short | WorkspaceMode::Mono => C_H_SUG,
     };
 
     if help_reserve > 0
@@ -351,6 +360,7 @@ mod tests {
                 todo: Some(3),
                 done: Some(4),
             },
+            help_cutoff: 0,
             focus: UiFocus::Clock,
             last_task_focus: UiFocus::Todo,
             duration: DEFAULT_DURATION,
@@ -358,20 +368,64 @@ mod tests {
     }
 
     #[test]
-    fn every_threshold_side_selects_the_expected_quadrant() {
-        let reserve = 4;
-        let h_sug = C_H + T_H + reserve;
-        for width in [W_SUG - 1, W_SUG, W_SUG + 1] {
-            for height in [h_sug - 1, h_sug, h_sug + 1] {
-                let expected = match (width >= W_SUG, height >= h_sug) {
+    fn every_mode_and_help_boundary_uses_fitting_side_equality() {
+        const Q_H: u16 = 4;
+        const W_CUT: u16 = 16;
+
+        let widths = [
+            W_CUT - 1,
+            W_CUT,
+            W_CUT + 1,
+            FULL_W_SUG - 1,
+            FULL_W_SUG,
+            FULL_W_SUG + 1,
+        ];
+        let heights = [
+            C_H_SUG - 1,
+            C_H_SUG,
+            C_H_SUG + Q_H - 1,
+            C_H_SUG + Q_H,
+            C_H_SUG.saturating_mul(2) - 1,
+            C_H_SUG.saturating_mul(2),
+            C_H_SUG.saturating_mul(2).saturating_add(Q_H) - 1,
+            C_H_SUG.saturating_mul(2).saturating_add(Q_H),
+            C_H_SUG.saturating_mul(2).saturating_add(Q_H) + 1,
+        ];
+
+        for width in widths {
+            for height in heights {
+                let request = LayoutRequest {
+                    help_cutoff: W_CUT,
+                    ..request_for_workspace(width, height)
+                };
+                let geometry = resolve(request);
+
+                let help_available = width >= W_CUT;
+                let help_height = if help_available { Q_H } else { 0 };
+                let tall = height >= C_H_SUG.saturating_mul(2).saturating_add(help_height);
+                let wide = width >= FULL_W_SUG;
+
+                let expected_mode = match (wide, tall) {
                     (true, true) => WorkspaceMode::Full,
                     (true, false) => WorkspaceMode::Short,
                     (false, true) => WorkspaceMode::Narrow,
                     (false, false) => WorkspaceMode::Mono,
                 };
+
+                let expected_help = if help_available && height >= C_H_SUG.saturating_add(Q_H) {
+                    Q_H
+                } else {
+                    0
+                };
+
                 assert_eq!(
-                    resolve(request_for_workspace(width, height)).mode(),
-                    expected,
+                    geometry.mode(),
+                    expected_mode,
+                    "workspace: {width}x{height}"
+                );
+                assert_eq!(
+                    geometry.controls().height,
+                    expected_help,
                     "workspace: {width}x{height}"
                 );
             }
@@ -379,8 +433,57 @@ mod tests {
     }
 
     #[test]
+    fn crossing_help_cutoff_can_change_narrow_to_mono() {
+        const Q_H: u16 = 4;
+        const W_CUT: u16 = 16;
+        let height = C_H_SUG.saturating_mul(2);
+
+        let below = resolve(LayoutRequest {
+            help_cutoff: W_CUT,
+            ..request_for_workspace(W_CUT - 1, height)
+        });
+        let at = resolve(LayoutRequest {
+            help_cutoff: W_CUT,
+            ..request_for_workspace(W_CUT, height)
+        });
+
+        assert_eq!(below.mode(), WorkspaceMode::Narrow);
+        assert_eq!(below.controls().height, 0);
+
+        assert_eq!(at.mode(), WorkspaceMode::Mono);
+        assert_eq!(at.controls().height, Q_H);
+    }
+
+    #[test]
+    fn help_height_is_zero_below_a_cutoff_larger_than_the_full_width_threshold() {
+        const LARGE_CUTOFF: u16 = FULL_W_SUG + 10;
+        let height = C_H_SUG.saturating_mul(2);
+
+        let geometry = resolve(LayoutRequest {
+            help_cutoff: LARGE_CUTOFF,
+            ..request_for_workspace(FULL_W_SUG, height)
+        });
+
+        assert_eq!(geometry.mode(), WorkspaceMode::Full);
+        assert_eq!(geometry.controls().height, 0);
+    }
+
+    #[test]
+    fn effective_help_height_is_zero_below_cutoff_and_complete_at_it() {
+        let heights = HelpHeights {
+            clock: Some(2),
+            todo: Some(3),
+            done: Some(4),
+        };
+
+        assert_eq!(effective_help_height(15, 16, heights), 0);
+        assert_eq!(effective_help_height(16, 16, heights), 4);
+        assert_eq!(effective_help_height(17, 16, heights), 4);
+    }
+
+    #[test]
     fn stable_help_reserve_is_the_maximum_of_three_viable_heights() {
-        let geometry = resolve(request_for_workspace(W_SUG, C_H + T_H + 4));
+        let geometry = resolve(request_for_workspace(FULL_W_SUG, C_H_SUG + C_H_SUG + 4));
         assert_eq!(geometry.mode(), WorkspaceMode::Full);
         assert_eq!(geometry.controls().height, 4);
     }
@@ -398,7 +501,7 @@ mod tests {
                         done: heights[2],
                     },
                     focus,
-                    ..request_for_workspace(W_SUG, C_H + T_H)
+                    ..request_for_workspace(FULL_W_SUG, C_H_SUG + C_H_SUG)
                 });
                 assert_eq!(geometry.mode(), WorkspaceMode::Full);
                 assert_eq!(geometry.controls().height, 0);
@@ -408,8 +511,8 @@ mod tests {
 
     #[test]
     fn help_is_allocated_wholly_or_omitted_when_content_budget_is_too_small() {
-        for (height, expected) in [(C_H + 4, 4), (C_H + 3, 0), (C_H - 1, 0)] {
-            let geometry = resolve(request_for_workspace(W_SUG, height));
+        for (height, expected) in [(C_H_SUG + 4, 4), (C_H_SUG + 3, 0), (C_H_SUG - 1, 0)] {
+            let geometry = resolve(request_for_workspace(FULL_W_SUG, height));
             assert_eq!(geometry.mode(), WorkspaceMode::Short);
             assert_eq!(geometry.controls().height, expected);
         }
@@ -420,19 +523,19 @@ mod tests {
                 todo: Some(29),
                 done: Some(28),
             },
-            ..request_for_workspace(W_SUG, 25)
+            ..request_for_workspace(FULL_W_SUG, 25)
         });
         assert_eq!(reserve_exceeds_height.controls().height, 0);
     }
 
     #[test]
     fn decreasing_height_never_reenters_a_larger_vertical_mode() {
-        for width in [W_SUG - 1, W_SUG] {
+        for width in [FULL_W_SUG - 1, FULL_W_SUG] {
             let modes: Vec<_> = (0..=30)
                 .rev()
                 .map(|height| resolve(request_for_workspace(width, height)).mode())
                 .collect();
-            let transition = if width >= W_SUG {
+            let transition = if width >= FULL_W_SUG {
                 (WorkspaceMode::Short, WorkspaceMode::Full)
             } else {
                 (WorkspaceMode::Mono, WorkspaceMode::Narrow)
@@ -447,13 +550,13 @@ mod tests {
 
     #[test]
     fn short_narrow_and_mono_panel_selection_is_focus_driven() {
-        let short_clock = resolve(request_for_workspace(W_SUG, C_H + 4 - 1));
+        let short_clock = resolve(request_for_workspace(FULL_W_SUG, C_H_SUG + 4 - 1));
         assert!(short_clock.clock().is_some());
         assert!(short_clock.todo().is_none());
 
         let short_tasks = resolve(LayoutRequest {
             focus: UiFocus::Todo,
-            ..request_for_workspace(W_SUG, C_H + 4 - 1)
+            ..request_for_workspace(FULL_W_SUG, C_H_SUG + 4 - 1)
         });
         assert!(short_tasks.clock().is_none());
         assert!(short_tasks.todo().is_some() && short_tasks.done().is_some());
@@ -461,7 +564,7 @@ mod tests {
         let narrow = resolve(LayoutRequest {
             focus: UiFocus::Clock,
             last_task_focus: UiFocus::Done,
-            ..request_for_workspace(W_SUG - 1, C_H + T_H + 4)
+            ..request_for_workspace(FULL_W_SUG - 1, C_H_SUG + C_H_SUG + 4)
         });
         assert!(narrow.clock().is_some() && narrow.done().is_some());
         assert!(narrow.todo().is_none());
@@ -469,7 +572,7 @@ mod tests {
         for focus in [UiFocus::Clock, UiFocus::Todo, UiFocus::Done] {
             let mono = resolve(LayoutRequest {
                 focus,
-                ..request_for_workspace(W_SUG - 1, C_H + 4 - 1)
+                ..request_for_workspace(FULL_W_SUG - 1, C_H_SUG + 4 - 1)
             });
             assert_eq!(mono.clock().is_some(), focus == UiFocus::Clock);
             assert_eq!(mono.todo().is_some(), focus == UiFocus::Todo);
@@ -478,8 +581,37 @@ mod tests {
     }
 
     #[test]
+    fn task_columns_are_equal_halves_in_full_and_short_modes() {
+        for width in [FULL_W_SUG, FULL_W_SUG + 1] {
+            let full = resolve(request_for_workspace(
+                width,
+                C_H_SUG.saturating_mul(2).saturating_add(4),
+            ));
+            assert_eq!(full.mode(), WorkspaceMode::Full);
+
+            let full_todo = full.todo().unwrap();
+            let full_done = full.done().unwrap();
+            assert!(full_todo.width.abs_diff(full_done.width) <= 1);
+            assert_eq!(full_todo.width.saturating_add(full_done.width), width);
+            assert_eq!(full_todo.right(), full_done.x);
+
+            let short = resolve(LayoutRequest {
+                focus: UiFocus::Todo,
+                ..request_for_workspace(width, C_H_SUG)
+            });
+            assert_eq!(short.mode(), WorkspaceMode::Short);
+
+            let short_todo = short.todo().unwrap();
+            let short_done = short.done().unwrap();
+            assert!(short_todo.width.abs_diff(short_done.width) <= 1);
+            assert_eq!(short_todo.width.saturating_add(short_done.width), width);
+            assert_eq!(short_todo.right(), short_done.x);
+        }
+    }
+
+    #[test]
     fn stacked_sections_are_equal_halves_including_odd_heights() {
-        for width in [W_SUG - 1, W_SUG] {
+        for width in [FULL_W_SUG - 1, FULL_W_SUG] {
             for height in [24, 25] {
                 let geometry = resolve(LayoutRequest {
                     help_heights: HelpHeights {
@@ -493,6 +625,7 @@ mod tests {
                 let task = geometry.todo().unwrap();
                 assert!(clock.height.abs_diff(task.height) <= 1);
                 assert_eq!(clock.height.saturating_add(task.height), height);
+                assert_eq!(clock.bottom(), task.y);
             }
         }
     }
@@ -500,11 +633,11 @@ mod tests {
     #[test]
     fn declared_clock_height_renders_glyphs_and_smaller_areas_degrade() {
         assert_eq!(
-            clock_geometry(Rect::new(0, 0, 32, C_H - 1), DEFAULT_DURATION).face,
+            clock_geometry(Rect::new(0, 0, 32, C_H_SUG - 1), DEFAULT_DURATION).face,
             ClockFace::Text
         );
         assert_eq!(
-            clock_geometry(Rect::new(0, 0, 32, C_H), DEFAULT_DURATION).face,
+            clock_geometry(Rect::new(0, 0, 32, C_H_SUG), DEFAULT_DURATION).face,
             ClockFace::Glyphs { scale: 1 }
         );
         assert_eq!(
@@ -567,6 +700,7 @@ mod tests {
                         todo: None,
                         done: None,
                     },
+                    help_cutoff: 0,
                     focus: UiFocus::Clock,
                     last_task_focus: UiFocus::Todo,
                     duration: DEFAULT_DURATION,

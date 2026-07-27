@@ -15,7 +15,7 @@ use crate::{
     display::{format_big_duration_at_scale, format_duration, format_key, format_state},
     settings::SettingField,
     timer::{SessionKind, TimerState},
-    ui_layout::{ClockFace, HelpHeights, LayoutRequest, resolve},
+    ui_layout::{C_H_SUG, ClockFace, HelpHeights, LayoutRequest, resolve},
 };
 
 pub use crate::ui_layout::FrameGeometry;
@@ -88,10 +88,12 @@ pub fn draw(frame: &mut Frame, app: &mut App, theme: Theme, keys: &KeysConfig) -
     let area = frame.area();
     let controls_text = controls_text(app, keys);
     let workspace_width = inner_width(area);
+    let help = help_metrics(app, keys, workspace_width);
     let controls_text = wrap_help(&controls_text, workspace_width);
     let layout = resolve(LayoutRequest {
         area,
-        help_heights: help_heights(app, keys, workspace_width),
+        help_heights: help.heights,
+        help_cutoff: help.cutoff,
         focus: app.ui_focus(),
         last_task_focus: app.last_task_focus(),
         duration: app.timer().remaining(),
@@ -428,28 +430,68 @@ fn text_height(text: &str) -> u16 {
     u16::try_from(text.lines().count()).unwrap_or(u16::MAX)
 }
 
-fn help_heights(app: &App, keys: &KeysConfig, width: u16) -> HelpHeights {
-    HelpHeights {
-        clock: viable_help_height(&controls_text_for_focus(app, keys, UiFocus::Clock), width),
-        todo: viable_help_height(&controls_text_for_focus(app, keys, UiFocus::Todo), width),
-        done: viable_help_height(&controls_text_for_focus(app, keys, UiFocus::Done), width),
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct HelpMetrics {
+    heights: HelpHeights,
+    item_width: u16,
+    height_width: u16,
+    cutoff: u16,
+}
+
+fn help_metrics(app: &App, keys: &KeysConfig, width: u16) -> HelpMetrics {
+    let texts = [
+        controls_text_for_focus(app, keys, UiFocus::Clock),
+        controls_text_for_focus(app, keys, UiFocus::Todo),
+        controls_text_for_focus(app, keys, UiFocus::Done),
+    ];
+
+    let heights_at = |candidate_width| HelpHeights {
+        clock: viable_help_height(&texts[0], candidate_width),
+        todo: viable_help_height(&texts[1], candidate_width),
+        done: viable_help_height(&texts[2], candidate_width),
+    };
+
+    let item_width = texts
+        .iter()
+        .map(|text| help_item_width(text))
+        .max()
+        .unwrap_or(0);
+
+    let height_width = (item_width.max(1)..=u16::MAX)
+        .find(|&candidate_width| {
+            heights_at(candidate_width)
+                .reserve()
+                .is_some_and(|height| height <= C_H_SUG)
+        })
+        .unwrap_or(u16::MAX);
+
+    HelpMetrics {
+        heights: heights_at(width),
+        item_width,
+        height_width,
+        cutoff: item_width.max(height_width),
     }
 }
 
+fn help_items(text: &str) -> impl Iterator<Item = &str> {
+    text.lines()
+        .flat_map(|line| line.split("  "))
+        .filter(|item| !item.is_empty())
+}
+
+fn help_item_width(text: &str) -> u16 {
+    help_items(text)
+        .map(|item| u16::try_from(Line::from(item).width()).unwrap_or(u16::MAX))
+        .max()
+        .unwrap_or(0)
+}
+
 fn viable_help_height(text: &str, width: u16) -> Option<u16> {
-    let width = usize::from(width);
-    if width == 0
-        || text
-            .split_whitespace()
-            .any(|token| Line::from(token).width() > width)
-    {
+    if width == 0 || help_item_width(text) > width {
         return None;
     }
 
-    Some(text_height(&wrap_help(
-        text,
-        u16::try_from(width).unwrap_or(u16::MAX),
-    )))
+    Some(text_height(&wrap_help(text, width)))
 }
 
 fn wrap_help(text: &str, width: u16) -> String {
@@ -963,9 +1005,12 @@ mod tests {
 
     fn app_layout(area: Rect, app: &App) -> FrameGeometry {
         let workspace_width = inner_width(area);
+        let help = help_metrics(app, app.input_keys(), workspace_width);
+
         resolve(LayoutRequest {
             area,
-            help_heights: help_heights(app, app.input_keys(), workspace_width),
+            help_heights: help.heights,
+            help_cutoff: help.cutoff,
             focus: app.ui_focus(),
             last_task_focus: app.last_task_focus(),
             duration: app.timer().remaining(),
@@ -1027,26 +1072,56 @@ mod tests {
     }
 
     #[test]
-    fn focus_help_variants_have_distinct_measured_heights_and_a_shared_reserve() {
+    fn focus_help_variants_share_the_maximum_height_at_the_cutoff() {
         let app = App::new();
-        let heights = help_heights(&app, app.input_keys(), 14);
+        let cutoff = help_metrics(&app, app.input_keys(), u16::MAX).cutoff;
+        let heights = help_metrics(&app, app.input_keys(), cutoff).heights;
+        let reserve = heights.reserve().unwrap();
 
-        assert_eq!(heights.clock, Some(9));
-        assert_eq!(heights.todo, Some(12));
-        assert_eq!(heights.done, Some(11));
         assert_eq!(
-            app_layout(Rect::new(0, 0, 16, 34), &app).controls().height,
-            12
+            reserve,
+            heights
+                .clock
+                .unwrap()
+                .max(heights.todo.unwrap())
+                .max(heights.done.unwrap())
         );
+
+        let area = Rect::new(
+            0,
+            0,
+            cutoff.saturating_add(2),
+            C_H_SUG
+                .saturating_mul(2)
+                .saturating_add(reserve)
+                .saturating_add(2),
+        );
+        assert_eq!(app_layout(area, &app).controls().height, reserve);
     }
 
     #[test]
-    fn semantic_token_viability_has_an_explicit_width_boundary() {
+    fn complete_help_item_viability_has_an_explicit_width_boundary() {
         let app = App::new();
+        let text = controls_text_for_focus(&app, app.input_keys(), UiFocus::Clock);
+        let item_width = help_item_width(&text);
 
-        assert_eq!(help_heights(&app, app.input_keys(), 0).clock, None);
-        assert_eq!(help_heights(&app, app.input_keys(), 10).clock, None);
-        assert_eq!(help_heights(&app, app.input_keys(), 11).clock, Some(10));
+        assert!(item_width > 0);
+        assert_eq!(
+            viable_help_height(&text, item_width.saturating_sub(1)),
+            None
+        );
+        assert!(viable_help_height(&text, item_width).is_some());
+    }
+
+    #[test]
+    fn help_item_width_measures_the_complete_key_action_unit() {
+        let text = "[x] a long action  [q] quit";
+
+        assert_eq!(
+            help_item_width(text),
+            u16::try_from(Line::from("[x] a long action").width()).unwrap()
+        );
+        assert_eq!(viable_help_height(text, 8), None);
     }
 
     #[test]
@@ -1114,10 +1189,26 @@ mod tests {
 
     #[test]
     fn shorter_current_help_leaves_the_rest_of_the_stable_footer_blank() {
-        let area = Rect::new(0, 0, 16, 34);
         let mut app = App::new();
         let theme = Theme::from(&ThemeConfig::default());
         let keys = KeysConfig::default();
+        let metrics = help_metrics(&app, &keys, u16::MAX);
+        let width = metrics.cutoff;
+        let heights = help_metrics(&app, &keys, width).heights;
+        let reserve = heights.reserve().unwrap();
+        let current_height = heights.clock.unwrap();
+
+        assert!(current_height < reserve);
+
+        let area = Rect::new(
+            0,
+            0,
+            width.saturating_add(2),
+            C_H_SUG
+                .saturating_mul(2)
+                .saturating_add(reserve)
+                .saturating_add(2),
+        );
         let mut terminal = Terminal::new(TestBackend::new(area.width, area.height)).unwrap();
 
         let layout = terminal
@@ -1127,8 +1218,8 @@ mod tests {
             .unwrap();
         let footer = app_layout(layout.area, &app).controls();
 
-        assert_eq!(footer.height, 12);
-        for y in footer.y + 9..footer.bottom() {
+        assert_eq!(footer.height, reserve);
+        for y in footer.y.saturating_add(current_height)..footer.bottom() {
             for x in footer.x..footer.right() {
                 assert_eq!(terminal.backend().buffer()[(x, y)].symbol(), " ");
             }
@@ -1902,5 +1993,95 @@ mod tests {
                 .any(|line| line.contains("[Enter/Space] edit"))
         );
         assert!(wrapped.lines().any(|line| line.contains("[s/Esc] close")));
+    }
+
+    #[test]
+    fn cutoff_metrics_follow_the_specification() {
+        let app = App::new();
+        let metrics = help_metrics(&app, app.input_keys(), 80);
+
+        assert!(metrics.item_width > 0);
+        assert!(metrics.height_width >= metrics.item_width);
+        assert_eq!(metrics.cutoff, metrics.item_width.max(metrics.height_width));
+
+        let below = metrics.height_width.saturating_sub(1);
+        assert!(
+            help_metrics(&app, app.input_keys(), below)
+                .heights
+                .reserve()
+                .is_none_or(|height| height > C_H_SUG)
+        );
+        assert!(
+            help_metrics(&app, app.input_keys(), metrics.height_width)
+                .heights
+                .reserve()
+                .is_some_and(|height| height <= C_H_SUG)
+        );
+    }
+
+    #[test]
+    fn help_is_suppressed_below_cutoff_and_complete_at_cutoff() {
+        let app = App::new();
+        let metrics = help_metrics(&app, app.input_keys(), u16::MAX);
+
+        let below = app_layout(Rect::new(0, 0, metrics.cutoff.saturating_add(1), 40), &app);
+        let at = app_layout(Rect::new(0, 0, metrics.cutoff.saturating_add(2), 40), &app);
+
+        assert_eq!(below.controls().height, 0);
+        assert!(
+            at.controls().height
+                >= help_metrics(&app, app.input_keys(), metrics.cutoff)
+                    .heights
+                    .reserve()
+                    .unwrap()
+        );
+    }
+
+    #[test]
+    fn configured_keybindings_change_help_metrics() {
+        let app = App::new();
+        let defaults = KeysConfig::default();
+        let configured = KeysConfig::default()
+            .with_binding(KeyAction::FocusLeft, ConfigKey::Backspace)
+            .with_binding(KeyAction::FocusDown, ConfigKey::Backspace)
+            .with_binding(KeyAction::FocusUp, ConfigKey::Backspace)
+            .with_binding(KeyAction::FocusRight, ConfigKey::Backspace);
+
+        let default_metrics = help_metrics(&app, &defaults, u16::MAX);
+        let configured_metrics = help_metrics(&app, &configured, u16::MAX);
+
+        assert!(configured_metrics.item_width > default_metrics.item_width);
+        assert!(configured_metrics.cutoff >= configured_metrics.item_width);
+        assert_ne!(configured_metrics, default_metrics);
+
+        let area = Rect::new(
+            0,
+            0,
+            crate::ui_layout::T_W_SUG
+                .saturating_mul(2)
+                .saturating_add(2),
+            C_H_SUG.saturating_mul(2).saturating_add(2),
+        );
+        let workspace_width = inner_width(area);
+        assert!(workspace_width >= default_metrics.cutoff);
+        assert!(workspace_width < configured_metrics.cutoff);
+
+        let default_help = help_metrics(&app, &defaults, workspace_width);
+        let configured_help = help_metrics(&app, &configured, workspace_width);
+        let request = |help: HelpMetrics| LayoutRequest {
+            area,
+            help_heights: help.heights,
+            help_cutoff: help.cutoff,
+            focus: app.ui_focus(),
+            last_task_focus: app.last_task_focus(),
+            duration: app.timer().remaining(),
+        };
+
+        let with_default_keys = resolve(request(default_help));
+        let with_configured_keys = resolve(request(configured_help));
+        assert_eq!(with_default_keys.mode(), WorkspaceMode::Short);
+        assert!(with_default_keys.controls().height > 0);
+        assert_eq!(with_configured_keys.mode(), WorkspaceMode::Full);
+        assert_eq!(with_configured_keys.controls().height, 0);
     }
 }
