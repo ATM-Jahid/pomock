@@ -15,7 +15,7 @@ use crate::{
     display::{format_big_duration_at_scale, format_duration, format_key, format_state},
     settings::SettingField,
     timer::{SessionKind, TimerState},
-    ui_layout::{C_H_SUG, ClockFace, HelpHeights, LayoutRequest, resolve},
+    ui_layout::{C_H_SUG, ClockFace, FooterHeights, LayoutRequest, resolve},
 };
 
 pub use crate::ui_layout::FrameGeometry;
@@ -86,14 +86,14 @@ pub fn draw(frame: &mut Frame, app: &mut App, theme: Theme, keys: &KeysConfig) -
         .settings()
         .map_or(theme, |settings| Theme::from(settings.config().theme()));
     let area = frame.area();
-    let controls_text = controls_text(app, keys);
+    let footer_text = footer_text(app, keys);
     let workspace_width = inner_width(area);
-    let help = help_metrics(app, keys, workspace_width);
-    let controls_text = wrap_help(&controls_text, workspace_width);
+    let footer = stable_footer_metrics(keys, workspace_width);
+    let footer_text = wrap_help(&footer_text, workspace_width);
     let layout = resolve(LayoutRequest {
         area,
-        help_heights: help.heights,
-        help_cutoff: help.cutoff,
+        footer_heights: footer.heights,
+        footer_cutoff: footer.cutoff,
         focus: app.ui_focus(),
         last_task_focus: app.last_task_focus(),
         duration: app.timer().remaining(),
@@ -115,7 +115,7 @@ pub fn draw(frame: &mut Frame, app: &mut App, theme: Theme, keys: &KeysConfig) -
         (SessionKind::LongBreak, "Long break"),
     ];
 
-    let controls = Paragraph::new(controls_text).alignment(Alignment::Center);
+    let footer = Paragraph::new(footer_text).alignment(Alignment::Center);
 
     let todo_items: Vec<ListItem> = app
         .tasks()
@@ -239,8 +239,8 @@ pub fn draw(frame: &mut Frame, app: &mut App, theme: Theme, keys: &KeysConfig) -
     if let Some(done_area) = layout.done() {
         frame.render_stateful_widget(done, done_area, &mut done_state);
     }
-    if layout.controls().width > 0 && layout.controls().height > 0 {
-        frame.render_widget(controls, layout.controls());
+    if layout.footer().width > 0 && layout.footer().height > 0 {
+        frame.render_widget(footer, layout.footer());
     }
     app.set_offsets(todo_state.offset(), done_state.offset());
 
@@ -431,21 +431,21 @@ fn text_height(text: &str) -> u16 {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-struct HelpMetrics {
-    heights: HelpHeights,
+struct FooterMetrics {
+    heights: FooterHeights,
     item_width: u16,
     height_width: u16,
     cutoff: u16,
 }
 
-fn help_metrics(app: &App, keys: &KeysConfig, width: u16) -> HelpMetrics {
+fn stable_footer_metrics(keys: &KeysConfig, width: u16) -> FooterMetrics {
     let texts = [
-        controls_text_for_focus(app, keys, UiFocus::Clock),
-        controls_text_for_focus(app, keys, UiFocus::Todo),
-        controls_text_for_focus(app, keys, UiFocus::Done),
+        normal_help_text(keys, UiFocus::Clock),
+        normal_help_text(keys, UiFocus::Todo),
+        normal_help_text(keys, UiFocus::Done),
     ];
 
-    let heights_at = |candidate_width| HelpHeights {
+    let heights_at = |candidate_width| FooterHeights {
         clock: viable_help_height(&texts[0], candidate_width),
         todo: viable_help_height(&texts[1], candidate_width),
         done: viable_help_height(&texts[2], candidate_width),
@@ -465,7 +465,7 @@ fn help_metrics(app: &App, keys: &KeysConfig, width: u16) -> HelpMetrics {
         })
         .unwrap_or(u16::MAX);
 
-    HelpMetrics {
+    FooterMetrics {
         heights: heights_at(width),
         item_width,
         height_width,
@@ -580,11 +580,11 @@ fn task_label(index: usize, description: &str, show_numbers: bool) -> String {
     }
 }
 
-fn controls_text(app: &App, keys: &KeysConfig) -> String {
-    controls_text_for_focus(app, keys, app.ui_focus())
+fn footer_text(app: &App, keys: &KeysConfig) -> String {
+    footer_text_for_focus(app, keys, app.ui_focus())
 }
 
-fn controls_text_for_focus(app: &App, keys: &KeysConfig, focus: UiFocus) -> String {
+fn footer_text_for_focus(app: &App, keys: &KeysConfig, focus: UiFocus) -> String {
     if let Some(operation) = app.pending_confirmation() {
         let prompt = confirmation_prompt(operation);
         return format!("{prompt}  [y/Enter] confirm  [n/Esc] cancel");
@@ -602,44 +602,45 @@ fn controls_text_for_focus(app: &App, keys: &KeysConfig, focus: UiFocus) -> Stri
     match app.edit_mode() {
         EditMode::Adding => format!("Add task: {}_", app.input()),
         EditMode::Editing { .. } => format!("Edit task: {}_", app.input()),
-        EditMode::Normal => {
-            let focus_navigation = key_labels(&[
-                first_key(keys.focus_left()),
-                first_key(keys.focus_down()),
-                first_key(keys.focus_up()),
-                first_key(keys.focus_right()),
-            ]);
-            let list_navigation =
-                key_labels(&[first_key(keys.list_down()), first_key(keys.list_up())]);
-            let item_movement = key_labels(&[
-                first_key(keys.move_task_up()),
-                first_key(keys.move_task_down()),
-            ]);
-            let quit = format_key(first_key(keys.quit()));
-            let settings = format_key(first_key(keys.settings()));
-            match focus {
-                UiFocus::Clock => format!(
-                    "[{focus_navigation}] box nav  [{}] start/pause  [{}] cycle session  [{}] reset  [{settings}] settings  [{quit}] quit",
-                    format_key(first_key(keys.clock_primary())),
-                    format_key(first_key(keys.cycle_session())),
-                    format_key(first_key(keys.reset_session())),
-                ),
-                UiFocus::Todo => format!(
-                    "[{focus_navigation}] box nav  [{list_navigation}] list nav  [{item_movement}] move list item  [{}] add  [{}] edit  [{}] delete  [{}] complete  [{settings}] settings  [{quit}] quit",
-                    format_key(first_key(keys.add_task())),
-                    format_key(first_key(keys.edit_task())),
-                    format_key(first_key(keys.delete_task())),
-                    format_key(first_key(keys.task_primary())),
-                ),
-                UiFocus::Done => format!(
-                    "[{focus_navigation}] box nav  [{list_navigation}] list nav  [{item_movement}] move list item  [{}] add  [{}] edit  [{}] delete  [{}] return  [{settings}] settings  [{quit}] quit",
-                    format_key(first_key(keys.add_task())),
-                    format_key(first_key(keys.edit_task())),
-                    format_key(first_key(keys.delete_task())),
-                    format_key(first_key(keys.task_primary())),
-                ),
-            }
-        }
+        EditMode::Normal => normal_help_text(keys, focus),
+    }
+}
+
+fn normal_help_text(keys: &KeysConfig, focus: UiFocus) -> String {
+    let focus_navigation = key_labels(&[
+        first_key(keys.focus_left()),
+        first_key(keys.focus_down()),
+        first_key(keys.focus_up()),
+        first_key(keys.focus_right()),
+    ]);
+    let list_navigation = key_labels(&[first_key(keys.list_down()), first_key(keys.list_up())]);
+    let item_movement = key_labels(&[
+        first_key(keys.move_task_up()),
+        first_key(keys.move_task_down()),
+    ]);
+    let quit = format_key(first_key(keys.quit()));
+    let settings = format_key(first_key(keys.settings()));
+    match focus {
+        UiFocus::Clock => format!(
+            "[{focus_navigation}] box nav  [{}] start/pause  [{}] cycle session  [{}] reset  [{settings}] settings  [{quit}] quit",
+            format_key(first_key(keys.clock_primary())),
+            format_key(first_key(keys.cycle_session())),
+            format_key(first_key(keys.reset_session())),
+        ),
+        UiFocus::Todo => format!(
+            "[{focus_navigation}] box nav  [{list_navigation}] list nav  [{item_movement}] move list item  [{}] add  [{}] edit  [{}] delete  [{}] complete  [{settings}] settings  [{quit}] quit",
+            format_key(first_key(keys.add_task())),
+            format_key(first_key(keys.edit_task())),
+            format_key(first_key(keys.delete_task())),
+            format_key(first_key(keys.task_primary())),
+        ),
+        UiFocus::Done => format!(
+            "[{focus_navigation}] box nav  [{list_navigation}] list nav  [{item_movement}] move list item  [{}] add  [{}] edit  [{}] delete  [{}] return  [{settings}] settings  [{quit}] quit",
+            format_key(first_key(keys.add_task())),
+            format_key(first_key(keys.edit_task())),
+            format_key(first_key(keys.delete_task())),
+            format_key(first_key(keys.task_primary())),
+        ),
     }
 }
 
@@ -1005,12 +1006,12 @@ mod tests {
 
     fn app_layout(area: Rect, app: &App) -> FrameGeometry {
         let workspace_width = inner_width(area);
-        let help = help_metrics(app, app.input_keys(), workspace_width);
+        let footer = stable_footer_metrics(app.input_keys(), workspace_width);
 
         resolve(LayoutRequest {
             area,
-            help_heights: help.heights,
-            help_cutoff: help.cutoff,
+            footer_heights: footer.heights,
+            footer_cutoff: footer.cutoff,
             focus: app.ui_focus(),
             last_task_focus: app.last_task_focus(),
             duration: app.timer().remaining(),
@@ -1022,7 +1023,7 @@ mod tests {
         let app = App::new();
         let keys = KeysConfig::default();
 
-        let help = controls_text(&app, &keys);
+        let help = footer_text(&app, &keys);
 
         assert!(help.contains("[H/J/K/L] box nav"));
         assert!(help.contains("[c] cycle session"));
@@ -1036,7 +1037,7 @@ mod tests {
         let mut app = App::new();
         let _ = app.dispatch(Action::NavigateFocus(Direction::Down));
 
-        let help = controls_text(&app, &KeysConfig::default());
+        let help = footer_text(&app, &KeysConfig::default());
 
         assert!(help.contains("[j/k] list nav"));
         assert!(!help.contains('↓'));
@@ -1047,7 +1048,7 @@ mod tests {
     #[test]
     fn help_wraps_to_the_available_width_without_losing_controls() {
         let app = App::new();
-        let help = controls_text(&app, &KeysConfig::default());
+        let help = footer_text(&app, &KeysConfig::default());
 
         let wrapped = wrap_help(&help, 28);
 
@@ -1062,7 +1063,7 @@ mod tests {
     #[test]
     fn help_wraps_between_complete_key_action_items() {
         let app = App::new();
-        let help = controls_text(&app, &KeysConfig::default());
+        let help = footer_text(&app, &KeysConfig::default());
 
         let wrapped = wrap_help(&help, 18);
 
@@ -1074,8 +1075,8 @@ mod tests {
     #[test]
     fn focus_help_variants_share_the_maximum_height_at_the_cutoff() {
         let app = App::new();
-        let cutoff = help_metrics(&app, app.input_keys(), u16::MAX).cutoff;
-        let heights = help_metrics(&app, app.input_keys(), cutoff).heights;
+        let cutoff = stable_footer_metrics(app.input_keys(), u16::MAX).cutoff;
+        let heights = stable_footer_metrics(app.input_keys(), cutoff).heights;
         let reserve = heights.reserve().unwrap();
 
         assert_eq!(
@@ -1096,13 +1097,13 @@ mod tests {
                 .saturating_add(reserve)
                 .saturating_add(2),
         );
-        assert_eq!(app_layout(area, &app).controls().height, reserve);
+        assert_eq!(app_layout(area, &app).footer().height, reserve);
     }
 
     #[test]
     fn complete_help_item_viability_has_an_explicit_width_boundary() {
         let app = App::new();
-        let text = controls_text_for_focus(&app, app.input_keys(), UiFocus::Clock);
+        let text = footer_text_for_focus(&app, app.input_keys(), UiFocus::Clock);
         let item_width = help_item_width(&text);
 
         assert!(item_width > 0);
@@ -1173,8 +1174,8 @@ mod tests {
         let done_focus = app_layout(area, &app);
 
         assert_eq!(clock_focus.mode(), WorkspaceMode::Narrow);
-        assert_eq!(clock_focus.controls(), todo_focus.controls());
-        assert_eq!(todo_focus.controls(), done_focus.controls());
+        assert_eq!(clock_focus.footer(), todo_focus.footer());
+        assert_eq!(todo_focus.footer(), done_focus.footer());
         assert_eq!(
             clock_focus.clock().unwrap().area,
             todo_focus.clock().unwrap().area
@@ -1188,13 +1189,50 @@ mod tests {
     }
 
     #[test]
+    fn add_task_preserves_footer_and_workspace_rectangles() {
+        let area = Rect::new(0, 0, 80, 30);
+        let mut app = App::new();
+        let _ = app.dispatch(Action::NavigateFocus(Direction::Down));
+        let normal = app_layout(area, &app);
+
+        let _ = app.dispatch(Action::BeginAdd);
+        let adding = app_layout(area, &app);
+
+        assert_eq!(normal.footer(), adding.footer());
+        assert_eq!(normal.clock().unwrap().area, adding.clock().unwrap().area);
+        assert_eq!(normal.todo(), adding.todo());
+        assert_eq!(normal.done(), adding.done());
+    }
+
+    #[test]
+    fn confirmation_preserves_footer_and_workspace_rectangles() {
+        let area = Rect::new(0, 0, 80, 30);
+        let mut app = App::new();
+        let normal = app_layout(area, &app);
+
+        let _ = app.dispatch(Action::PrimaryAction);
+        let _ = app.tick(Duration::from_secs(10));
+        let _ = app.dispatch(Action::CycleSession);
+        let confirming = app_layout(area, &app);
+
+        assert!(app.is_confirmation_open());
+        assert_eq!(normal.footer(), confirming.footer());
+        assert_eq!(
+            normal.clock().unwrap().area,
+            confirming.clock().unwrap().area
+        );
+        assert_eq!(normal.todo(), confirming.todo());
+        assert_eq!(normal.done(), confirming.done());
+    }
+
+    #[test]
     fn shorter_current_help_leaves_the_rest_of_the_stable_footer_blank() {
         let mut app = App::new();
         let theme = Theme::from(&ThemeConfig::default());
         let keys = KeysConfig::default();
-        let metrics = help_metrics(&app, &keys, u16::MAX);
+        let metrics = stable_footer_metrics(&keys, u16::MAX);
         let width = metrics.cutoff;
-        let heights = help_metrics(&app, &keys, width).heights;
+        let heights = stable_footer_metrics(&keys, width).heights;
         let reserve = heights.reserve().unwrap();
         let current_height = heights.clock.unwrap();
 
@@ -1216,7 +1254,7 @@ mod tests {
                 draw(frame, &mut app, theme, &keys);
             })
             .unwrap();
-        let footer = app_layout(layout.area, &app).controls();
+        let footer = app_layout(layout.area, &app).footer();
 
         assert_eq!(footer.height, reserve);
         for y in footer.y.saturating_add(current_height)..footer.bottom() {
@@ -1235,17 +1273,17 @@ mod tests {
         let below_clock_minimum = app_layout(Rect::new(0, 0, 50, 11), &app);
 
         assert_eq!(
-            (full.mode(), full.controls().height),
+            (full.mode(), full.footer().height),
             (WorkspaceMode::Full, 4)
         );
         assert_eq!(
-            (short_with_help.mode(), short_with_help.controls().height),
+            (short_with_help.mode(), short_with_help.footer().height),
             (WorkspaceMode::Short, 4)
         );
         assert_eq!(short_without_help.mode(), WorkspaceMode::Short);
-        assert_eq!(short_without_help.controls().height, 0);
+        assert_eq!(short_without_help.footer().height, 0);
         assert_eq!(below_clock_minimum.mode(), WorkspaceMode::Short);
-        assert_eq!(below_clock_minimum.controls().height, 0);
+        assert_eq!(below_clock_minimum.footer().height, 0);
         assert_eq!(below_clock_minimum.clock().unwrap().face, ClockFace::Text);
     }
 
@@ -1346,12 +1384,12 @@ mod tests {
     fn short_text_clock_shows_complete_help_when_it_fits() {
         let mut app = App::new();
         let area = Rect::new(0, 0, 80, 14);
-        let help = wrap_help(&controls_text(&app, app.input_keys()), inner_width(area));
+        let help = wrap_help(&footer_text(&app, app.input_keys()), inner_width(area));
         let layout = app_layout(area, &app);
 
         assert_eq!(layout.mode(), WorkspaceMode::Short);
-        assert_eq!(layout.controls().height, text_height(&help));
-        assert!(layout.controls().height > 0);
+        assert_eq!(layout.footer().height, text_height(&help));
+        assert!(layout.footer().height > 0);
         assert!(layout.clock().unwrap().remaining.height > 0);
 
         let theme = Theme::from(&ThemeConfig::default());
@@ -1379,7 +1417,7 @@ mod tests {
         let layout = app_layout(area, &app);
 
         assert_eq!(layout.mode(), WorkspaceMode::Mono);
-        assert_eq!(layout.controls().height, 0);
+        assert_eq!(layout.footer().height, 0);
         assert_eq!(layout.clock().unwrap().remaining.height, 1);
     }
 
@@ -1387,13 +1425,13 @@ mod tests {
     fn mono_text_clock_omits_help_instead_of_cutting_it_down() {
         let app = App::new();
         let area = Rect::new(0, 0, 20, 10);
-        let help = wrap_help(&controls_text(&app, app.input_keys()), inner_width(area));
+        let help = wrap_help(&footer_text(&app, app.input_keys()), inner_width(area));
         let layout = app_layout(area, &app);
 
         assert_eq!(layout.mode(), WorkspaceMode::Mono);
         assert_eq!(layout.clock().unwrap().face, ClockFace::Text);
         assert!(text_height(&help) > 2);
-        assert_eq!(layout.controls().height, 0);
+        assert_eq!(layout.footer().height, 0);
     }
 
     #[test]
@@ -1608,7 +1646,7 @@ mod tests {
         )
         .unwrap();
 
-        let help = controls_text(&app, &keys);
+        let help = footer_text(&app, &keys);
 
         assert!(help.contains("[←/J/K/L] box nav"));
         assert!(help.contains("[Enter] start/pause"));
@@ -1623,7 +1661,7 @@ mod tests {
         let keys: KeysConfig =
             toml::from_str("move_task_up = \"w\"\nmove_task_down = \"z\"\n").unwrap();
 
-        let help = controls_text(&app, &keys);
+        let help = footer_text(&app, &keys);
 
         assert!(help.contains("[w/z] move list item"));
         assert!(!help.contains("[u/d] move list item"));
@@ -1634,7 +1672,7 @@ mod tests {
         let app = App::new();
         let keys: KeysConfig = toml::from_str("settings = \"t\"\n").unwrap();
 
-        let help = controls_text(&app, &keys);
+        let help = footer_text(&app, &keys);
 
         assert!(help.contains("[t] settings"));
         assert!(!help.contains("[s] settings"));
@@ -1648,7 +1686,7 @@ mod tests {
         )
         .unwrap();
 
-        let help = controls_text(&app, &keys);
+        let help = footer_text(&app, &keys);
 
         assert!(help.contains("[Enter] start/pause"));
         assert!(help.contains("[n] cycle session"));
@@ -1664,7 +1702,7 @@ mod tests {
         let _ = app.dispatch(Action::CycleSession);
 
         assert_eq!(
-            controls_text(&app, &KeysConfig::default()),
+            footer_text(&app, &KeysConfig::default()),
             "Discard progress and cycle session?  [y/Enter] confirm  [n/Esc] cancel"
         );
     }
@@ -1677,7 +1715,7 @@ mod tests {
         let _ = app.dispatch(Action::Quit);
 
         assert_eq!(
-            controls_text(&app, &KeysConfig::default()),
+            footer_text(&app, &KeysConfig::default()),
             "Quit and discard progress?  [y/Enter] confirm  [n/Esc] cancel"
         );
     }
@@ -1998,7 +2036,7 @@ mod tests {
     #[test]
     fn cutoff_metrics_follow_the_specification() {
         let app = App::new();
-        let metrics = help_metrics(&app, app.input_keys(), 80);
+        let metrics = stable_footer_metrics(app.input_keys(), 80);
 
         assert!(metrics.item_width > 0);
         assert!(metrics.height_width >= metrics.item_width);
@@ -2006,13 +2044,13 @@ mod tests {
 
         let below = metrics.height_width.saturating_sub(1);
         assert!(
-            help_metrics(&app, app.input_keys(), below)
+            stable_footer_metrics(app.input_keys(), below)
                 .heights
                 .reserve()
                 .is_none_or(|height| height > C_H_SUG)
         );
         assert!(
-            help_metrics(&app, app.input_keys(), metrics.height_width)
+            stable_footer_metrics(app.input_keys(), metrics.height_width)
                 .heights
                 .reserve()
                 .is_some_and(|height| height <= C_H_SUG)
@@ -2022,15 +2060,15 @@ mod tests {
     #[test]
     fn help_is_suppressed_below_cutoff_and_complete_at_cutoff() {
         let app = App::new();
-        let metrics = help_metrics(&app, app.input_keys(), u16::MAX);
+        let metrics = stable_footer_metrics(app.input_keys(), u16::MAX);
 
         let below = app_layout(Rect::new(0, 0, metrics.cutoff.saturating_add(1), 40), &app);
         let at = app_layout(Rect::new(0, 0, metrics.cutoff.saturating_add(2), 40), &app);
 
-        assert_eq!(below.controls().height, 0);
+        assert_eq!(below.footer().height, 0);
         assert!(
-            at.controls().height
-                >= help_metrics(&app, app.input_keys(), metrics.cutoff)
+            at.footer().height
+                >= stable_footer_metrics(app.input_keys(), metrics.cutoff)
                     .heights
                     .reserve()
                     .unwrap()
@@ -2038,7 +2076,7 @@ mod tests {
     }
 
     #[test]
-    fn configured_keybindings_change_help_metrics() {
+    fn configured_keybindings_change_stable_footer_metrics() {
         let app = App::new();
         let defaults = KeysConfig::default();
         let configured = KeysConfig::default()
@@ -2047,8 +2085,8 @@ mod tests {
             .with_binding(KeyAction::FocusUp, ConfigKey::Backspace)
             .with_binding(KeyAction::FocusRight, ConfigKey::Backspace);
 
-        let default_metrics = help_metrics(&app, &defaults, u16::MAX);
-        let configured_metrics = help_metrics(&app, &configured, u16::MAX);
+        let default_metrics = stable_footer_metrics(&defaults, u16::MAX);
+        let configured_metrics = stable_footer_metrics(&configured, u16::MAX);
 
         assert!(configured_metrics.item_width > default_metrics.item_width);
         assert!(configured_metrics.cutoff >= configured_metrics.item_width);
@@ -2066,22 +2104,22 @@ mod tests {
         assert!(workspace_width >= default_metrics.cutoff);
         assert!(workspace_width < configured_metrics.cutoff);
 
-        let default_help = help_metrics(&app, &defaults, workspace_width);
-        let configured_help = help_metrics(&app, &configured, workspace_width);
-        let request = |help: HelpMetrics| LayoutRequest {
+        let default_footer = stable_footer_metrics(&defaults, workspace_width);
+        let configured_footer = stable_footer_metrics(&configured, workspace_width);
+        let request = |footer: FooterMetrics| LayoutRequest {
             area,
-            help_heights: help.heights,
-            help_cutoff: help.cutoff,
+            footer_heights: footer.heights,
+            footer_cutoff: footer.cutoff,
             focus: app.ui_focus(),
             last_task_focus: app.last_task_focus(),
             duration: app.timer().remaining(),
         };
 
-        let with_default_keys = resolve(request(default_help));
-        let with_configured_keys = resolve(request(configured_help));
+        let with_default_keys = resolve(request(default_footer));
+        let with_configured_keys = resolve(request(configured_footer));
         assert_eq!(with_default_keys.mode(), WorkspaceMode::Short);
-        assert!(with_default_keys.controls().height > 0);
+        assert!(with_default_keys.footer().height > 0);
         assert_eq!(with_configured_keys.mode(), WorkspaceMode::Full);
-        assert_eq!(with_configured_keys.controls().height, 0);
+        assert_eq!(with_configured_keys.footer().height, 0);
     }
 }

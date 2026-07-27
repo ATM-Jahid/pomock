@@ -75,7 +75,7 @@ enum WorkspaceGeometry {
 pub struct FrameGeometry {
     area: Rect,
     workspace: WorkspaceGeometry,
-    controls: Rect,
+    footer: Rect,
 }
 
 impl FrameGeometry {
@@ -145,29 +145,29 @@ impl FrameGeometry {
         }
     }
 
-    pub(crate) fn controls(self) -> Rect {
-        self.controls
+    pub(crate) fn footer(self) -> Rect {
+        self.footer
     }
 }
 
 #[derive(Debug, Clone, Copy)]
 pub(crate) struct LayoutRequest {
     pub(crate) area: Rect,
-    pub(crate) help_heights: HelpHeights,
-    pub(crate) help_cutoff: u16,
+    pub(crate) footer_heights: FooterHeights,
+    pub(crate) footer_cutoff: u16,
     pub(crate) focus: UiFocus,
     pub(crate) last_task_focus: UiFocus,
     pub(crate) duration: Duration,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(crate) struct HelpHeights {
+pub(crate) struct FooterHeights {
     pub(crate) clock: Option<u16>,
     pub(crate) todo: Option<u16>,
     pub(crate) done: Option<u16>,
 }
 
-impl HelpHeights {
+impl FooterHeights {
     pub(crate) fn reserve(self) -> Option<u16> {
         match (self.clock, self.todo, self.done) {
             (Some(clock), Some(todo), Some(done)) => Some(clock.max(todo).max(done)),
@@ -178,28 +178,31 @@ impl HelpHeights {
 
 pub(crate) fn resolve(request: LayoutRequest) -> FrameGeometry {
     let inner_area = Block::default().borders(Borders::ALL).inner(request.area);
-    let help_reserve =
-        effective_help_height(inner_area.width, request.help_cutoff, request.help_heights);
-    let mode = classify(inner_area, help_reserve);
-    let controls_height = budget_help(mode, inner_area, help_reserve);
+    let footer_reserve = effective_footer_height(
+        inner_area.width,
+        request.footer_cutoff,
+        request.footer_heights,
+    );
+    let mode = classify(inner_area, footer_reserve);
+    let footer_height = budget_footer(mode, inner_area, footer_reserve);
     let vertical = Layout::default()
         .direction(Direction::Vertical)
-        .constraints([Constraint::Min(0), Constraint::Length(controls_height)])
+        .constraints([Constraint::Min(0), Constraint::Length(footer_height)])
         .split(inner_area);
     let workspace_area = vertical[0];
-    let controls = vertical[1];
+    let footer = vertical[1];
     let workspace = allocate_workspace(mode, workspace_area, request);
 
     FrameGeometry {
         area: request.area,
         workspace,
-        controls,
+        footer,
     }
 }
 
 /// `Q_h(w)` for classification and allocation. Help has no layout cost below
 /// its cutoff; at or above the cutoff every focus variant must be complete.
-fn effective_help_height(width: u16, cutoff: u16, heights: HelpHeights) -> u16 {
+fn effective_footer_height(width: u16, cutoff: u16, heights: FooterHeights) -> u16 {
     if width < cutoff {
         0
     } else {
@@ -207,8 +210,10 @@ fn effective_help_height(width: u16, cutoff: u16, heights: HelpHeights) -> u16 {
     }
 }
 
-fn classify(inner_area: Rect, help_reserve: u16) -> WorkspaceMode {
-    let h_sug = C_H_SUG.saturating_add(C_H_SUG).saturating_add(help_reserve);
+fn classify(inner_area: Rect, footer_reserve: u16) -> WorkspaceMode {
+    let h_sug = C_H_SUG
+        .saturating_add(C_H_SUG)
+        .saturating_add(footer_reserve);
 
     match (inner_area.width >= FULL_W_SUG, inner_area.height >= h_sug) {
         (true, true) => WorkspaceMode::Full,
@@ -218,16 +223,16 @@ fn classify(inner_area: Rect, help_reserve: u16) -> WorkspaceMode {
     }
 }
 
-fn budget_help(mode: WorkspaceMode, inner_area: Rect, help_reserve: u16) -> u16 {
+fn budget_footer(mode: WorkspaceMode, inner_area: Rect, footer_reserve: u16) -> u16 {
     let minimum_workspace_height = match mode {
         WorkspaceMode::Full | WorkspaceMode::Narrow => C_H_SUG.saturating_mul(2),
         WorkspaceMode::Short | WorkspaceMode::Mono => C_H_SUG,
     };
 
-    if help_reserve > 0
-        && inner_area.height >= minimum_workspace_height.saturating_add(help_reserve)
+    if footer_reserve > 0
+        && inner_area.height >= minimum_workspace_height.saturating_add(footer_reserve)
     {
-        help_reserve
+        footer_reserve
     } else {
         0
     }
@@ -355,12 +360,12 @@ mod tests {
     fn request_for_workspace(width: u16, height: u16) -> LayoutRequest {
         LayoutRequest {
             area: Rect::new(0, 0, width.saturating_add(2), height.saturating_add(2)),
-            help_heights: HelpHeights {
+            footer_heights: FooterHeights {
                 clock: Some(2),
                 todo: Some(3),
                 done: Some(4),
             },
-            help_cutoff: 0,
+            footer_cutoff: 0,
             focus: UiFocus::Clock,
             last_task_focus: UiFocus::Todo,
             duration: DEFAULT_DURATION,
@@ -395,7 +400,7 @@ mod tests {
         for width in widths {
             for height in heights {
                 let request = LayoutRequest {
-                    help_cutoff: W_CUT,
+                    footer_cutoff: W_CUT,
                     ..request_for_workspace(width, height)
                 };
                 let geometry = resolve(request);
@@ -424,7 +429,7 @@ mod tests {
                     "workspace: {width}x{height}"
                 );
                 assert_eq!(
-                    geometry.controls().height,
+                    geometry.footer().height,
                     expected_help,
                     "workspace: {width}x{height}"
                 );
@@ -433,25 +438,25 @@ mod tests {
     }
 
     #[test]
-    fn crossing_help_cutoff_can_change_narrow_to_mono() {
+    fn crossing_footer_cutoff_can_change_narrow_to_mono() {
         const Q_H: u16 = 4;
         const W_CUT: u16 = 16;
         let height = C_H_SUG.saturating_mul(2);
 
         let below = resolve(LayoutRequest {
-            help_cutoff: W_CUT,
+            footer_cutoff: W_CUT,
             ..request_for_workspace(W_CUT - 1, height)
         });
         let at = resolve(LayoutRequest {
-            help_cutoff: W_CUT,
+            footer_cutoff: W_CUT,
             ..request_for_workspace(W_CUT, height)
         });
 
         assert_eq!(below.mode(), WorkspaceMode::Narrow);
-        assert_eq!(below.controls().height, 0);
+        assert_eq!(below.footer().height, 0);
 
         assert_eq!(at.mode(), WorkspaceMode::Mono);
-        assert_eq!(at.controls().height, Q_H);
+        assert_eq!(at.footer().height, Q_H);
     }
 
     #[test]
@@ -460,32 +465,32 @@ mod tests {
         let height = C_H_SUG.saturating_mul(2);
 
         let geometry = resolve(LayoutRequest {
-            help_cutoff: LARGE_CUTOFF,
+            footer_cutoff: LARGE_CUTOFF,
             ..request_for_workspace(FULL_W_SUG, height)
         });
 
         assert_eq!(geometry.mode(), WorkspaceMode::Full);
-        assert_eq!(geometry.controls().height, 0);
+        assert_eq!(geometry.footer().height, 0);
     }
 
     #[test]
-    fn effective_help_height_is_zero_below_cutoff_and_complete_at_it() {
-        let heights = HelpHeights {
+    fn effective_footer_height_is_zero_below_cutoff_and_complete_at_it() {
+        let heights = FooterHeights {
             clock: Some(2),
             todo: Some(3),
             done: Some(4),
         };
 
-        assert_eq!(effective_help_height(15, 16, heights), 0);
-        assert_eq!(effective_help_height(16, 16, heights), 4);
-        assert_eq!(effective_help_height(17, 16, heights), 4);
+        assert_eq!(effective_footer_height(15, 16, heights), 0);
+        assert_eq!(effective_footer_height(16, 16, heights), 4);
+        assert_eq!(effective_footer_height(17, 16, heights), 4);
     }
 
     #[test]
-    fn stable_help_reserve_is_the_maximum_of_three_viable_heights() {
+    fn stable_footer_reserve_is_the_maximum_of_three_viable_help_heights() {
         let geometry = resolve(request_for_workspace(FULL_W_SUG, C_H_SUG + C_H_SUG + 4));
         assert_eq!(geometry.mode(), WorkspaceMode::Full);
-        assert_eq!(geometry.controls().height, 4);
+        assert_eq!(geometry.footer().height, 4);
     }
 
     #[test]
@@ -495,7 +500,7 @@ mod tests {
             heights[missing] = None;
             for focus in [UiFocus::Clock, UiFocus::Todo, UiFocus::Done] {
                 let geometry = resolve(LayoutRequest {
-                    help_heights: HelpHeights {
+                    footer_heights: FooterHeights {
                         clock: heights[0],
                         todo: heights[1],
                         done: heights[2],
@@ -504,7 +509,7 @@ mod tests {
                     ..request_for_workspace(FULL_W_SUG, C_H_SUG + C_H_SUG)
                 });
                 assert_eq!(geometry.mode(), WorkspaceMode::Full);
-                assert_eq!(geometry.controls().height, 0);
+                assert_eq!(geometry.footer().height, 0);
             }
         }
     }
@@ -514,18 +519,18 @@ mod tests {
         for (height, expected) in [(C_H_SUG + 4, 4), (C_H_SUG + 3, 0), (C_H_SUG - 1, 0)] {
             let geometry = resolve(request_for_workspace(FULL_W_SUG, height));
             assert_eq!(geometry.mode(), WorkspaceMode::Short);
-            assert_eq!(geometry.controls().height, expected);
+            assert_eq!(geometry.footer().height, expected);
         }
 
         let reserve_exceeds_height = resolve(LayoutRequest {
-            help_heights: HelpHeights {
+            footer_heights: FooterHeights {
                 clock: Some(30),
                 todo: Some(29),
                 done: Some(28),
             },
             ..request_for_workspace(FULL_W_SUG, 25)
         });
-        assert_eq!(reserve_exceeds_height.controls().height, 0);
+        assert_eq!(reserve_exceeds_height.footer().height, 0);
     }
 
     #[test]
@@ -614,7 +619,7 @@ mod tests {
         for width in [FULL_W_SUG - 1, FULL_W_SUG] {
             for height in [24, 25] {
                 let geometry = resolve(LayoutRequest {
-                    help_heights: HelpHeights {
+                    footer_heights: FooterHeights {
                         clock: None,
                         todo: None,
                         done: None,
@@ -672,7 +677,7 @@ mod tests {
     fn mono_task_keeps_one_printable_list_row() {
         let geometry = resolve(LayoutRequest {
             focus: UiFocus::Todo,
-            help_heights: HelpHeights {
+            footer_heights: FooterHeights {
                 clock: None,
                 todo: None,
                 done: None,
@@ -683,7 +688,7 @@ mod tests {
 
         assert_eq!(geometry.mode(), WorkspaceMode::Mono);
         assert_eq!(Block::default().borders(Borders::ALL).inner(todo).height, 1);
-        assert_eq!(geometry.controls().height, 0);
+        assert_eq!(geometry.footer().height, 0);
     }
 
     #[test]
@@ -695,18 +700,18 @@ mod tests {
             for height in HEIGHTS {
                 let geometry = resolve(LayoutRequest {
                     area: Rect::new(0, 0, width, height),
-                    help_heights: HelpHeights {
+                    footer_heights: FooterHeights {
                         clock: None,
                         todo: None,
                         done: None,
                     },
-                    help_cutoff: 0,
+                    footer_cutoff: 0,
                     focus: UiFocus::Clock,
                     last_task_focus: UiFocus::Todo,
                     duration: DEFAULT_DURATION,
                 });
                 let terminal = geometry.area();
-                let mut regions = vec![geometry.controls()];
+                let mut regions = vec![geometry.footer()];
                 if let Some(clock) = geometry.clock() {
                     regions.extend([
                         clock.area,
