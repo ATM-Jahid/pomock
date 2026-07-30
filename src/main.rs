@@ -23,7 +23,7 @@ use std::time::{Duration, Instant};
 use pomock::{
     app::{Action, App, AppOutcome, Direction, EditMode, FocusAudioAction, TaskState},
     config::{Config, ConfigError},
-    input::map_key,
+    input::map_key_event,
     notification::{DesktopNotifier, Notifier},
     persistence::{TaskPersistenceError, TaskStore},
     sound::{FileSoundPlayer, SoundPlayer},
@@ -719,8 +719,8 @@ fn run_app(
 
             match event {
                 Event::Key(key) if should_handle_key_event(key.kind) => {
-                    if let Some(action) = map_key(
-                        key.code,
+                    if let Some(action) = map_key_event(
+                        key,
                         app.edit_mode(),
                         app.ui_focus(),
                         app.is_confirmation_open(),

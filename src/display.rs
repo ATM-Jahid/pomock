@@ -1,7 +1,7 @@
 use std::time::Duration;
 
 use crate::{
-    config::ConfigKey,
+    config::{ConfigKey, ConfigKeyKind},
     timer::{SessionKind, TimerState},
 };
 
@@ -50,7 +50,7 @@ pub fn format_state(state: TimerState) -> &'static str {
 pub fn format_key(key: ConfigKey) -> String {
     match key {
         ConfigKey::Character(character) => character.to_string(),
-        ConfigKey::Space => "space".to_string(),
+        ConfigKey::Space => "Space".to_string(),
         ConfigKey::Enter => "Enter".to_string(),
         ConfigKey::Escape => "Esc".to_string(),
         ConfigKey::Backspace => "Backspace".to_string(),
@@ -58,6 +58,25 @@ pub fn format_key(key: ConfigKey) -> String {
         ConfigKey::Down => "↓".to_string(),
         ConfigKey::Left => "←".to_string(),
         ConfigKey::Right => "→".to_string(),
+        ConfigKey::Modified { key, control, alt } => {
+            let key = match key {
+                ConfigKeyKind::Character(character) => character.to_string(),
+                ConfigKeyKind::Space => "Space".to_string(),
+                ConfigKeyKind::Enter => "Enter".to_string(),
+                ConfigKeyKind::Escape => "Esc".to_string(),
+                ConfigKeyKind::Backspace => "Backspace".to_string(),
+                ConfigKeyKind::Up => "↑".to_string(),
+                ConfigKeyKind::Down => "↓".to_string(),
+                ConfigKeyKind::Left => "←".to_string(),
+                ConfigKeyKind::Right => "→".to_string(),
+            };
+            match (control, alt) {
+                (true, true) => format!("Ctrl+Alt+{key}"),
+                (true, false) => format!("Ctrl+{key}"),
+                (false, true) => format!("Alt+{key}"),
+                (false, false) => key,
+            }
+        }
     }
 }
 
@@ -207,9 +226,13 @@ mod tests {
     #[test]
     fn formats_configurable_key_labels_for_help_text() {
         assert_eq!(format_key(ConfigKey::Character('n')), "n");
-        assert_eq!(format_key(ConfigKey::Space), "space");
+        assert_eq!(format_key(ConfigKey::Space), "Space");
         assert_eq!(format_key(ConfigKey::Enter), "Enter");
         assert_eq!(format_key(ConfigKey::Escape), "Esc");
         assert_eq!(format_key(ConfigKey::Down), "↓");
+        assert_eq!(
+            format_key(ConfigKey::Left.with_modifiers(true, true)),
+            "Ctrl+Alt+←"
+        );
     }
 }

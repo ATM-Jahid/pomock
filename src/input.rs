@@ -1,4 +1,4 @@
-use crossterm::event::KeyCode;
+use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 
 use crate::{
     app::{Action, Direction, EditMode, SettingsMode, UiFocus},
@@ -14,8 +14,69 @@ pub fn map_key(
     settings_mode: SettingsMode,
     keys: &KeysConfig,
 ) -> Option<Action> {
+    map_physical_key(
+        PhysicalKey {
+            code: key,
+            control: false,
+            alt: false,
+        },
+        edit_mode,
+        focus,
+        confirmation_open,
+        settings_mode,
+        keys,
+    )
+}
+
+/// Maps a complete terminal key event, including Control and Alt modifiers.
+pub fn map_key_event(
+    key: KeyEvent,
+    edit_mode: EditMode,
+    focus: UiFocus,
+    confirmation_open: bool,
+    settings_mode: SettingsMode,
+    keys: &KeysConfig,
+) -> Option<Action> {
+    map_physical_key(
+        PhysicalKey {
+            code: key.code,
+            control: key.modifiers.contains(KeyModifiers::CONTROL),
+            alt: key.modifiers.contains(KeyModifiers::ALT),
+        },
+        edit_mode,
+        focus,
+        confirmation_open,
+        settings_mode,
+        keys,
+    )
+}
+
+#[derive(Clone, Copy)]
+struct PhysicalKey {
+    code: KeyCode,
+    control: bool,
+    alt: bool,
+}
+
+impl PhysicalKey {
+    const fn is_unmodified(self) -> bool {
+        !self.control && !self.alt
+    }
+}
+
+fn map_physical_key(
+    key: PhysicalKey,
+    edit_mode: EditMode,
+    focus: UiFocus,
+    confirmation_open: bool,
+    settings_mode: SettingsMode,
+    keys: &KeysConfig,
+) -> Option<Action> {
     if confirmation_open {
-        return match key {
+        if !key.is_unmodified() {
+            return None;
+        }
+        return match key.code {
             KeyCode::Char('y') | KeyCode::Enter => Some(Action::ConfirmPendingAction),
             KeyCode::Char('n') | KeyCode::Esc => Some(Action::CancelPendingAction),
             _ => None,
@@ -23,7 +84,10 @@ pub fn map_key(
     }
 
     if edit_mode != EditMode::Normal {
-        return match key {
+        if !key.is_unmodified() {
+            return None;
+        }
+        return match key.code {
             KeyCode::Enter => Some(Action::SubmitEdit),
             KeyCode::Esc => Some(Action::CancelEdit),
             KeyCode::Backspace => Some(Action::PopInput),
@@ -34,7 +98,10 @@ pub fn map_key(
 
     match settings_mode {
         SettingsMode::EditingValue => {
-            return match key {
+            if !key.is_unmodified() {
+                return None;
+            }
+            return match key.code {
                 KeyCode::Enter => Some(Action::SettingsSubmitInput),
                 KeyCode::Esc => Some(Action::SettingsCancel),
                 KeyCode::Backspace => Some(Action::SettingsPopInput),
@@ -43,27 +110,37 @@ pub fn map_key(
             };
         }
         SettingsMode::CapturingKey => {
-            return match key {
-                KeyCode::Esc => Some(Action::SettingsCancel),
+            return match key.code {
+                KeyCode::Esc if key.is_unmodified() => Some(Action::SettingsCancel),
                 _ => config_key(key).map(Action::SettingsCaptureKey),
             };
         }
         SettingsMode::Navigating => {
-            return match key {
-                KeyCode::Esc => Some(Action::SettingsClose),
-                key if key_matches_any(key, keys.settings()) => Some(Action::SettingsClose),
-                KeyCode::Enter | KeyCode::Char(' ') => Some(Action::SettingsActivate),
-                KeyCode::Up | KeyCode::Char('k') => Some(Action::SettingsMove(false)),
-                KeyCode::Down | KeyCode::Char('j') => Some(Action::SettingsMove(true)),
-                KeyCode::Left | KeyCode::Char('h') => Some(Action::SettingsAdjust(false)),
-                KeyCode::Right | KeyCode::Char('l') => Some(Action::SettingsAdjust(true)),
+            return match key.code {
+                KeyCode::Esc if key.is_unmodified() => Some(Action::SettingsClose),
+                _ if key_matches_any(key, keys.settings()) => Some(Action::SettingsClose),
+                KeyCode::Enter | KeyCode::Char(' ') if key.is_unmodified() => {
+                    Some(Action::SettingsActivate)
+                }
+                KeyCode::Up | KeyCode::Char('k') if key.is_unmodified() => {
+                    Some(Action::SettingsMove(false))
+                }
+                KeyCode::Down | KeyCode::Char('j') if key.is_unmodified() => {
+                    Some(Action::SettingsMove(true))
+                }
+                KeyCode::Left | KeyCode::Char('h') if key.is_unmodified() => {
+                    Some(Action::SettingsAdjust(false))
+                }
+                KeyCode::Right | KeyCode::Char('l') if key.is_unmodified() => {
+                    Some(Action::SettingsAdjust(true))
+                }
                 _ => None,
             };
         }
         SettingsMode::Closed => {}
     }
 
-    if key == KeyCode::Esc {
+    if key.code == KeyCode::Esc && key.is_unmodified() {
         return Some(Action::CancelPendingAction);
     }
 
@@ -106,8 +183,8 @@ pub fn map_key(
     }
 }
 
-fn config_key(key: KeyCode) -> Option<ConfigKey> {
-    match key {
+fn config_key(key: PhysicalKey) -> Option<ConfigKey> {
+    let key_code = match key.code {
         KeyCode::Char(' ') => Some(ConfigKey::Space),
         KeyCode::Char(character) => Some(ConfigKey::Character(character)),
         KeyCode::Enter => Some(ConfigKey::Enter),
@@ -118,10 +195,11 @@ fn config_key(key: KeyCode) -> Option<ConfigKey> {
         KeyCode::Left => Some(ConfigKey::Left),
         KeyCode::Right => Some(ConfigKey::Right),
         _ => None,
-    }
+    }?;
+    Some(key_code.with_modifiers(key.control, key.alt))
 }
 
-fn focus_direction(key: KeyCode, keys: &KeysConfig) -> Option<Direction> {
+fn focus_direction(key: PhysicalKey, keys: &KeysConfig) -> Option<Direction> {
     for (binding, direction) in [
         (keys.focus_left(), Direction::Left),
         (keys.focus_down(), Direction::Down),
@@ -135,7 +213,7 @@ fn focus_direction(key: KeyCode, keys: &KeysConfig) -> Option<Direction> {
     None
 }
 
-fn row_direction(key: KeyCode, keys: &KeysConfig) -> Option<Direction> {
+fn row_direction(key: PhysicalKey, keys: &KeysConfig) -> Option<Direction> {
     if key_matches_any(key, keys.list_down()) {
         Some(Direction::Down)
     } else if key_matches_any(key, keys.list_up()) {
@@ -145,29 +223,23 @@ fn row_direction(key: KeyCode, keys: &KeysConfig) -> Option<Direction> {
     }
 }
 
-fn key_matches_any(key: KeyCode, configured: &[ConfigKey]) -> bool {
+fn key_matches_any(key: PhysicalKey, configured: &[ConfigKey]) -> bool {
     configured
         .iter()
         .any(|configured| key_matches(key, *configured))
 }
 
-fn key_matches(key: KeyCode, configured: ConfigKey) -> bool {
-    match configured {
-        ConfigKey::Character(character) => key == KeyCode::Char(character),
-        ConfigKey::Space => key == KeyCode::Char(' '),
-        ConfigKey::Enter => key == KeyCode::Enter,
-        ConfigKey::Escape => key == KeyCode::Esc,
-        ConfigKey::Backspace => key == KeyCode::Backspace,
-        ConfigKey::Up => key == KeyCode::Up,
-        ConfigKey::Down => key == KeyCode::Down,
-        ConfigKey::Left => key == KeyCode::Left,
-        ConfigKey::Right => key == KeyCode::Right,
-    }
+fn key_matches(key: PhysicalKey, configured: ConfigKey) -> bool {
+    config_key(key) == Some(configured)
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn modified_event(code: KeyCode, modifiers: KeyModifiers) -> KeyEvent {
+        KeyEvent::new(code, modifiers)
+    }
 
     fn map_default(
         key: KeyCode,
@@ -194,6 +266,96 @@ mod tests {
         assert_eq!(
             map_default(KeyCode::Char('q'), EditMode::Normal, UiFocus::Done, false),
             Some(Action::Quit)
+        );
+    }
+
+    #[test]
+    fn maps_control_and_alt_bindings_without_matching_plain_keys() {
+        let keys: KeysConfig =
+            toml::from_str("cycle_session = \"ctrl+c\"\nlist_down = \"alt+down\"\n").unwrap();
+
+        assert_eq!(
+            map_key_event(
+                modified_event(KeyCode::Char('c'), KeyModifiers::CONTROL),
+                EditMode::Normal,
+                UiFocus::Clock,
+                false,
+                SettingsMode::Closed,
+                &keys,
+            ),
+            Some(Action::CycleSession)
+        );
+        assert_eq!(
+            map_key(
+                KeyCode::Char('c'),
+                EditMode::Normal,
+                UiFocus::Clock,
+                false,
+                SettingsMode::Closed,
+                &keys,
+            ),
+            None
+        );
+        assert_eq!(
+            map_key_event(
+                modified_event(KeyCode::Down, KeyModifiers::ALT),
+                EditMode::Normal,
+                UiFocus::Todo,
+                false,
+                SettingsMode::Closed,
+                &keys,
+            ),
+            Some(Action::MoveSelection(Direction::Down))
+        );
+    }
+
+    #[test]
+    fn key_capture_preserves_control_and_alt_modifiers() {
+        let keys = KeysConfig::default();
+        let event = modified_event(
+            KeyCode::Char('q'),
+            KeyModifiers::CONTROL | KeyModifiers::ALT,
+        );
+
+        assert_eq!(
+            map_key_event(
+                event,
+                EditMode::Normal,
+                UiFocus::Clock,
+                false,
+                SettingsMode::CapturingKey,
+                &keys,
+            ),
+            Some(Action::SettingsCaptureKey(
+                ConfigKey::Character('q').with_modifiers(true, true)
+            ))
+        );
+    }
+
+    #[test]
+    fn modified_keys_do_not_trigger_fixed_modal_controls() {
+        let keys = KeysConfig::default();
+        assert_eq!(
+            map_key_event(
+                modified_event(KeyCode::Char('y'), KeyModifiers::CONTROL),
+                EditMode::Normal,
+                UiFocus::Clock,
+                true,
+                SettingsMode::Closed,
+                &keys,
+            ),
+            None
+        );
+        assert_eq!(
+            map_key_event(
+                modified_event(KeyCode::Char('q'), KeyModifiers::ALT),
+                EditMode::Adding,
+                UiFocus::Todo,
+                false,
+                SettingsMode::Closed,
+                &keys,
+            ),
+            None
         );
     }
 
@@ -294,7 +456,7 @@ mod tests {
     #[test]
     fn configured_keys_replace_defaults_in_their_context() {
         let keys: KeysConfig = toml::from_str(
-            "focus_left = \"left\"\nclock_primary = \"enter\"\ncycle_session = \"n\"\n",
+            "focus_left = \"left\"\nclock_primary = \"backspace\"\ncycle_session = \"n\"\n",
         )
         .unwrap();
 
@@ -311,7 +473,7 @@ mod tests {
         );
         assert_eq!(
             map_key(
-                KeyCode::Enter,
+                KeyCode::Backspace,
                 EditMode::Normal,
                 UiFocus::Clock,
                 false,
@@ -474,18 +636,18 @@ mod tests {
     #[test]
     fn editing_and_confirmation_override_configured_normal_keys() {
         let keys: KeysConfig =
-            toml::from_str("clock_primary = \"enter\"\ncycle_session = \"n\"\n").unwrap();
+            toml::from_str("clock_primary = \"backspace\"\ncycle_session = \"n\"\n").unwrap();
 
         assert_eq!(
             map_key(
-                KeyCode::Enter,
+                KeyCode::Backspace,
                 EditMode::Adding,
                 UiFocus::Todo,
                 false,
                 SettingsMode::Closed,
                 &keys
             ),
-            Some(Action::SubmitEdit)
+            Some(Action::PopInput)
         );
         assert_eq!(
             map_key(

@@ -16,9 +16,50 @@ pub enum ConfigKey {
     Down,
     Left,
     Right,
+    /// A key pressed with Control, Alt, or both modifiers.
+    Modified {
+        key: ConfigKeyKind,
+        control: bool,
+        alt: bool,
+    },
+}
+
+/// The non-modifier portion of a configurable modified key.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ConfigKeyKind {
+    Character(char),
+    Space,
+    Enter,
+    Escape,
+    Backspace,
+    Up,
+    Down,
+    Left,
+    Right,
 }
 
 impl ConfigKey {
+    /// Returns this key with the requested Control and Alt modifiers.
+    pub fn with_modifiers(self, control: bool, alt: bool) -> Self {
+        if !control && !alt {
+            return self;
+        }
+
+        let key = match self {
+            Self::Character(character) => ConfigKeyKind::Character(character),
+            Self::Space => ConfigKeyKind::Space,
+            Self::Enter => ConfigKeyKind::Enter,
+            Self::Escape => ConfigKeyKind::Escape,
+            Self::Backspace => ConfigKeyKind::Backspace,
+            Self::Up => ConfigKeyKind::Up,
+            Self::Down => ConfigKeyKind::Down,
+            Self::Left => ConfigKeyKind::Left,
+            Self::Right => ConfigKeyKind::Right,
+            Self::Modified { key, .. } => key,
+        };
+        Self::Modified { key, control, alt }
+    }
+
     fn stored_name(self) -> String {
         match self {
             Self::Character(character) => character.to_string(),
@@ -30,10 +71,50 @@ impl ConfigKey {
             Self::Down => "down".to_string(),
             Self::Left => "left".to_string(),
             Self::Right => "right".to_string(),
+            Self::Modified { key, control, alt } => {
+                let key = match key {
+                    ConfigKeyKind::Character(character) => character.to_string(),
+                    ConfigKeyKind::Space => "space".to_string(),
+                    ConfigKeyKind::Enter => "enter".to_string(),
+                    ConfigKeyKind::Escape => "esc".to_string(),
+                    ConfigKeyKind::Backspace => "backspace".to_string(),
+                    ConfigKeyKind::Up => "up".to_string(),
+                    ConfigKeyKind::Down => "down".to_string(),
+                    ConfigKeyKind::Left => "left".to_string(),
+                    ConfigKeyKind::Right => "right".to_string(),
+                };
+                match (control, alt) {
+                    (true, true) => format!("ctrl+alt+{key}"),
+                    (true, false) => format!("ctrl+{key}"),
+                    (false, true) => format!("alt+{key}"),
+                    (false, false) => key,
+                }
+            }
         }
     }
 
     fn from_stored_name(value: &str) -> Result<Self, String> {
+        let (control, value) = match value.strip_prefix("ctrl+") {
+            Some(value) => (true, value),
+            None => (false, value),
+        };
+        let (alt, value) = match value.strip_prefix("alt+") {
+            Some(value) => (true, value),
+            None => (false, value),
+        };
+        let (control, value) = if !control {
+            match value.strip_prefix("ctrl+") {
+                Some(value) if alt => (true, value),
+                _ => (control, value),
+            }
+        } else {
+            (control, value)
+        };
+
+        Self::from_unmodified_stored_name(value).map(|key| key.with_modifiers(control, alt))
+    }
+
+    fn from_unmodified_stored_name(value: &str) -> Result<Self, String> {
         match value {
             "space" => Ok(Self::Space),
             "enter" => Ok(Self::Enter),
@@ -50,7 +131,7 @@ impl ConfigKey {
                         Ok(Self::Character(character))
                     }
                     _ => Err(format!(
-                        "key must be one printable character or one of: space, enter, esc, backspace, up, down, left, right; found {value:?}"
+                        "key must be one printable character or one of: space, backspace, up, down, left, right, optionally prefixed by ctrl+ and/or alt+; found {value:?}"
                     )),
                 }
             }
@@ -315,19 +396,17 @@ impl KeysConfig {
             if keys.is_empty() {
                 return Err(ConfigValidationError::EmptyKeyBindings { field });
             }
-            if keys.contains(&ConfigKey::Escape) {
-                return Err(ConfigValidationError::ReservedKey {
-                    field,
-                    key: ConfigKey::Escape,
-                });
+            for key in [ConfigKey::Enter, ConfigKey::Escape] {
+                if keys.contains(&key) {
+                    return Err(ConfigValidationError::ReservedKey { field, key });
+                }
             }
         }
 
         for key in self.settings() {
             if matches!(
                 key,
-                ConfigKey::Enter
-                    | ConfigKey::Space
+                ConfigKey::Space
                     | ConfigKey::Up
                     | ConfigKey::Down
                     | ConfigKey::Left
@@ -402,4 +481,29 @@ fn validate_unique_bindings(bindings: &[BindingEntry]) -> Result<(), ConfigValid
         }
     }
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn modifier_key_names_parse_and_use_a_canonical_stored_form() {
+        let control = ConfigKey::from_stored_name("ctrl+c").unwrap();
+        assert_eq!(
+            control,
+            ConfigKey::Character('c').with_modifiers(true, false)
+        );
+        assert_eq!(control.stored_name(), "ctrl+c");
+
+        let control_alt = ConfigKey::from_stored_name("alt+ctrl+left").unwrap();
+        assert_eq!(control_alt, ConfigKey::Left.with_modifiers(true, true));
+        assert_eq!(control_alt.stored_name(), "ctrl+alt+left");
+    }
+
+    #[test]
+    fn modifier_prefix_requires_a_supported_base_key() {
+        let error = ConfigKey::from_stored_name("ctrl+page_down").unwrap_err();
+        assert!(error.contains("optionally prefixed by ctrl+ and/or alt+"));
+    }
 }

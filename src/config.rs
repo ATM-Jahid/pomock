@@ -16,7 +16,7 @@ mod tasks;
 mod theme;
 mod timer;
 
-pub use keys::{ConfigKey, KeyAction, KeysConfig};
+pub use keys::{ConfigKey, ConfigKeyKind, KeyAction, KeysConfig};
 pub use notification::NotificationConfig;
 pub use sound::{CompletionSoundConfig, FocusSoundConfig, SoundConfig};
 pub use tasks::TasksConfig;
@@ -721,7 +721,7 @@ mod tests {
                 ThemeColor::LightGreen,
             ),
             KeysConfig {
-                clock_primary: KeyBindings::one(ConfigKey::Enter),
+                clock_primary: KeyBindings::one(ConfigKey::Enter.with_modifiers(true, false)),
                 cycle_session: KeyBindings::one(ConfigKey::Character('n')),
                 ..KeysConfig::default()
             },
@@ -743,7 +743,7 @@ mod tests {
         assert!(contents.contains("focused_border = \"light_blue\""));
         assert!(!contents.contains("completed_sessions"));
         assert!(contents.contains("[keys]"));
-        assert!(contents.contains("clock_primary = \"enter\""));
+        assert!(contents.contains("clock_primary = \"ctrl+enter\""));
         assert!(contents.contains("cycle_session = \"n\""));
         fs::remove_dir_all(path.parent().unwrap()).unwrap();
     }
@@ -771,14 +771,14 @@ mod tests {
         let path = temp_path("partial-keys.toml");
         fs::write(
             &path,
-            "[timer]\nfocus_duration = \"25:00\"\nshort_break_duration = \"05:00\"\nlong_break_duration = \"15:00\"\nlong_break_interval = 4\n\n[keys]\ncycle_session = \"n\"\nclock_primary = \"enter\"\n",
+            "[timer]\nfocus_duration = \"25:00\"\nshort_break_duration = \"05:00\"\nlong_break_duration = \"15:00\"\nlong_break_interval = 4\n\n[keys]\ncycle_session = \"n\"\nclock_primary = \"backspace\"\n",
         )
         .unwrap();
 
         let config = Config::load_from(&path).unwrap();
 
         assert_eq!(config.keys().cycle_session(), [ConfigKey::Character('n')]);
-        assert_eq!(config.keys().clock_primary(), [ConfigKey::Enter]);
+        assert_eq!(config.keys().clock_primary(), [ConfigKey::Backspace]);
         assert_eq!(config.keys().quit(), [ConfigKey::Character('q')]);
 
         fs::remove_file(path).unwrap();
@@ -847,21 +847,25 @@ mod tests {
     }
 
     #[test]
-    fn escape_is_reserved_for_modal_cancellation() {
-        let path = temp_path("reserved-escape.toml");
-        fs::write(
-            &path,
-            "[timer]\nfocus_duration = \"25:00\"\nshort_break_duration = \"05:00\"\nlong_break_duration = \"15:00\"\nlong_break_interval = 4\n\n[keys]\ncycle_session = \"esc\"\n",
-        )
-        .unwrap();
+    fn plain_enter_and_escape_are_reserved_for_modal_controls() {
+        for key in ["enter", "esc"] {
+            let path = temp_path(&format!("reserved-{key}.toml"));
+            fs::write(
+                &path,
+                format!(
+                    "[timer]\nfocus_duration = \"25:00\"\nshort_break_duration = \"05:00\"\nlong_break_duration = \"15:00\"\nlong_break_interval = 4\n\n[keys]\ncycle_session = \"{key}\"\n"
+                ),
+            )
+            .unwrap();
 
-        let error = Config::load_from(&path).unwrap_err();
+            let error = Config::load_from(&path).unwrap_err();
 
-        assert!(matches!(error, ConfigError::Validation { .. }));
-        assert!(error.to_string().contains(path.to_str().unwrap()));
-        assert!(error.to_string().contains("keys.cycle_session"));
-        assert!(error.to_string().contains("reserved key esc"));
-        fs::remove_file(path).unwrap();
+            assert!(matches!(error, ConfigError::Validation { .. }));
+            assert!(error.to_string().contains(path.to_str().unwrap()));
+            assert!(error.to_string().contains("keys.cycle_session"));
+            assert!(error.to_string().contains(&format!("reserved key {key}")));
+            fs::remove_file(path).unwrap();
+        }
     }
 
     #[test]
@@ -878,11 +882,7 @@ mod tests {
         assert!(matches!(error, ConfigError::Validation { .. }));
         assert!(error.to_string().contains(path.to_str().unwrap()));
         assert!(error.to_string().contains("keys.settings"));
-        assert!(
-            error
-                .to_string()
-                .contains("fixed settings-overlay control enter")
-        );
+        assert!(error.to_string().contains("reserved key enter"));
         fs::remove_file(path).unwrap();
     }
 
@@ -944,6 +944,8 @@ mod tests {
         assert!(error.to_string().contains(path.to_str().unwrap()));
         assert!(error.to_string().contains("page_down"));
         assert!(error.to_string().contains("one printable character"));
+        assert!(!error.to_string().contains("enter"));
+        assert!(!error.to_string().contains("esc"));
         fs::remove_file(path).unwrap();
     }
 

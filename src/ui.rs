@@ -1642,14 +1642,14 @@ mod tests {
     fn normal_mode_help_uses_configured_key_labels() {
         let app = App::new();
         let keys: KeysConfig = toml::from_str(
-            "focus_left = \"left\"\nclock_primary = \"enter\"\ncycle_session = \"n\"\n",
+            "focus_left = \"left\"\nclock_primary = \"backspace\"\ncycle_session = \"n\"\n",
         )
         .unwrap();
 
         let help = footer_text(&app, &keys);
 
         assert!(help.contains("[←/J/K/L] box nav"));
-        assert!(help.contains("[Enter] start/pause"));
+        assert!(help.contains("[Backspace] start/pause"));
         assert!(help.contains("[n] cycle session"));
         assert!(!help.contains("[c] cycle session"));
     }
