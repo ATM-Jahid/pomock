@@ -146,6 +146,12 @@ pub enum ConfigValidationError {
     InvalidDuration {
         field: &'static str,
     },
+    InvalidPositiveInteger {
+        field: &'static str,
+    },
+    IntegerOverflow {
+        field: &'static str,
+    },
     ZeroLongBreakInterval,
     EmptyKeyBindings {
         field: &'static str,
@@ -181,6 +187,10 @@ impl fmt::Display for ConfigValidationError {
                     "{field} must use MM:SS with minutes from 00 to 9999 and seconds from 00 to 59"
                 )
             }
+            Self::InvalidPositiveInteger { field } => {
+                write!(formatter, "{field} must be a positive integer")
+            }
+            Self::IntegerOverflow { field } => write!(formatter, "{field} is too large"),
             Self::ZeroLongBreakInterval => {
                 formatter.write_str("long_break_interval must be greater than zero")
             }

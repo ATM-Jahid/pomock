@@ -84,6 +84,60 @@ fn numeric_edits_are_validated_before_updating_the_config() {
 }
 
 #[test]
+fn malformed_long_break_intervals_are_rejected_as_non_integers() {
+    for invalid in ["abc", "", "-1", "1.5"] {
+        let mut settings = SettingsOverlay::new(&Config::default());
+
+        settings.set_number(SettingField::LongBreakInterval, invalid.to_string());
+
+        assert_eq!(settings.config().timer().long_break_interval().get(), 4);
+        assert_eq!(
+            settings.error(),
+            Some("long_break_interval must be a positive integer"),
+            "unexpected validation result for {invalid:?}"
+        );
+    }
+}
+
+#[test]
+fn zero_long_break_interval_is_rejected_by_the_overlay() {
+    let mut settings = SettingsOverlay::new(&Config::default());
+
+    settings.set_number(SettingField::LongBreakInterval, "0".to_string());
+
+    assert_eq!(settings.config().timer().long_break_interval().get(), 4);
+    assert_eq!(
+        settings.error(),
+        Some("long_break_interval must be greater than zero")
+    );
+}
+
+#[test]
+fn overflowing_long_break_intervals_are_rejected_as_too_large() {
+    for overflow in [
+        (u64::from(u32::MAX) + 1).to_string(),
+        "18446744073709551616".to_string(),
+    ] {
+        let mut settings = SettingsOverlay::new(&Config::default());
+
+        settings.set_number(SettingField::LongBreakInterval, overflow);
+
+        assert_eq!(settings.config().timer().long_break_interval().get(), 4);
+        assert_eq!(settings.error(), Some("long_break_interval is too large"));
+    }
+}
+
+#[test]
+fn valid_long_break_interval_updates_the_overlay_config() {
+    let mut settings = SettingsOverlay::new(&Config::default());
+
+    settings.set_number(SettingField::LongBreakInterval, "5".to_string());
+
+    assert_eq!(settings.config().timer().long_break_interval().get(), 5);
+    assert!(settings.error().is_none());
+}
+
+#[test]
 fn duration_edits_require_mm_ss_and_reject_invalid_seconds() {
     let mut settings = SettingsOverlay::new(&Config::default());
 

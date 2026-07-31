@@ -307,15 +307,20 @@ impl SettingsOverlay {
         }
     }
 
-    fn set_number(&mut self, _field: SettingField, value: String) {
-        let parsed = value
-            .parse::<u64>()
-            .map_err(|_| ConfigValidationError::ZeroDuration { field: "setting" });
+    fn set_number(&mut self, field: SettingField, value: String) {
+        let field_name = match field {
+            SettingField::LongBreakInterval => "long_break_interval",
+            _ => return,
+        };
+        let parsed = value.parse::<u64>().map_err(|error| match error.kind() {
+            std::num::IntErrorKind::PosOverflow => {
+                ConfigValidationError::IntegerOverflow { field: field_name }
+            }
+            _ => ConfigValidationError::InvalidPositiveInteger { field: field_name },
+        });
         let result = parsed.and_then(|value| {
-            let interval =
-                u32::try_from(value).map_err(|_| ConfigValidationError::DurationOverflow {
-                    field: "long_break_interval",
-                })?;
+            let interval = u32::try_from(value)
+                .map_err(|_| ConfigValidationError::IntegerOverflow { field: field_name })?;
             let timer = self.config.timer();
             TimerConfig::from_seconds(
                 timer.focus_duration().as_secs(),
