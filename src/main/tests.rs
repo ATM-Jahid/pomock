@@ -7,13 +7,9 @@ use std::{
     sync::atomic::{AtomicU64, Ordering},
 };
 
-use super::runtime::effects::{
-    RunError, commit_settings_change, handle_outcome, task_store_for_config,
-};
-use super::runtime::terminal::combine_run_and_restore_results;
-use super::runtime::{advance_timer, should_handle_key_event};
-use super::startup::cli::CliError;
-use super::startup::recovery::{StartupError, load_config_path_for_startup};
+use super::runtime::{RunError, commit_settings_change, handle_outcome, task_store_for_config};
+use super::runtime::{advance_timer, combine_run_and_restore_results, should_handle_key_event};
+use super::startup::{CliError, StartupError, load_config_path_for_startup};
 use super::*;
 use crossterm::event::KeyEventKind;
 use pomock::{

@@ -5,10 +5,8 @@ use std::{
 
 use pomock::persistence::TaskStore;
 
-use runtime::terminal::{TerminalSession, combine_run_and_restore_results};
-use runtime::{effects::task_store_for_config, run_app};
-use startup::cli::{CliCommand, write_help};
-use startup::recovery::{load_config_for_startup, load_tasks_for_startup};
+use runtime::{TerminalSession, combine_run_and_restore_results, run_app, task_store_for_config};
+use startup::{CliCommand, load_config_for_startup, load_tasks_for_startup, write_help};
 
 mod runtime;
 mod startup;

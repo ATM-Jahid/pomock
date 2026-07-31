@@ -15,8 +15,13 @@ use pomock::{
 };
 use ratatui::{Terminal, backend::CrosstermBackend};
 
-pub(crate) mod effects;
-pub(crate) mod terminal;
+mod effects;
+mod terminal;
+
+pub(crate) use effects::task_store_for_config;
+#[cfg(test)]
+pub(crate) use effects::{RunError, commit_settings_change, handle_outcome};
+pub(crate) use terminal::{TerminalSession, combine_run_and_restore_results};
 
 pub(crate) fn handle_mouse(
     app: &mut App,
