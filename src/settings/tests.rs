@@ -1,5 +1,8 @@
 use super::*;
-use crate::config::{SoundConfig, ThemeColor, ThemeConfig, ThemeRole};
+use crate::{
+    app::{SettingsAdjustmentDirection, SettingsMoveDirection},
+    config::{SoundConfig, ThemeColor, ThemeConfig, ThemeRole},
+};
 
 fn select(settings: &mut SettingsOverlay, field: SettingField) {
     let index = SettingField::ALL
@@ -288,20 +291,20 @@ fn booleans_and_theme_colors_update_the_overlay_config() {
     let original_border = original.theme().color(ThemeRole::FocusedBorder);
     let original_focus = original.theme().color(ThemeRole::Focus);
     select(&mut settings, SettingField::PersistTasks);
-    settings.adjust(true);
+    settings.adjust(SettingsAdjustmentDirection::Forward);
     select(&mut settings, SettingField::AutostartBreaks);
-    settings.adjust(true);
+    settings.adjust(SettingsAdjustmentDirection::Forward);
     select(&mut settings, SettingField::AutostartFocus);
     settings.activate();
     select(&mut settings, SettingField::Theme(ThemeRole::FocusedBorder));
-    settings.adjust(true);
+    settings.adjust(SettingsAdjustmentDirection::Forward);
 
     assert!(!settings.config().tasks().persist());
     assert!(settings.config().timer().autostart_breaks());
     assert!(settings.config().timer().autostart_focus());
     assert_eq!(
         settings.config().theme().color(ThemeRole::FocusedBorder),
-        original_border.cycle(true)
+        original_border.cycle_forward()
     );
     assert!(original.tasks().persist());
     assert_eq!(
@@ -310,10 +313,33 @@ fn booleans_and_theme_colors_update_the_overlay_config() {
     );
 
     select(&mut settings, SettingField::Theme(ThemeRole::Focus));
-    settings.adjust(true);
+    settings.adjust(SettingsAdjustmentDirection::Forward);
     assert_eq!(
         settings.config().theme().focus(),
-        original_focus.cycle(true)
+        original_focus.cycle_forward()
+    );
+}
+
+#[test]
+fn named_directions_move_selection_and_adjust_numbers() {
+    let mut settings = SettingsOverlay::new(&Config::default());
+
+    settings.move_selection(SettingsMoveDirection::Down);
+    assert_eq!(settings.selection(), 1);
+    settings.move_selection(SettingsMoveDirection::Up);
+    assert_eq!(settings.selection(), 0);
+
+    select(&mut settings, SettingField::LongBreakInterval);
+    let original = settings.config().timer().long_break_interval().get();
+    settings.adjust(SettingsAdjustmentDirection::Forward);
+    assert_eq!(
+        settings.config().timer().long_break_interval().get(),
+        original + 1
+    );
+    settings.adjust(SettingsAdjustmentDirection::Backward);
+    assert_eq!(
+        settings.config().timer().long_break_interval().get(),
+        original
     );
 }
 
@@ -367,7 +393,7 @@ fn arrows_and_h_l_can_cycle_from_a_custom_color_into_presets() {
     let mut settings = SettingsOverlay::new(&config);
     select(&mut settings, SettingField::Theme(ThemeRole::FocusedBorder));
 
-    settings.adjust(true);
+    settings.adjust(SettingsAdjustmentDirection::Forward);
 
     assert_eq!(
         settings.config().theme().focused_border(),
@@ -420,7 +446,7 @@ fn selection_is_clamped_and_locked_during_nested_editing() {
     );
     settings.select(0);
     settings.activate();
-    settings.move_selection(true);
+    settings.move_selection(SettingsMoveDirection::Down);
     assert_eq!(settings.selection(), 0);
     assert!(settings.cancel_nested());
 }

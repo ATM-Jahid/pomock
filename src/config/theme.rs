@@ -140,13 +140,19 @@ impl ThemeColor {
         Self::White,
     ];
 
-    pub fn cycle(self, forward: bool) -> Self {
+    pub fn cycle_forward(self) -> Self {
         let index = Self::ALL.iter().position(|color| *color == self);
-        match (index, forward) {
-            (Some(index), true) => Self::ALL[(index + 1) % Self::ALL.len()],
-            (Some(index), false) => Self::ALL[(index + Self::ALL.len() - 1) % Self::ALL.len()],
-            (None, true) => Self::ALL[0],
-            (None, false) => Self::ALL[Self::ALL.len() - 1],
+        match index {
+            Some(index) => Self::ALL[(index + 1) % Self::ALL.len()],
+            None => Self::ALL[0],
+        }
+    }
+
+    pub fn cycle_backward(self) -> Self {
+        let index = Self::ALL.iter().position(|color| *color == self);
+        match index {
+            Some(index) => Self::ALL[(index + Self::ALL.len() - 1) % Self::ALL.len()],
+            None => Self::ALL[Self::ALL.len() - 1],
         }
     }
 
@@ -293,7 +299,7 @@ mod tests {
     #[test]
     fn cycling_from_custom_colors_enters_the_named_preset_ring() {
         let custom = ThemeColor::Rgb(1, 2, 3);
-        assert_eq!(custom.cycle(true), ThemeColor::Black);
-        assert_eq!(custom.cycle(false), ThemeColor::White);
+        assert_eq!(custom.cycle_forward(), ThemeColor::Black);
+        assert_eq!(custom.cycle_backward(), ThemeColor::White);
     }
 }

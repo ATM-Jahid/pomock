@@ -8,7 +8,8 @@ use crate::{
 
 use super::{
     Action, App, AppOutcome, ClickTarget, ConfirmationOperation, Direction, EditMode,
-    FocusAudioAction, ScrollTarget, SettingsMode, TaskState, TimerChange, UiFocus,
+    FocusAudioAction, ScrollTarget, SettingsAdjustmentDirection, SettingsMode,
+    SettingsMoveDirection, TaskState, TimerChange, UiFocus,
 };
 
 fn add_task(app: &mut App, description: &str) {
@@ -23,7 +24,7 @@ fn add_task(app: &mut App, description: &str) {
 
 fn move_settings_to(app: &mut App, field: SettingField) {
     while app.settings().unwrap().field() != field {
-        let _ = app.dispatch(Action::SettingsMove(true));
+        let _ = app.dispatch(Action::SettingsMove(SettingsMoveDirection::Down));
     }
 }
 
@@ -1295,7 +1296,7 @@ fn non_timer_settings_apply_immediately_without_changing_activity() {
     let _ = app.dispatch(Action::PrimaryAction);
     let _ = app.dispatch(Action::OpenSettings);
     move_settings_to(&mut app, SettingField::PersistTasks);
-    let outcome = app.dispatch(Action::SettingsActivate);
+    let outcome = app.dispatch(Action::SettingsAdjust(SettingsAdjustmentDirection::Forward));
     let AppOutcome::SettingsChanged(config) = outcome else {
         panic!("settings were not emitted")
     };

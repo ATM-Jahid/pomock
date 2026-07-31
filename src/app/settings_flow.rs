@@ -1,4 +1,4 @@
-use super::{Action, App, AppOutcome, Direction, ScrollTarget};
+use super::{Action, App, AppOutcome, Direction, ScrollTarget, SettingsMoveDirection};
 use crate::{config::Config, settings::SettingsOverlay};
 
 impl App {
@@ -12,14 +12,14 @@ impl App {
         {
             let settings = self.settings.as_mut().expect("settings overlay is open");
             match action {
-                Action::SettingsMove(down) => settings.move_selection(down),
+                Action::SettingsMove(direction) => settings.move_selection(direction),
                 Action::Scroll(ScrollTarget::Settings, Direction::Down) => {
-                    settings.move_selection(true)
+                    settings.move_selection(SettingsMoveDirection::Down)
                 }
                 Action::Scroll(ScrollTarget::Settings, Direction::Up) => {
-                    settings.move_selection(false)
+                    settings.move_selection(SettingsMoveDirection::Up)
                 }
-                Action::SettingsAdjust(forward) => settings.adjust(forward),
+                Action::SettingsAdjust(direction) => settings.adjust(direction),
                 Action::SettingsActivate => settings.activate(),
                 Action::SettingsClose => {
                     close = settings.input().is_none() && !settings.is_capturing_key();

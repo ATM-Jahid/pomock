@@ -8,7 +8,7 @@ use ratatui::{
 };
 
 use crate::{
-    app::{Action, ClickTarget, Direction, ScrollTarget},
+    app::{Action, ClickTarget, Direction, ScrollTarget, SettingsMoveDirection},
     config::{KeyAction, ThemeColor, ThemeConfig, ThemeRole},
     settings::SettingField,
     timer::SessionKind,
@@ -905,7 +905,7 @@ fn settings_hit_testing_uses_the_visible_scrolled_rows() {
     let mut app = App::new();
     let _ = app.dispatch(Action::OpenSettings);
     for _ in 0..25 {
-        let _ = app.dispatch(Action::SettingsMove(true));
+        let _ = app.dispatch(Action::SettingsMove(SettingsMoveDirection::Down));
     }
     let area = Rect::new(0, 0, 80, 24);
     let footer = settings_footer(app.settings().unwrap());
@@ -1005,7 +1005,7 @@ fn settings_help_shows_fixed_navigation_and_the_active_close_keys() {
     let mut app = App::new();
     let _ = app.dispatch(Action::OpenSettings);
     while app.settings().unwrap().field() != SettingField::Key(KeyAction::Settings) {
-        let _ = app.dispatch(Action::SettingsMove(true));
+        let _ = app.dispatch(Action::SettingsMove(SettingsMoveDirection::Down));
     }
     let _ = app.dispatch(Action::SettingsActivate);
     let _ = app.dispatch(Action::SettingsCaptureKey(ConfigKey::Character('t')));

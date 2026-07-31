@@ -1,7 +1,10 @@
 use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 
 use crate::{
-    app::{Action, Direction, EditMode, SettingsMode, UiFocus},
+    app::{
+        Action, Direction, EditMode, SettingsAdjustmentDirection, SettingsMode,
+        SettingsMoveDirection, UiFocus,
+    },
     config::{ConfigKey, KeysConfig},
 };
 
@@ -123,16 +126,16 @@ fn map_physical_key(
                     Some(Action::SettingsActivate)
                 }
                 KeyCode::Up | KeyCode::Char('k') if key.is_unmodified() => {
-                    Some(Action::SettingsMove(false))
+                    Some(Action::SettingsMove(SettingsMoveDirection::Up))
                 }
                 KeyCode::Down | KeyCode::Char('j') if key.is_unmodified() => {
-                    Some(Action::SettingsMove(true))
+                    Some(Action::SettingsMove(SettingsMoveDirection::Down))
                 }
-                KeyCode::Left | KeyCode::Char('h') if key.is_unmodified() => {
-                    Some(Action::SettingsAdjust(false))
-                }
+                KeyCode::Left | KeyCode::Char('h') if key.is_unmodified() => Some(
+                    Action::SettingsAdjust(SettingsAdjustmentDirection::Backward),
+                ),
                 KeyCode::Right | KeyCode::Char('l') if key.is_unmodified() => {
-                    Some(Action::SettingsAdjust(true))
+                    Some(Action::SettingsAdjust(SettingsAdjustmentDirection::Forward))
                 }
                 _ => None,
             };

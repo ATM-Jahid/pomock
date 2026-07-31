@@ -12,6 +12,20 @@ pub enum Direction {
     Right,
 }
 
+/// A direction for moving through the settings selection.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SettingsMoveDirection {
+    Up,
+    Down,
+}
+
+/// A direction for cycling or incrementally adjusting a setting.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SettingsAdjustmentDirection {
+    Backward,
+    Forward,
+}
+
 /// A user intention after terminal input has been translated from a physical key.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Action {
@@ -32,8 +46,8 @@ pub enum Action {
     PushInput(char),
     PopInput,
     OpenSettings,
-    SettingsMove(bool),
-    SettingsAdjust(bool),
+    SettingsMove(SettingsMoveDirection),
+    SettingsAdjust(SettingsAdjustmentDirection),
     SettingsActivate,
     SettingsClose,
     SettingsCancel,

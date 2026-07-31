@@ -1,5 +1,6 @@
 use std::path::{Path, PathBuf};
 
+use crate::app::{SettingsAdjustmentDirection, SettingsMoveDirection};
 use crate::config::{
     CompletionSoundConfig, Config, ConfigKey, ConfigValidationError, FocusSoundConfig,
     NotificationConfig, TasksConfig, ThemeRole, TimerConfig, format_duration, parse_duration,
@@ -73,19 +74,22 @@ impl SettingsOverlay {
         }
     }
 
-    pub(crate) fn move_selection(&mut self, down: bool) {
+    pub(crate) fn move_selection(&mut self, direction: SettingsMoveDirection) {
         if self.input.is_some() || self.capturing_key {
             return;
         }
-        if down {
-            self.selection = (self.selection + 1).min(SettingField::ALL.len() - 1);
-        } else {
-            self.selection = self.selection.saturating_sub(1);
+        match direction {
+            SettingsMoveDirection::Down => {
+                self.selection = (self.selection + 1).min(SettingField::ALL.len() - 1);
+            }
+            SettingsMoveDirection::Up => {
+                self.selection = self.selection.saturating_sub(1);
+            }
         }
         self.error = None;
     }
 
-    pub(crate) fn adjust(&mut self, forward: bool) {
+    pub(crate) fn adjust(&mut self, direction: SettingsAdjustmentDirection) {
         if self.input.is_some() || self.capturing_key {
             return;
         }
@@ -118,7 +122,10 @@ impl SettingsOverlay {
             ),
             SettingField::Theme(role) => {
                 let theme = *self.config.theme();
-                let color = theme.color(role).cycle(forward);
+                let color = match direction {
+                    SettingsAdjustmentDirection::Forward => theme.color(role).cycle_forward(),
+                    SettingsAdjustmentDirection::Backward => theme.color(role).cycle_backward(),
+                };
                 self.replace(
                     self.config.timer().to_owned(),
                     *self.config.tasks(),
@@ -128,19 +135,17 @@ impl SettingsOverlay {
             }
             _ if field.is_number() => {
                 let current = self.number_value(field);
-                let next = if forward {
-                    current.saturating_add(1)
-                } else {
-                    current.saturating_sub(1).max(1)
+                let next = match direction {
+                    SettingsAdjustmentDirection::Forward => current.saturating_add(1),
+                    SettingsAdjustmentDirection::Backward => current.saturating_sub(1).max(1),
                 };
                 self.set_number(field, next.to_string());
             }
             _ if field.is_duration() => {
                 let current = self.duration_value(field).as_secs();
-                let next = if forward {
-                    current.saturating_add(60)
-                } else {
-                    current.saturating_sub(60).max(1)
+                let next = match direction {
+                    SettingsAdjustmentDirection::Forward => current.saturating_add(60),
+                    SettingsAdjustmentDirection::Backward => current.saturating_sub(60).max(1),
                 };
                 self.set_duration(field, format_duration(std::time::Duration::from_secs(next)));
             }
@@ -177,7 +182,9 @@ impl SettingsOverlay {
                 | SettingField::CompletionSoundEnabled
                 | SettingField::FocusSoundEnabled
                 | SettingField::PersistTasks
-                | SettingField::ShowTaskNumbers => self.adjust(true),
+                | SettingField::ShowTaskNumbers => {
+                    self.adjust(SettingsAdjustmentDirection::Forward)
+                }
                 SettingField::Key(_) => {
                     self.capturing_key = true;
                     self.error = None;

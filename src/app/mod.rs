@@ -14,7 +14,10 @@ mod settings_flow;
 mod task_flow;
 mod timer_flow;
 
-pub use action::{Action, AppOutcome, Direction, FocusAudioAction, ScrollTarget};
+pub use action::{
+    Action, AppOutcome, Direction, FocusAudioAction, ScrollTarget, SettingsAdjustmentDirection,
+    SettingsMoveDirection,
+};
 pub use pointer::ClickTarget;
 
 /// The application area that currently receives contextual commands.

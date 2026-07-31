@@ -472,17 +472,33 @@ fn settings_context_has_fixed_navigation_and_nested_editing_precedence() {
         ),
         Some(Action::SettingsClose)
     );
-    assert_eq!(
-        map_key(
-            KeyCode::Char('l'),
-            EditMode::Normal,
-            UiFocus::Clock,
-            false,
-            SettingsMode::Navigating,
-            &keys
+    for (key, expected) in [
+        (KeyCode::Up, Action::SettingsMove(SettingsMoveDirection::Up)),
+        (
+            KeyCode::Down,
+            Action::SettingsMove(SettingsMoveDirection::Down),
         ),
-        Some(Action::SettingsAdjust(true))
-    );
+        (
+            KeyCode::Left,
+            Action::SettingsAdjust(SettingsAdjustmentDirection::Backward),
+        ),
+        (
+            KeyCode::Char('l'),
+            Action::SettingsAdjust(SettingsAdjustmentDirection::Forward),
+        ),
+    ] {
+        assert_eq!(
+            map_key(
+                key,
+                EditMode::Normal,
+                UiFocus::Clock,
+                false,
+                SettingsMode::Navigating,
+                &keys
+            ),
+            Some(expected)
+        );
+    }
     assert_eq!(
         map_key(
             KeyCode::Char('7'),
