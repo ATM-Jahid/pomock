@@ -90,9 +90,140 @@ fn key_capture_preserves_control_and_alt_modifiers() {
             &keys,
         ),
         Some(Action::SettingsCaptureKey(
-            ConfigKey::Character('q').with_modifiers(true, true)
+            ConfigKey::Character('q').with_modifiers(true, true, false)
         ))
     );
+}
+
+#[test]
+fn key_capture_preserves_shift_for_every_supported_non_character_key() {
+    let keys = KeysConfig::default();
+    for (code, configured) in [
+        (KeyCode::Char(' '), ConfigKey::Space),
+        (KeyCode::Enter, ConfigKey::Enter),
+        (KeyCode::Esc, ConfigKey::Escape),
+        (KeyCode::Backspace, ConfigKey::Backspace),
+        (KeyCode::Up, ConfigKey::Up),
+        (KeyCode::Down, ConfigKey::Down),
+        (KeyCode::Left, ConfigKey::Left),
+        (KeyCode::Right, ConfigKey::Right),
+    ] {
+        assert_eq!(
+            map_key_event(
+                modified_event(code, KeyModifiers::SHIFT),
+                EditMode::Normal,
+                UiFocus::Clock,
+                false,
+                SettingsMode::CapturingKey,
+                &keys,
+            ),
+            Some(Action::SettingsCaptureKey(
+                configured.with_modifiers(false, false, true)
+            ))
+        );
+    }
+
+    assert_eq!(
+        map_key_event(
+            modified_event(KeyCode::Left, KeyModifiers::CONTROL | KeyModifiers::SHIFT),
+            EditMode::Normal,
+            UiFocus::Clock,
+            false,
+            SettingsMode::CapturingKey,
+            &keys,
+        ),
+        Some(Action::SettingsCaptureKey(
+            ConfigKey::Left.with_modifiers(true, false, true)
+        ))
+    );
+}
+
+#[test]
+fn shifted_printable_key_capture_uses_the_reported_character() {
+    let keys = KeysConfig::default();
+    for character in ['A', '?'] {
+        assert_eq!(
+            map_key_event(
+                modified_event(KeyCode::Char(character), KeyModifiers::SHIFT),
+                EditMode::Normal,
+                UiFocus::Clock,
+                false,
+                SettingsMode::CapturingKey,
+                &keys,
+            ),
+            Some(Action::SettingsCaptureKey(ConfigKey::Character(character)))
+        );
+    }
+}
+
+#[test]
+fn shifted_bindings_do_not_match_unmodified_keys() {
+    let keys: KeysConfig = toml::from_str("list_down = \"shift+down\"\n").unwrap();
+
+    assert_eq!(
+        map_key_event(
+            modified_event(KeyCode::Down, KeyModifiers::SHIFT),
+            EditMode::Normal,
+            UiFocus::Todo,
+            false,
+            SettingsMode::Closed,
+            &keys,
+        ),
+        Some(Action::MoveSelection(Direction::Down))
+    );
+    assert_eq!(
+        map_key(
+            KeyCode::Down,
+            EditMode::Normal,
+            UiFocus::Todo,
+            false,
+            SettingsMode::Closed,
+            &keys,
+        ),
+        None
+    );
+}
+
+#[test]
+fn super_meta_and_hyper_events_are_rejected_for_matching_and_capture() {
+    let keys: KeysConfig = toml::from_str(
+        "cycle_session = [\"q\", \"ctrl+q\", \"alt+q\"]\nlist_down = \"shift+down\"\n",
+    )
+    .unwrap();
+    let events = [
+        modified_event(KeyCode::Char('q'), KeyModifiers::SUPER),
+        modified_event(
+            KeyCode::Char('q'),
+            KeyModifiers::CONTROL | KeyModifiers::META,
+        ),
+        modified_event(KeyCode::Char('q'), KeyModifiers::ALT | KeyModifiers::HYPER),
+        modified_event(KeyCode::Down, KeyModifiers::SHIFT | KeyModifiers::SUPER),
+    ];
+
+    for event in events {
+        assert_eq!(
+            map_key_event(
+                event,
+                EditMode::Normal,
+                UiFocus::Clock,
+                false,
+                SettingsMode::Closed,
+                &keys,
+            ),
+            None
+        );
+        assert_eq!(
+            map_key_event(
+                event,
+                EditMode::Normal,
+                UiFocus::Clock,
+                false,
+                SettingsMode::CapturingKey,
+                &keys,
+            ),
+            None
+        );
+    }
 }
 
 #[test]

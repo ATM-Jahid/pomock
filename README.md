@@ -174,7 +174,11 @@ Each key binding is either a single key or an ordered list of keys;
 the help text only shows the first key.
 A key is one printable character or one of
 `space`, `backspace`, `up`, `down`, `left`, and `right`.
-Prefix a key with `ctrl+`, `alt+`, or `ctrl+alt+` to use modifiers.
+You can prefix a non-character key
+with any combination of `ctrl+`, `alt+`, and `shift+`.
+Note that shifted printable keys
+use the character produced by the terminal (`A` or `?`, for example),
+without a `shift+` prefix.
 
 Colors accept `#RRGGBB` values or portable terminal names:
 `black`, `red`, `green`, `yellow`, `blue`, `magenta`, `cyan`, `gray`, `dark_gray`,

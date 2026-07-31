@@ -265,7 +265,7 @@ fn saves_and_loads_a_valid_toml_round_trip() {
             ThemeColor::LightGreen,
         ),
         KeysConfig {
-            clock_primary: KeyBindings::one(ConfigKey::Enter.with_modifiers(true, false)),
+            clock_primary: KeyBindings::one(ConfigKey::Enter.with_modifiers(true, false, false)),
             cycle_session: KeyBindings::one(ConfigKey::Character('n')),
             ..KeysConfig::default()
         },
@@ -290,6 +290,18 @@ fn saves_and_loads_a_valid_toml_round_trip() {
     assert!(contents.contains("clock_primary = \"ctrl+enter\""));
     assert!(contents.contains("cycle_session = \"n\""));
     fs::remove_dir_all(path.parent().unwrap()).unwrap();
+}
+
+#[test]
+fn shifted_non_character_keys_round_trip_canonically() {
+    let keys: KeysConfig =
+        toml::from_str("clock_primary = \"alt+shift+enter\"\nfocus_left = \"shift+ctrl+left\"\n")
+            .unwrap();
+
+    let serialized = toml::to_string(&keys).unwrap();
+    assert!(serialized.contains("clock_primary = \"alt+shift+enter\""));
+    assert!(serialized.contains("focus_left = \"ctrl+shift+left\""));
+    assert_eq!(toml::from_str::<KeysConfig>(&serialized).unwrap(), keys);
 }
 
 #[test]

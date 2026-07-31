@@ -22,6 +22,7 @@ pub fn map_key(
             code: key,
             control: false,
             alt: false,
+            shift: false,
         },
         edit_mode,
         focus,
@@ -31,7 +32,7 @@ pub fn map_key(
     )
 }
 
-/// Maps a complete terminal key event, including Control and Alt modifiers.
+/// Maps a complete terminal key event, including supported modifiers.
 pub fn map_key_event(
     key: KeyEvent,
     edit_mode: EditMode,
@@ -40,11 +41,30 @@ pub fn map_key_event(
     settings_mode: SettingsMode,
     keys: &KeysConfig,
 ) -> Option<Action> {
+    if key
+        .modifiers
+        .intersects(KeyModifiers::SUPER | KeyModifiers::META | KeyModifiers::HYPER)
+    {
+        return None;
+    }
+
     map_physical_key(
         PhysicalKey {
             code: key.code,
             control: key.modifiers.contains(KeyModifiers::CONTROL),
             alt: key.modifiers.contains(KeyModifiers::ALT),
+            shift: key.modifiers.contains(KeyModifiers::SHIFT)
+                && matches!(
+                    key.code,
+                    KeyCode::Char(' ')
+                        | KeyCode::Enter
+                        | KeyCode::Esc
+                        | KeyCode::Backspace
+                        | KeyCode::Up
+                        | KeyCode::Down
+                        | KeyCode::Left
+                        | KeyCode::Right
+                ),
         },
         edit_mode,
         focus,
@@ -59,11 +79,12 @@ struct PhysicalKey {
     code: KeyCode,
     control: bool,
     alt: bool,
+    shift: bool,
 }
 
 impl PhysicalKey {
     const fn is_unmodified(self) -> bool {
-        !self.control && !self.alt
+        !self.control && !self.alt && !self.shift
     }
 }
 
@@ -199,7 +220,7 @@ fn config_key(key: PhysicalKey) -> Option<ConfigKey> {
         KeyCode::Right => Some(ConfigKey::Right),
         _ => None,
     }?;
-    Some(key_code.with_modifiers(key.control, key.alt))
+    Some(key_code.with_modifiers(key.control, key.alt, key.shift))
 }
 
 fn focus_direction(key: PhysicalKey, keys: &KeysConfig) -> Option<Direction> {

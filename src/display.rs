@@ -58,7 +58,12 @@ pub fn format_key(key: ConfigKey) -> String {
         ConfigKey::Down => "↓".to_string(),
         ConfigKey::Left => "←".to_string(),
         ConfigKey::Right => "→".to_string(),
-        ConfigKey::Modified { key, control, alt } => {
+        ConfigKey::Modified {
+            key,
+            control,
+            alt,
+            shift,
+        } => {
             let key = match key {
                 ConfigKeyKind::Character(character) => character.to_string(),
                 ConfigKeyKind::Space => "Space".to_string(),
@@ -70,12 +75,17 @@ pub fn format_key(key: ConfigKey) -> String {
                 ConfigKeyKind::Left => "←".to_string(),
                 ConfigKeyKind::Right => "→".to_string(),
             };
-            match (control, alt) {
-                (true, true) => format!("Ctrl+Alt+{key}"),
-                (true, false) => format!("Ctrl+{key}"),
-                (false, true) => format!("Alt+{key}"),
-                (false, false) => key,
+            let mut modifiers = String::new();
+            if control {
+                modifiers.push_str("Ctrl+");
             }
+            if alt {
+                modifiers.push_str("Alt+");
+            }
+            if shift {
+                modifiers.push_str("Shift+");
+            }
+            format!("{modifiers}{key}")
         }
     }
 }
@@ -231,8 +241,18 @@ mod tests {
         assert_eq!(format_key(ConfigKey::Escape), "Esc");
         assert_eq!(format_key(ConfigKey::Down), "↓");
         assert_eq!(
-            format_key(ConfigKey::Left.with_modifiers(true, true)),
+            format_key(ConfigKey::Left.with_modifiers(true, true, false)),
             "Ctrl+Alt+←"
         );
+        assert_eq!(
+            format_key(ConfigKey::Down.with_modifiers(false, false, true)),
+            "Shift+↓"
+        );
+        assert_eq!(
+            format_key(ConfigKey::Enter.with_modifiers(false, true, true)),
+            "Alt+Shift+Enter"
+        );
+        assert_eq!(format_key(ConfigKey::Character('A')), "A");
+        assert_eq!(format_key(ConfigKey::Character('?')), "?");
     }
 }
