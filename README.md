@@ -158,14 +158,16 @@ todo_highlight = "red"
 done_highlight = "green"
 ```
 
-To customize them, create `pomock/config.toml`
+On first startup, `pomock` creates `pomock/config.toml` with these defaults
 in your platform's standard user configuration directory
 (for example, `$XDG_CONFIG_HOME` or `~/.config` on Linux).
+Edit that file to customize the settings (or use the in-app settings overlay).
 
 By default, `pomock` saves task descriptions, order, and completion state
 after every successful task change.
-The `tasks.toml` file lives under
-the platform's standard per-user application data directory
+When task persistence is enabled,
+`tasks.toml` is also created on startup
+and lives under the platform's standard per-user application data directory
 (for example, `$XDG_DATA_HOME/pomock` or `~/.local/share/pomock` on Linux).
 For a named workspace, it lives in the workspace's child directory,
 such as `~/.local/share/pomock/foo/tasks.toml`.

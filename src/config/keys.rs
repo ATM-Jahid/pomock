@@ -272,7 +272,7 @@ impl<'de> Deserialize<'de> for KeyBindings {
 
 /// Durable normal-mode key bindings. Editing and confirmation keys are fixed.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(default, deny_unknown_fields)]
+#[serde(deny_unknown_fields)]
 pub struct KeysConfig {
     pub(super) quit: KeyBindings,
     pub(super) settings: KeyBindings,
@@ -315,6 +315,14 @@ pub enum KeyAction {
 }
 
 impl KeysConfig {
+    #[cfg(test)]
+    pub(crate) fn from_test_toml(overrides: &str) -> Self {
+        let mut stored = toml::Value::try_from(Self::default()).unwrap();
+        let overrides: toml::Table = toml::from_str(overrides).unwrap();
+        stored.as_table_mut().unwrap().extend(overrides);
+        stored.try_into().unwrap()
+    }
+
     pub fn focus_left(&self) -> &[ConfigKey] {
         self.focus_left.as_slice()
     }

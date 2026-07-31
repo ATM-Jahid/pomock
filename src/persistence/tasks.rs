@@ -1,4 +1,7 @@
-use std::{fs, io, path::Path};
+use std::{
+    fs, io,
+    path::{Path, PathBuf},
+};
 
 use serde::{Deserialize, Serialize};
 
@@ -21,11 +24,25 @@ impl TaskStore {
             }
         };
 
-        let stored: StoredTaskFile =
+        let original: toml::Value =
             toml::from_str(&contents).map_err(|source| TaskPersistenceError::Parse {
                 path: self.path.clone(),
                 source,
             })?;
+        let defaults = toml::Value::try_from(StoredTaskFile {
+            version: TASK_FILE_VERSION,
+            todo: Vec::new(),
+            done: Vec::new(),
+        })
+        .expect("the default task file is serializable");
+        let merged = merge_with_defaults(&original, &defaults);
+        let stored: StoredTaskFile =
+            merged
+                .try_into()
+                .map_err(|source| TaskPersistenceError::Parse {
+                    path: self.path.clone(),
+                    source,
+                })?;
 
         if stored.version != TASK_FILE_VERSION {
             return Err(TaskPersistenceError::UnsupportedVersion {
@@ -37,6 +54,75 @@ impl TaskStore {
         Self::validate_list(&self.path, "todo", &stored.todo)?;
         Self::validate_list(&self.path, "done", &stored.done)?;
         Ok(TaskState::from_lists(stored.todo, stored.done))
+    }
+
+    /// Creates an empty task file if this store's path does not currently exist.
+    ///
+    /// Returns whether this call created the file.
+    pub fn create_default_file(&self) -> Result<bool, TaskPersistenceError> {
+        if let Some(parent) = self.path.parent() {
+            fs::create_dir_all(parent).map_err(|source| TaskPersistenceError::CreateDirectory {
+                path: parent.to_owned(),
+                source,
+            })?;
+        }
+        let contents = toml::to_string_pretty(&StoredTaskFile {
+            version: TASK_FILE_VERSION,
+            todo: Vec::new(),
+            done: Vec::new(),
+        })
+        .map_err(TaskPersistenceError::Serialize)?;
+        atomic_write::write_new(&self.path, contents.as_bytes()).map_err(|source| {
+            TaskPersistenceError::Write {
+                path: self.path.clone(),
+                source,
+            }
+        })
+    }
+
+    /// Replaces an invalid task file only if it still has the expected contents.
+    ///
+    /// Returns the backup path, or `None` when the file changed before replacement.
+    pub fn replace_with_default_if_unchanged(
+        &self,
+        expected: &[u8],
+    ) -> Result<Option<PathBuf>, TaskPersistenceError> {
+        if fs::read(&self.path).map_err(|source| TaskPersistenceError::Read {
+            path: self.path.clone(),
+            source,
+        })? != expected
+        {
+            return Ok(None);
+        }
+
+        let backup = atomic_write::backup(&self.path, expected).map_err(|source| {
+            TaskPersistenceError::Backup {
+                path: self.path.clone(),
+                source,
+            }
+        })?;
+        if fs::read(&self.path).map_err(|source| TaskPersistenceError::Read {
+            path: self.path.clone(),
+            source,
+        })? != expected
+        {
+            return Ok(None);
+        }
+
+        self.save(&TaskState::default())?;
+        Ok(Some(backup))
+    }
+
+    /// Creates a timestamped recovery copy beside the task data file.
+    pub fn backup_file(&self) -> Result<PathBuf, TaskPersistenceError> {
+        let contents = fs::read(&self.path).map_err(|source| TaskPersistenceError::Read {
+            path: self.path.clone(),
+            source,
+        })?;
+        atomic_write::backup(&self.path, &contents).map_err(|source| TaskPersistenceError::Backup {
+            path: self.path.clone(),
+            source,
+        })
     }
 
     /// Saves task state, creating the parent application data directory.
@@ -60,6 +146,34 @@ impl TaskStore {
                 source,
             }
         })
+    }
+
+    /// Backs up an existing task file, then replaces it with `state`.
+    ///
+    /// A missing task file is created without producing a backup. Returns the
+    /// backup path when an existing file was preserved.
+    pub fn replace_with_backup(
+        &self,
+        state: &TaskState,
+    ) -> Result<Option<PathBuf>, TaskPersistenceError> {
+        let backup = match fs::read(&self.path) {
+            Ok(contents) => Some(atomic_write::backup(&self.path, &contents).map_err(
+                |source| TaskPersistenceError::Backup {
+                    path: self.path.clone(),
+                    source,
+                },
+            )?),
+            Err(source) if source.kind() == io::ErrorKind::NotFound => None,
+            Err(source) => {
+                return Err(TaskPersistenceError::Read {
+                    path: self.path.clone(),
+                    source,
+                });
+            }
+        };
+
+        self.save(state)?;
+        Ok(backup)
     }
 
     fn validate_list(
@@ -90,12 +204,25 @@ impl TaskStore {
     }
 }
 
+fn merge_with_defaults(existing: &toml::Value, defaults: &toml::Value) -> toml::Value {
+    let (Some(existing), Some(defaults)) = (existing.as_table(), defaults.as_table()) else {
+        return existing.clone();
+    };
+    let mut merged = defaults.clone();
+    for (key, value) in existing {
+        let value = defaults.get(key).map_or_else(
+            || value.clone(),
+            |default| merge_with_defaults(value, default),
+        );
+        merged.insert(key.clone(), value);
+    }
+    toml::Value::Table(merged)
+}
+
 #[derive(Debug, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 struct StoredTaskFile {
     version: u32,
-    #[serde(default)]
     todo: Vec<String>,
-    #[serde(default)]
     done: Vec<String>,
 }

@@ -241,6 +241,10 @@ pub enum ConfigError {
         path: PathBuf,
         source: io::Error,
     },
+    Backup {
+        path: PathBuf,
+        source: io::Error,
+    },
     Serialize(toml::ser::Error),
     Write {
         path: PathBuf,
@@ -272,6 +276,11 @@ impl fmt::Display for ConfigError {
                 "could not create configuration directory {}: {source}",
                 path.display()
             ),
+            Self::Backup { path, source } => write!(
+                formatter,
+                "could not back up configuration file {}: {source}",
+                path.display()
+            ),
             Self::Serialize(source) => {
                 write!(formatter, "could not serialize configuration: {source}")
             }
@@ -288,6 +297,7 @@ impl Error for ConfigError {
             Self::DirectoryUnavailable => None,
             Self::Read { source, .. }
             | Self::CreateDirectory { source, .. }
+            | Self::Backup { source, .. }
             | Self::Write { source, .. } => Some(source),
             Self::Parse { source, .. } => Some(source),
             Self::Validation { source, .. } => Some(source),

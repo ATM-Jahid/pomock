@@ -679,10 +679,9 @@ fn rgb_colors_map_to_terminal_rgb_colors() {
 #[test]
 fn normal_mode_help_uses_configured_key_labels() {
     let app = App::new();
-    let keys: KeysConfig = toml::from_str(
+    let keys = KeysConfig::from_test_toml(
         "focus_left = \"left\"\nclock_primary = \"backspace\"\ncycle_session = \"n\"\n",
-    )
-    .unwrap();
+    );
 
     let help = footer_text(&app, &keys);
 
@@ -696,8 +695,7 @@ fn normal_mode_help_uses_configured_key_labels() {
 fn task_help_uses_configured_item_movement_keys() {
     let mut app = App::new();
     let _ = app.dispatch(Action::NavigateFocus(Direction::Down));
-    let keys: KeysConfig =
-        toml::from_str("move_task_up = \"w\"\nmove_task_down = \"z\"\n").unwrap();
+    let keys = KeysConfig::from_test_toml("move_task_up = \"w\"\nmove_task_down = \"z\"\n");
 
     let help = footer_text(&app, &keys);
 
@@ -708,7 +706,7 @@ fn task_help_uses_configured_item_movement_keys() {
 #[test]
 fn normal_mode_help_uses_the_configured_settings_key() {
     let app = App::new();
-    let keys: KeysConfig = toml::from_str("settings = \"t\"\n").unwrap();
+    let keys = KeysConfig::from_test_toml("settings = \"t\"\n");
 
     let help = footer_text(&app, &keys);
 
@@ -719,9 +717,9 @@ fn normal_mode_help_uses_the_configured_settings_key() {
 #[test]
 fn normal_mode_help_uses_only_the_first_key_for_each_action() {
     let app = App::new();
-    let keys: KeysConfig =
-        toml::from_str("clock_primary = [\"enter\", \"space\"]\ncycle_session = [\"n\", \"c\"]\n")
-            .unwrap();
+    let keys = KeysConfig::from_test_toml(
+        "clock_primary = [\"enter\", \"space\"]\ncycle_session = [\"n\", \"c\"]\n",
+    );
 
     let help = footer_text(&app, &keys);
 

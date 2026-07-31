@@ -7,7 +7,7 @@ use super::ConfigValidationError;
 
 /// Completion and Focus-loop sound settings.
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(default, deny_unknown_fields)]
+#[serde(deny_unknown_fields)]
 pub struct SoundConfig {
     completion: CompletionSoundConfig,
     focus: FocusSoundConfig,
@@ -42,7 +42,7 @@ impl SoundConfig {
 
 /// One-shot sound played when any session completes.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(default, deny_unknown_fields)]
+#[serde(deny_unknown_fields)]
 pub struct CompletionSoundConfig {
     enabled: bool,
     file: Option<PathBuf>,
@@ -82,7 +82,7 @@ impl Default for CompletionSoundConfig {
 
 /// Sound loop active only while a Focus session is running.
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(default, deny_unknown_fields)]
+#[serde(deny_unknown_fields)]
 pub struct FocusSoundConfig {
     enabled: bool,
     file: Option<PathBuf>,

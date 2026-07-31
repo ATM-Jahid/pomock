@@ -87,6 +87,10 @@ pub enum TaskPersistenceError {
         path: PathBuf,
         source: io::Error,
     },
+    Backup {
+        path: PathBuf,
+        source: io::Error,
+    },
     Serialize(toml::ser::Error),
     Write {
         path: PathBuf,
@@ -145,6 +149,11 @@ impl fmt::Display for TaskPersistenceError {
                 "could not lock workspace instance file {}: {source}",
                 path.display()
             ),
+            Self::Backup { path, source } => write!(
+                formatter,
+                "could not back up task data file {}: {source}",
+                path.display()
+            ),
             Self::Serialize(source) => write!(formatter, "could not serialize tasks: {source}"),
             Self::Write { path, source } => {
                 write!(
@@ -168,6 +177,7 @@ impl Error for TaskPersistenceError {
             | Self::ReadDirectory { source, .. }
             | Self::OpenLock { source, .. }
             | Self::Lock { source, .. }
+            | Self::Backup { source, .. }
             | Self::Write { source, .. } => Some(source),
             Self::Parse { source, .. } => Some(source),
             Self::Serialize(source) => Some(source),
@@ -285,6 +295,50 @@ mod tests {
 
         assert!(matches!(error, TaskPersistenceError::Parse { .. }));
         assert!(error.to_string().contains(path.to_str().unwrap()));
+        fs::remove_file(path).unwrap();
+    }
+
+    #[test]
+    fn incomplete_task_file_uses_defaults_without_rewriting() {
+        let path = temp_path("incomplete.toml");
+        let original = "version = 1\ntodo = [\"remember me\"]\n";
+        fs::write(&path, original).unwrap();
+
+        let store = TaskStore::at(&path);
+        let state = store.load().unwrap();
+
+        assert_eq!(state.todo().collect::<Vec<_>>(), vec!["remember me"]);
+        assert_eq!(state.done().count(), 0);
+        assert_eq!(fs::read_to_string(&path).unwrap(), original);
+        let prefix = format!("{}.backup-", path.file_name().unwrap().to_string_lossy());
+        assert!(
+            fs::read_dir(path.parent().unwrap())
+                .unwrap()
+                .filter_map(Result::ok)
+                .map(|entry| entry.path())
+                .all(|candidate| {
+                    !candidate
+                        .file_name()
+                        .unwrap()
+                        .to_string_lossy()
+                        .starts_with(&prefix)
+                })
+        );
+        fs::remove_file(path).unwrap();
+    }
+
+    #[test]
+    fn unknown_task_file_keys_are_invalid() {
+        let path = temp_path("unknown-key.toml");
+        let original = "version = 1\ntodo = []\ndone = []\nlegacy = true\n";
+        fs::write(&path, original).unwrap();
+        let store = TaskStore::at(&path);
+
+        assert!(matches!(
+            store.load(),
+            Err(TaskPersistenceError::Parse { .. })
+        ));
+        assert_eq!(fs::read_to_string(&path).unwrap(), original);
         fs::remove_file(path).unwrap();
     }
 

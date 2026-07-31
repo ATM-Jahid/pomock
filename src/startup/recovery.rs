@@ -2,7 +2,7 @@ use std::{
     error::Error,
     fmt, fs,
     io::{self, BufRead, Write},
-    path::{Path, PathBuf},
+    path::Path,
 };
 
 use pomock::{
@@ -24,13 +24,47 @@ pub(crate) fn load_config_path_for_startup(
     reader: &mut impl BufRead,
     writer: &mut impl Write,
 ) -> Result<Option<Config>, StartupError> {
-    match Config::load_from(path) {
-        Ok(config) => Ok(Some(config)),
-        Err(error) if is_invalid_config(&error) => {
-            let recovered = recover_invalid_file(reader, writer, "configuration", path, &error)?;
-            Ok(recovered.then_some(Config::default()))
+    loop {
+        match Config::load_from(path) {
+            Ok(config) => {
+                if Config::create_default_file(path)? {
+                    return Ok(Some(Config::default()));
+                }
+                return Ok(Some(config));
+            }
+            Err(error) if is_invalid_config(&error) => {
+                let Some((error, contents)) = stable_invalid_config(path)? else {
+                    continue;
+                };
+                if !confirm_backup_and_new_file(
+                    reader,
+                    writer,
+                    "configuration",
+                    "config",
+                    path,
+                    &error,
+                )? {
+                    return Ok(None);
+                }
+                let backup = match Config::replace_with_default_if_unchanged(path, &contents) {
+                    Ok(Some(backup)) => backup,
+                    Ok(None) => continue,
+                    Err(ConfigError::Read { source, .. })
+                        if source.kind() == io::ErrorKind::NotFound =>
+                    {
+                        continue;
+                    }
+                    Err(error) => return Err(error.into()),
+                };
+                writeln!(
+                    writer,
+                    "Backed up the invalid file to {}.",
+                    backup.display()
+                )?;
+                return Ok(Some(Config::default()));
+            }
+            Err(error) => return Err(error.into()),
         }
-        Err(error) => Err(error.into()),
     }
 }
 
@@ -43,14 +77,122 @@ pub(crate) fn load_tasks_for_startup(
         return Ok(Some(TaskState::default()));
     };
 
-    match task_store.load() {
-        Ok(state) => Ok(Some(state)),
-        Err(error) if is_invalid_task_file(&error) => {
-            let recovered =
-                recover_invalid_file(reader, writer, "task data", task_store.path(), &error)?;
-            Ok(recovered.then_some(TaskState::default()))
+    loop {
+        match task_store.load() {
+            Ok(state) => {
+                if task_store.create_default_file()? {
+                    return Ok(Some(TaskState::default()));
+                }
+                return Ok(Some(state));
+            }
+            Err(error) if is_invalid_task_file(&error) => {
+                let Some((error, contents)) = stable_invalid_task_file(task_store)? else {
+                    continue;
+                };
+                if !confirm_backup_and_new_file(
+                    reader,
+                    writer,
+                    "task data",
+                    "task file",
+                    task_store.path(),
+                    &error,
+                )? {
+                    return Ok(None);
+                }
+                let backup = match task_store.replace_with_default_if_unchanged(&contents) {
+                    Ok(Some(backup)) => backup,
+                    Ok(None) => continue,
+                    Err(TaskPersistenceError::Read { source, .. })
+                        if source.kind() == io::ErrorKind::NotFound =>
+                    {
+                        continue;
+                    }
+                    Err(error) => return Err(error.into()),
+                };
+                writeln!(
+                    writer,
+                    "Backed up the invalid file to {}.",
+                    backup.display()
+                )?;
+                return Ok(Some(TaskState::default()));
+            }
+            Err(error) => return Err(error.into()),
         }
-        Err(error) => Err(error.into()),
+    }
+}
+
+fn stable_invalid_config(path: &Path) -> Result<Option<(ConfigError, Vec<u8>)>, StartupError> {
+    let contents = match fs::read(path) {
+        Ok(contents) => contents,
+        Err(error) if error.kind() == io::ErrorKind::NotFound => return Ok(None),
+        Err(error) => return Err(error.into()),
+    };
+    let error = match Config::load_from(path) {
+        Err(error) if is_invalid_config(&error) => error,
+        _ => return Ok(None),
+    };
+    let unchanged = match fs::read(path) {
+        Ok(current) => current == contents,
+        Err(error) if error.kind() == io::ErrorKind::NotFound => false,
+        Err(error) => return Err(error.into()),
+    };
+    Ok(unchanged.then_some((error, contents)))
+}
+
+fn stable_invalid_task_file(
+    task_store: &TaskStore,
+) -> Result<Option<(TaskPersistenceError, Vec<u8>)>, StartupError> {
+    let contents = match fs::read(task_store.path()) {
+        Ok(contents) => contents,
+        Err(error) if error.kind() == io::ErrorKind::NotFound => return Ok(None),
+        Err(error) => return Err(error.into()),
+    };
+    let error = match task_store.load() {
+        Err(error) if is_invalid_task_file(&error) => error,
+        _ => return Ok(None),
+    };
+    let unchanged = match fs::read(task_store.path()) {
+        Ok(current) => current == contents,
+        Err(error) if error.kind() == io::ErrorKind::NotFound => false,
+        Err(error) => return Err(error.into()),
+    };
+    Ok(unchanged.then_some((error, contents)))
+}
+
+fn confirm_backup_and_new_file(
+    reader: &mut impl BufRead,
+    writer: &mut impl Write,
+    description: &str,
+    new_file_description: &str,
+    path: &Path,
+    error: &impl fmt::Display,
+) -> Result<bool, StartupError> {
+    writeln!(
+        writer,
+        "pomock could not load the {description} file at {}:\n{error}",
+        path.display(),
+    )?;
+
+    loop {
+        write!(
+            writer,
+            "\n[b] Back up the invalid file, create a new {new_file_description}, and continue\n[q] Quit\nChoice: "
+        )?;
+        writer.flush()?;
+
+        let mut choice = String::new();
+        if reader.read_line(&mut choice)? == 0 {
+            return Ok(false);
+        }
+
+        match choice.trim().to_ascii_lowercase().as_str() {
+            "b" | "backup" => return Ok(true),
+            "q" | "quit" => return Ok(false),
+            _ => writeln!(
+                writer,
+                "Enter b to back up and create a new {new_file_description}, or q to quit."
+            )?,
+        }
     }
 }
 
@@ -70,58 +212,11 @@ fn is_invalid_task_file(error: &TaskPersistenceError) -> bool {
     )
 }
 
-fn recover_invalid_file(
-    reader: &mut impl BufRead,
-    writer: &mut impl Write,
-    description: &str,
-    path: &Path,
-    error: &impl fmt::Display,
-) -> Result<bool, StartupError> {
-    writeln!(
-        writer,
-        "pomock could not load the {description} file at {}:\n{error}",
-        path.display()
-    )?;
-
-    loop {
-        write!(
-            writer,
-            "\n[d] Delete the invalid file and continue\n[q] Quit\nChoice: "
-        )?;
-        writer.flush()?;
-
-        let mut choice = String::new();
-        if reader.read_line(&mut choice)? == 0 {
-            return Ok(false);
-        }
-
-        match choice.trim().to_ascii_lowercase().as_str() {
-            "d" | "delete" => {
-                match fs::remove_file(path) {
-                    Ok(()) => {}
-                    Err(source) if source.kind() == io::ErrorKind::NotFound => {}
-                    Err(source) => {
-                        return Err(StartupError::DeleteInvalidFile {
-                            path: path.to_owned(),
-                            source,
-                        });
-                    }
-                }
-                writeln!(writer, "Deleted {}.", path.display())?;
-                return Ok(true);
-            }
-            "q" | "quit" => return Ok(false),
-            _ => writeln!(writer, "Enter d to delete the file or q to quit.")?,
-        }
-    }
-}
-
 #[derive(Debug)]
 pub(crate) enum StartupError {
     Config(ConfigError),
     TaskPersistence(TaskPersistenceError),
     Io(io::Error),
-    DeleteInvalidFile { path: PathBuf, source: io::Error },
 }
 
 impl fmt::Display for StartupError {
@@ -130,11 +225,6 @@ impl fmt::Display for StartupError {
             Self::Config(error) => error.fmt(formatter),
             Self::TaskPersistence(error) => error.fmt(formatter),
             Self::Io(error) => error.fmt(formatter),
-            Self::DeleteInvalidFile { path, source } => write!(
-                formatter,
-                "could not delete invalid file {}: {source}",
-                path.display()
-            ),
         }
     }
 }
@@ -144,7 +234,7 @@ impl Error for StartupError {
         match self {
             Self::Config(error) => Some(error),
             Self::TaskPersistence(error) => Some(error),
-            Self::Io(error) | Self::DeleteInvalidFile { source: error, .. } => Some(error),
+            Self::Io(error) => Some(error),
         }
     }
 }

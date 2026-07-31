@@ -110,7 +110,7 @@ pub(crate) fn commit_settings_change(
     let enabling_task_persistence = !config.tasks().persist() && updated.tasks().persist();
 
     if enabling_task_persistence && let Some(store) = next_task_store.as_ref() {
-        store.save(task_state)?;
+        store.replace_with_backup(task_state)?;
     }
 
     save_config(&updated)?;

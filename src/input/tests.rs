@@ -34,8 +34,7 @@ fn maps_global_normal_mode_actions() {
 
 #[test]
 fn maps_control_and_alt_bindings_without_matching_plain_keys() {
-    let keys: KeysConfig =
-        toml::from_str("cycle_session = \"ctrl+c\"\nlist_down = \"alt+down\"\n").unwrap();
+    let keys = KeysConfig::from_test_toml("cycle_session = \"ctrl+c\"\nlist_down = \"alt+down\"\n");
 
     assert_eq!(
         map_key_event(
@@ -158,7 +157,7 @@ fn shifted_printable_key_capture_uses_the_reported_character() {
 
 #[test]
 fn shifted_bindings_do_not_match_unmodified_keys() {
-    let keys: KeysConfig = toml::from_str("list_down = \"shift+down\"\n").unwrap();
+    let keys = KeysConfig::from_test_toml("list_down = \"shift+down\"\n");
 
     assert_eq!(
         map_key_event(
@@ -186,10 +185,9 @@ fn shifted_bindings_do_not_match_unmodified_keys() {
 
 #[test]
 fn super_meta_and_hyper_events_are_rejected_for_matching_and_capture() {
-    let keys: KeysConfig = toml::from_str(
+    let keys = KeysConfig::from_test_toml(
         "cycle_session = [\"q\", \"ctrl+q\", \"alt+q\"]\nlist_down = \"shift+down\"\n",
-    )
-    .unwrap();
+    );
     let events = [
         modified_event(KeyCode::Char('q'), KeyModifiers::SUPER),
         modified_event(
@@ -349,10 +347,9 @@ fn confirmation_keys_take_precedence_over_every_other_context() {
 
 #[test]
 fn configured_keys_replace_defaults_in_their_context() {
-    let keys: KeysConfig = toml::from_str(
+    let keys = KeysConfig::from_test_toml(
         "focus_left = \"left\"\nclock_primary = \"backspace\"\ncycle_session = \"n\"\n",
-    )
-    .unwrap();
+    );
 
     assert_eq!(
         map_key(
@@ -402,7 +399,7 @@ fn configured_keys_replace_defaults_in_their_context() {
 
 #[test]
 fn configured_list_keys_do_not_keep_default_aliases() {
-    let keys: KeysConfig = toml::from_str("list_down = \"n\"\nlist_up = \"p\"\n").unwrap();
+    let keys = KeysConfig::from_test_toml("list_down = \"n\"\nlist_up = \"p\"\n");
 
     assert_eq!(
         map_key(
@@ -456,8 +453,7 @@ fn configured_list_keys_do_not_keep_default_aliases() {
 
 #[test]
 fn configured_task_movement_keys_replace_the_defaults() {
-    let keys: KeysConfig =
-        toml::from_str("move_task_up = \"w\"\nmove_task_down = \"z\"\n").unwrap();
+    let keys = KeysConfig::from_test_toml("move_task_up = \"w\"\nmove_task_down = \"z\"\n");
 
     assert_eq!(
         map_key(
@@ -498,8 +494,8 @@ fn configured_task_movement_keys_replace_the_defaults() {
 
 #[test]
 fn every_configured_key_for_an_action_is_mapped() {
-    let keys: KeysConfig =
-        toml::from_str("cycle_session = [\"c\", \"n\"]\nquit = [\"q\", \"z\"]\n").unwrap();
+    let keys =
+        KeysConfig::from_test_toml("cycle_session = [\"c\", \"n\"]\nquit = [\"q\", \"z\"]\n");
 
     for key in [KeyCode::Char('c'), KeyCode::Char('n')] {
         assert_eq!(
@@ -529,8 +525,7 @@ fn every_configured_key_for_an_action_is_mapped() {
 
 #[test]
 fn editing_and_confirmation_override_configured_normal_keys() {
-    let keys: KeysConfig =
-        toml::from_str("clock_primary = \"backspace\"\ncycle_session = \"n\"\n").unwrap();
+    let keys = KeysConfig::from_test_toml("clock_primary = \"backspace\"\ncycle_session = \"n\"\n");
 
     assert_eq!(
         map_key(
@@ -664,7 +659,7 @@ fn settings_context_has_fixed_navigation_and_nested_editing_precedence() {
         Some(Action::SettingsCancel)
     );
 
-    let keys: KeysConfig = toml::from_str("settings = \"t\"\ncycle_session = \"s\"\n").unwrap();
+    let keys = KeysConfig::from_test_toml("settings = \"t\"\ncycle_session = \"s\"\n");
     assert_eq!(
         map_key(
             KeyCode::Char('t'),

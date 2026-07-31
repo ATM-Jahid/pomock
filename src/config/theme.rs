@@ -26,7 +26,7 @@ pub enum ThemeColor {
 
 /// Durable colors assigned to semantic presentation roles.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(default, deny_unknown_fields)]
+#[serde(deny_unknown_fields)]
 pub struct ThemeConfig {
     focused_border: ThemeColor,
     unfocused_border: ThemeColor,

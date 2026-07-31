@@ -2,7 +2,7 @@ use serde::{Deserialize, Serialize};
 
 /// Native desktop-notification settings.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(default, deny_unknown_fields)]
+#[serde(deny_unknown_fields)]
 pub struct NotificationConfig {
     enabled: bool,
 }
