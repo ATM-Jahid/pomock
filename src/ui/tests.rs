@@ -1,10 +1,36 @@
 use std::time::Duration;
 
-use ratatui::{Terminal, backend::TestBackend};
+use ratatui::{
+    Terminal,
+    backend::TestBackend,
+    style::{Color, Modifier, Style},
+    text::Line,
+};
 
-use crate::app::{Action, Direction};
+use crate::{
+    app::{Action, ClickTarget, Direction, ScrollTarget},
+    config::{KeyAction, ThemeColor, ThemeConfig, ThemeRole},
+    settings::SettingField,
+    timer::SessionKind,
+};
 
 use super::*;
+
+use super::footer::{
+    FooterMetrics, confirmation_prompt, footer_text_for_focus, help_item_width, text_height,
+    viable_help_height,
+};
+use super::layout::{C_H_SUG, ClockFace, WorkspaceMode, clock_geometry};
+use super::settings::{
+    setting_row, settings_field_row, settings_footer, settings_group_start, settings_offset,
+    settings_parts, settings_scroll_anchor, settings_visual_row, theme_role_label,
+};
+use super::task_lists::{task_label, task_row_at};
+use super::theme::session_button_style;
+use crate::{
+    app::{ConfirmationOperation, TimerChange},
+    config::ConfigKey,
+};
 
 fn add_task(app: &mut App, description: &str) {
     let _ = app.dispatch(Action::NavigateFocus(Direction::Down));
@@ -1104,7 +1130,7 @@ fn configured_keybindings_change_stable_footer_metrics() {
     let area = Rect::new(
         0,
         0,
-        crate::ui_layout::T_W_SUG
+        crate::ui::layout::T_W_SUG
             .saturating_mul(2)
             .saturating_add(2),
         C_H_SUG.saturating_mul(2).saturating_add(2),
