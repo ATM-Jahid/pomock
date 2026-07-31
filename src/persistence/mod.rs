@@ -1,22 +1,18 @@
 use std::{
     error::Error,
-    fmt, fs,
-    fs::{File, OpenOptions, TryLockError},
-    io,
+    fmt, io,
     path::{Path, PathBuf},
-    sync::atomic::{AtomicU64, Ordering},
 };
 
 use directories::ProjectDirs;
-use serde::{Deserialize, Serialize};
 
-use crate::{app::TaskState, atomic_write};
+mod tasks;
+mod workspace;
+
+pub use workspace::WorkspaceInstance;
 
 const TASKS_FILE_NAME: &str = "tasks.toml";
 const TASK_FILE_VERSION: u32 = 1;
-const INSTANCE_DIRECTORY_NAME: &str = ".instances";
-const INSTANCE_FILE_PREFIX: &str = "instance-";
-static NEXT_INSTANCE_FILE: AtomicU64 = AtomicU64::new(0);
 
 /// Filesystem boundary for durable task state.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -49,228 +45,9 @@ impl TaskStore {
         Self { path: path.into() }
     }
 
-    /// Loads task state, treating an absent file as an empty task list.
-    pub fn load(&self) -> Result<TaskState, TaskPersistenceError> {
-        let contents = match fs::read_to_string(&self.path) {
-            Ok(contents) => contents,
-            Err(source) if source.kind() == io::ErrorKind::NotFound => {
-                return Ok(TaskState::default());
-            }
-            Err(source) => {
-                return Err(TaskPersistenceError::Read {
-                    path: self.path.clone(),
-                    source,
-                });
-            }
-        };
-
-        let stored: StoredTaskFile =
-            toml::from_str(&contents).map_err(|source| TaskPersistenceError::Parse {
-                path: self.path.clone(),
-                source,
-            })?;
-
-        if stored.version != TASK_FILE_VERSION {
-            return Err(TaskPersistenceError::UnsupportedVersion {
-                path: self.path.clone(),
-                found: stored.version,
-            });
-        }
-
-        Self::validate_list(&self.path, "todo", &stored.todo)?;
-        Self::validate_list(&self.path, "done", &stored.done)?;
-        Ok(TaskState::from_lists(stored.todo, stored.done))
-    }
-
-    /// Saves task state, creating the parent application data directory.
-    pub fn save(&self, state: &TaskState) -> Result<(), TaskPersistenceError> {
-        if let Some(parent) = self.path.parent() {
-            fs::create_dir_all(parent).map_err(|source| TaskPersistenceError::CreateDirectory {
-                path: parent.to_owned(),
-                source,
-            })?;
-        }
-
-        let stored = StoredTaskFile {
-            version: TASK_FILE_VERSION,
-            todo: state.todo().map(str::to_owned).collect(),
-            done: state.done().map(str::to_owned).collect(),
-        };
-        let contents = toml::to_string_pretty(&stored).map_err(TaskPersistenceError::Serialize)?;
-        atomic_write::write(&self.path, contents.as_bytes()).map_err(|source| {
-            TaskPersistenceError::Write {
-                path: self.path.clone(),
-                source,
-            }
-        })
-    }
-
     /// Returns the backing path used by this store.
     pub fn path(&self) -> &Path {
         &self.path
-    }
-
-    /// Registers this process as an instance using this task location.
-    pub fn register_instance(&self) -> Result<WorkspaceInstance, TaskPersistenceError> {
-        let workspace_directory = self
-            .path
-            .parent()
-            .ok_or(TaskPersistenceError::DirectoryUnavailable)?;
-        let instance_directory = workspace_directory.join(INSTANCE_DIRECTORY_NAME);
-        fs::create_dir_all(&instance_directory).map_err(|source| {
-            TaskPersistenceError::CreateDirectory {
-                path: instance_directory.clone(),
-                source,
-            }
-        })?;
-
-        let registry_path = instance_directory.join("registry.lock");
-        let registry = open_lock_file(&registry_path)?;
-        registry
-            .lock()
-            .map_err(|source| TaskPersistenceError::Lock {
-                path: registry_path.clone(),
-                source,
-            })?;
-
-        let already_open = find_live_instance(&instance_directory)?;
-        let (path, file) = create_instance_file(&instance_directory)?;
-        file.lock().map_err(|source| TaskPersistenceError::Lock {
-            path: path.clone(),
-            source,
-        })?;
-        registry
-            .unlock()
-            .map_err(|source| TaskPersistenceError::Lock {
-                path: registry_path,
-                source,
-            })?;
-
-        Ok(WorkspaceInstance {
-            file,
-            path,
-            already_open,
-        })
-    }
-
-    fn validate_list(
-        path: &Path,
-        list: &'static str,
-        descriptions: &[String],
-    ) -> Result<(), TaskPersistenceError> {
-        for (index, description) in descriptions.iter().enumerate() {
-            Self::validate_description(path, list, index, description)?;
-        }
-        Ok(())
-    }
-
-    fn validate_description(
-        path: &Path,
-        list: &'static str,
-        index: usize,
-        description: &str,
-    ) -> Result<(), TaskPersistenceError> {
-        if description.trim().is_empty() {
-            return Err(TaskPersistenceError::Validation {
-                path: path.to_owned(),
-                list,
-                index,
-            });
-        }
-        Ok(())
-    }
-}
-
-/// A process-lifetime registration for one task workspace.
-#[derive(Debug)]
-pub struct WorkspaceInstance {
-    file: File,
-    path: PathBuf,
-    already_open: bool,
-}
-
-impl WorkspaceInstance {
-    /// Whether another process had already registered this workspace.
-    pub fn already_open(&self) -> bool {
-        self.already_open
-    }
-}
-
-impl Drop for WorkspaceInstance {
-    fn drop(&mut self) {
-        let _ = self.file.unlock();
-        let _ = fs::remove_file(&self.path);
-    }
-}
-
-fn open_lock_file(path: &Path) -> Result<File, TaskPersistenceError> {
-    OpenOptions::new()
-        .read(true)
-        .write(true)
-        .create(true)
-        .truncate(false)
-        .open(path)
-        .map_err(|source| TaskPersistenceError::OpenLock {
-            path: path.to_owned(),
-            source,
-        })
-}
-
-fn find_live_instance(directory: &Path) -> Result<bool, TaskPersistenceError> {
-    let entries =
-        fs::read_dir(directory).map_err(|source| TaskPersistenceError::ReadDirectory {
-            path: directory.to_owned(),
-            source,
-        })?;
-    let mut already_open = false;
-
-    for entry in entries {
-        let entry = entry.map_err(|source| TaskPersistenceError::ReadDirectory {
-            path: directory.to_owned(),
-            source,
-        })?;
-        let name = entry.file_name();
-        let Some(name) = name.to_str() else {
-            continue;
-        };
-        if !name.starts_with(INSTANCE_FILE_PREFIX) || !name.ends_with(".lock") {
-            continue;
-        }
-
-        let path = entry.path();
-        let file = open_lock_file(&path)?;
-        match file.try_lock() {
-            Ok(()) => {
-                let _ = file.unlock();
-                let _ = fs::remove_file(path);
-            }
-            Err(TryLockError::WouldBlock) => already_open = true,
-            Err(TryLockError::Error(source)) => {
-                return Err(TaskPersistenceError::Lock { path, source });
-            }
-        }
-    }
-
-    Ok(already_open)
-}
-
-fn create_instance_file(directory: &Path) -> Result<(PathBuf, File), TaskPersistenceError> {
-    loop {
-        let sequence = NEXT_INSTANCE_FILE.fetch_add(1, Ordering::Relaxed);
-        let path = directory.join(format!(
-            "{INSTANCE_FILE_PREFIX}{}-{sequence}.lock",
-            std::process::id()
-        ));
-        match OpenOptions::new()
-            .read(true)
-            .write(true)
-            .create_new(true)
-            .open(&path)
-        {
-            Ok(file) => return Ok((path, file)),
-            Err(source) if source.kind() == io::ErrorKind::AlreadyExists => {}
-            Err(source) => return Err(TaskPersistenceError::OpenLock { path, source }),
-        }
     }
 }
 
@@ -396,16 +173,6 @@ impl Error for TaskPersistenceError {
             Self::Serialize(source) => Some(source),
         }
     }
-}
-
-#[derive(Debug, Serialize, Deserialize)]
-#[serde(deny_unknown_fields)]
-struct StoredTaskFile {
-    version: u32,
-    #[serde(default)]
-    todo: Vec<String>,
-    #[serde(default)]
-    done: Vec<String>,
 }
 
 #[cfg(test)]
