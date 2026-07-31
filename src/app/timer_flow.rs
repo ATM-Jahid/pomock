@@ -20,6 +20,9 @@ impl App {
             self.completion_audio_active = false;
             let before = self.timer.state();
             self.timer.primary_action();
+            // A tick advances at most one transition. Any time beyond the
+            // countdown belongs to neither the newly started session nor a
+            // later transition.
             return Self::autostart_transition_outcome(before, self.timer.state());
         }
 
@@ -44,6 +47,7 @@ impl App {
                 remaining: AUTOSTART_DELAY,
             });
         }
+        // Do not carry excess elapsed time into the new autostart countdown.
         self.completion_audio_active = true;
         AppOutcome::SessionCompleted(completed)
     }

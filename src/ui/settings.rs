@@ -44,15 +44,6 @@ pub(super) fn settings_parts(area: Rect, footer_text: &str) -> (Rect, Rect) {
     (chunks[0], chunks[2])
 }
 
-#[cfg(test)]
-pub(super) fn settings_offset(selection: usize, visible_rows: usize) -> usize {
-    if visible_rows == 0 {
-        0
-    } else {
-        selection.saturating_add(1).saturating_sub(visible_rows)
-    }
-}
-
 pub(super) fn settings_group_start(group_index: usize) -> usize {
     SettingField::GROUPS[..group_index]
         .iter()

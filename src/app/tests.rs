@@ -324,6 +324,44 @@ fn configured_break_autostart_counts_down_and_starts_the_recommendation() {
 }
 
 #[test]
+fn oversized_tick_does_not_reduce_new_autostart_countdown() {
+    let mut app = autostart_app(true, false);
+    let _ = app.dispatch(Action::PrimaryAction);
+
+    assert_eq!(
+        app.tick(Duration::from_secs(25 * 60 + 30)),
+        AppOutcome::SessionCompleted(SessionKind::Focus)
+    );
+    assert_eq!(app.pending_autostart(), Some((SessionKind::ShortBreak, 5)));
+    assert_eq!(
+        app.timer().state(),
+        TimerState::Ready(SessionKind::ShortBreak)
+    );
+    assert_eq!(app.timer().remaining(), Duration::from_secs(5 * 60));
+}
+
+#[test]
+fn oversized_autostart_tick_does_not_reduce_new_session() {
+    let mut app = autostart_app(true, false);
+    let _ = app.dispatch(Action::PrimaryAction);
+    let _ = app.tick(Duration::from_secs(25 * 60));
+
+    assert_eq!(
+        app.tick(Duration::from_secs(30)),
+        AppOutcome::TimerEffects {
+            focus_audio: None,
+            stop_completion_audio: true,
+        }
+    );
+    assert_eq!(app.pending_autostart(), None);
+    assert_eq!(
+        app.timer().state(),
+        TimerState::Running(SessionKind::ShortBreak)
+    );
+    assert_eq!(app.timer().remaining(), Duration::from_secs(5 * 60));
+}
+
+#[test]
 fn focus_autostart_is_independent_from_break_autostart() {
     let mut app = autostart_app(false, true);
     double_click_session(&mut app, SessionKind::ShortBreak, Instant::now());

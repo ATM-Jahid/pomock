@@ -22,8 +22,8 @@ use super::footer::{
 };
 use super::layout::{C_H_SUG, ClockFace, WorkspaceMode, clock_geometry};
 use super::settings::{
-    setting_row, settings_field_row, settings_footer, settings_group_start, settings_offset,
-    settings_parts, settings_scroll_anchor, settings_visual_row, theme_role_label,
+    setting_row, settings_field_row, settings_footer, settings_group_start, settings_parts,
+    settings_scroll_anchor, settings_visual_row, theme_role_label,
 };
 use super::task_lists::{task_label, task_row_at};
 use super::theme::session_button_style;
@@ -908,22 +908,34 @@ fn settings_hit_testing_uses_the_visible_scrolled_rows() {
         let _ = app.dispatch(Action::SettingsMove(SettingsMoveDirection::Down));
     }
     let area = Rect::new(0, 0, 80, 24);
+    let theme = Theme::from(&ThemeConfig::default());
+    let keys = KeysConfig::default();
+    let mut terminal = Terminal::new(TestBackend::new(area.width, area.height)).unwrap();
+
+    let rendered = terminal
+        .draw(|frame| {
+            draw(frame, &mut app, theme, &keys);
+        })
+        .unwrap();
+
     let footer = settings_footer(app.settings().unwrap());
-    let (list, _) = settings_parts(area, &footer);
-    let selection = SettingField::ALL.len() - 1;
-    let selected_row = settings_visual_row(selection);
-    let first_visible = settings_offset(selected_row, usize::from(list.height));
-    let row = (first_visible..)
+    let (list, _) = settings_parts(rendered.area, &footer);
+    let rendered_offset = app.settings().unwrap().offset();
+    assert!(rendered_offset > 0);
+
+    let row = (rendered_offset..rendered_offset + usize::from(list.height))
         .find(|row| settings_field_row(*row).is_some())
         .unwrap();
     let expected = settings_field_row(row).unwrap();
-    app.set_settings_offset(first_visible);
-    let layout = app_layout(area, &app);
+    let layout = app_layout(rendered.area, &app);
 
     assert_eq!(
         click_target(
             &layout,
-            (list.x, list.y + u16::try_from(row - first_visible).unwrap()),
+            (
+                list.x,
+                list.y + u16::try_from(row - rendered_offset).unwrap()
+            ),
             &app
         ),
         ClickTarget::SettingsRow(expected)
