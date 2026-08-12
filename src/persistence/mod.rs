@@ -9,7 +9,7 @@ use directories::ProjectDirs;
 mod tasks;
 mod workspace;
 
-pub use workspace::WorkspaceInstance;
+pub use workspace::WorkspaceLock;
 
 const TASKS_FILE_NAME: &str = "tasks.toml";
 const TASK_FILE_VERSION: u32 = 1;
@@ -87,6 +87,9 @@ pub enum TaskPersistenceError {
         path: PathBuf,
         source: io::Error,
     },
+    WorkspaceAlreadyOpen {
+        path: PathBuf,
+    },
     Backup {
         path: PathBuf,
         source: io::Error,
@@ -149,6 +152,11 @@ impl fmt::Display for TaskPersistenceError {
                 "could not lock workspace instance file {}: {source}",
                 path.display()
             ),
+            Self::WorkspaceAlreadyOpen { path } => write!(
+                formatter,
+                "workspace at {} is already open in another pomock process",
+                path.parent().unwrap_or(path).display()
+            ),
             Self::Backup { path, source } => write!(
                 formatter,
                 "could not back up task data file {}: {source}",
@@ -171,7 +179,8 @@ impl Error for TaskPersistenceError {
         match self {
             Self::DirectoryUnavailable
             | Self::Validation { .. }
-            | Self::UnsupportedVersion { .. } => None,
+            | Self::UnsupportedVersion { .. }
+            | Self::WorkspaceAlreadyOpen { .. } => None,
             Self::Read { source, .. }
             | Self::CreateDirectory { source, .. }
             | Self::ReadDirectory { source, .. }
@@ -188,8 +197,10 @@ impl Error for TaskPersistenceError {
 #[cfg(test)]
 mod tests {
     use std::{
-        fs,
+        env, fs,
+        io::{BufRead, BufReader, Write},
         path::PathBuf,
+        process::{Command, Stdio},
         sync::atomic::{AtomicU64, Ordering},
     };
 
@@ -230,35 +241,75 @@ mod tests {
     }
 
     #[test]
-    fn instance_registration_detects_every_live_instance() {
+    fn workspace_lock_excludes_a_second_writer_until_released() {
         let path = temp_path("instance-detection/tasks.toml");
         let store = TaskStore::at(&path);
 
-        let first = store.register_instance().unwrap();
-        assert!(!first.already_open());
-        let second = store.register_instance().unwrap();
-        assert!(second.already_open());
+        let first = store.lock_workspace().unwrap();
+        assert!(matches!(
+            store.lock_workspace(),
+            Err(TaskPersistenceError::WorkspaceAlreadyOpen { .. })
+        ));
         drop(first);
-        let third = store.register_instance().unwrap();
-        assert!(third.already_open());
-        drop(second);
-        drop(third);
 
-        let after_all_closed = store.register_instance().unwrap();
-        assert!(!after_all_closed.already_open());
-        drop(after_all_closed);
+        let after_release = store.lock_workspace().unwrap();
+        drop(after_release);
         fs::remove_dir_all(path.parent().unwrap()).unwrap();
     }
 
     #[test]
-    fn different_workspaces_do_not_report_each_other() {
+    fn workspace_lock_excludes_a_writer_in_a_separate_process() {
+        let path = temp_path("separate-process/tasks.toml");
+        let mut child = Command::new(env::current_exe().unwrap())
+            .args([
+                "--exact",
+                "persistence::tests::workspace_lock_subprocess_helper",
+                "--nocapture",
+            ])
+            .env("POMOCK_TEST_WORKSPACE_LOCK_PATH", &path)
+            .stdin(Stdio::piped())
+            .stdout(Stdio::piped())
+            .spawn()
+            .unwrap();
+
+        let mut output = BufReader::new(child.stdout.take().unwrap());
+        let mut line = String::new();
+        loop {
+            line.clear();
+            assert_ne!(output.read_line(&mut line).unwrap(), 0);
+            if line.contains("WORKSPACE_LOCKED") {
+                break;
+            }
+        }
+
+        assert!(matches!(
+            TaskStore::at(&path).lock_workspace(),
+            Err(TaskPersistenceError::WorkspaceAlreadyOpen { .. })
+        ));
+
+        writeln!(child.stdin.take().unwrap()).unwrap();
+        assert!(child.wait().unwrap().success());
+        fs::remove_dir_all(path.parent().unwrap()).unwrap();
+    }
+
+    #[test]
+    fn workspace_lock_subprocess_helper() {
+        let Some(path) = env::var_os("POMOCK_TEST_WORKSPACE_LOCK_PATH") else {
+            return;
+        };
+        let _lock = TaskStore::at(path).lock_workspace().unwrap();
+        println!("WORKSPACE_LOCKED");
+        std::io::stdout().flush().unwrap();
+        let mut release = String::new();
+        std::io::stdin().read_line(&mut release).unwrap();
+    }
+
+    #[test]
+    fn different_workspaces_can_be_locked_together() {
         let first_path = temp_path("separate-one/tasks.toml");
         let second_path = temp_path("separate-two/tasks.toml");
-        let first = TaskStore::at(&first_path).register_instance().unwrap();
-        let second = TaskStore::at(&second_path).register_instance().unwrap();
-
-        assert!(!first.already_open());
-        assert!(!second.already_open());
+        let first = TaskStore::at(&first_path).lock_workspace().unwrap();
+        let second = TaskStore::at(&second_path).lock_workspace().unwrap();
         drop(first);
         drop(second);
         fs::remove_dir_all(first_path.parent().unwrap()).unwrap();

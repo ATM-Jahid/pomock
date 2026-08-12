@@ -10,7 +10,7 @@ use pomock::{
 
 pub(crate) fn handle_outcome(
     outcome: AppOutcome,
-    app: &App,
+    app: &mut App,
     config: &mut Config,
     task_store: &mut Option<TaskStore>,
     workspace_store: &TaskStore,
@@ -64,8 +64,10 @@ pub(crate) fn handle_outcome(
             Ok(false)
         }
         AppOutcome::TasksChanged => {
-            if let Some(task_store) = task_store.as_ref() {
-                task_store.save(&app.task_state())?;
+            if let Some(task_store) = task_store.as_ref()
+                && task_store.save(&app.task_state()).is_err()
+            {
+                app.task_save_failed();
             }
             Ok(false)
         }

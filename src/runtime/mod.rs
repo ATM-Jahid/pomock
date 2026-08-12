@@ -77,7 +77,7 @@ pub(crate) fn run_app(
         let outcome = advance_timer(&mut app, &mut last_tick, now);
         if effects::handle_outcome(
             outcome,
-            &app,
+            &mut app,
             &mut config,
             &mut task_store,
             &workspace_store,
@@ -104,7 +104,7 @@ pub(crate) fn run_app(
             let outcome = advance_timer(&mut app, &mut last_tick, now);
             if effects::handle_outcome(
                 outcome,
-                &app,
+                &mut app,
                 &mut config,
                 &mut task_store,
                 &workspace_store,
@@ -116,6 +116,7 @@ pub(crate) fn run_app(
 
             match event {
                 Event::Key(key) if should_handle_key_event(key.kind) => {
+                    app.clear_task_save_message();
                     if let Some(action) = map_key_event(
                         key,
                         app.edit_mode(),
@@ -128,7 +129,7 @@ pub(crate) fn run_app(
                         let outcome = app.dispatch(action);
                         if effects::handle_outcome(
                             outcome,
-                            &app,
+                            &mut app,
                             &mut config,
                             &mut task_store,
                             &workspace_store,
@@ -139,18 +140,23 @@ pub(crate) fn run_app(
                         }
                     }
                 }
-                Event::Mouse(mouse) if app.edit_mode() == EditMode::Normal => {
-                    let outcome = handle_mouse(&mut app, mouse, &frame_geometry, now);
-                    if effects::handle_outcome(
-                        outcome,
-                        &app,
-                        &mut config,
-                        &mut task_store,
-                        &workspace_store,
-                        &mut notifier,
-                        &mut sound_player,
-                    )? {
-                        break;
+                Event::Mouse(mouse) => {
+                    if matches!(mouse.kind, MouseEventKind::Down(_)) {
+                        app.clear_task_save_message();
+                    }
+                    if app.edit_mode() == EditMode::Normal {
+                        let outcome = handle_mouse(&mut app, mouse, &frame_geometry, now);
+                        if effects::handle_outcome(
+                            outcome,
+                            &mut app,
+                            &mut config,
+                            &mut task_store,
+                            &workspace_store,
+                            &mut notifier,
+                            &mut sound_player,
+                        )? {
+                            break;
+                        }
                     }
                 }
                 _ => {}

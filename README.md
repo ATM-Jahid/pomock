@@ -45,7 +45,7 @@ cargo run -- --wspace foo
 ```
 
 Named workspaces are created on first use.
-Opening another instance on the same workspace displays a warning.
+Only one `pomock` instance can connect to a workspace at a time.
 
 ## Controls
 

@@ -117,6 +117,8 @@ pub struct App {
     completion_audio_active: bool,
     show_task_numbers: bool,
     settings: Option<SettingsOverlay>,
+    task_state_before_action: TaskState,
+    task_save_failed: bool,
 }
 
 impl App {
@@ -133,6 +135,7 @@ impl App {
     /// Creates an application using validated configuration and durable tasks.
     pub fn from_config_and_tasks(config: &Config, task_state: TaskState) -> Self {
         let timer = config.timer();
+        let task_state_before_action = task_state.clone();
         Self {
             config: config.clone(),
             timer: PomodoroTimer::new(
@@ -156,6 +159,8 @@ impl App {
             completion_audio_active: false,
             show_task_numbers: config.tasks().show_numbers(),
             settings: None,
+            task_state_before_action,
+            task_save_failed: false,
         }
     }
 
@@ -183,6 +188,8 @@ impl App {
 
     /// Applies a semantic action without depending on its physical key mapping.
     pub fn dispatch(&mut self, action: Action) -> AppOutcome {
+        self.clear_task_save_message();
+        self.task_state_before_action = self.task_state();
         let prior_timer_state = self.timer.state();
         if self.pending_confirmation.is_some() {
             let outcome = match action {
@@ -352,6 +359,24 @@ impl App {
     /// Reports whether a confirmation owns keyboard and mouse input.
     pub fn is_confirmation_open(&self) -> bool {
         self.pending_confirmation.is_some()
+    }
+
+    /// Records that the current task state has not been persisted.
+    pub fn task_save_failed(&mut self) {
+        let state = self.task_state_before_action.clone();
+        self.tasks = TaskList::from_descriptions(state.todo, state.done);
+        self.clamp_selections();
+        self.task_save_failed = true;
+    }
+
+    /// Reports whether the task-save failure message should be shown.
+    pub fn show_task_save_failure(&self) -> bool {
+        self.task_save_failed
+    }
+
+    /// Clears the transient task-save failure message.
+    pub fn clear_task_save_message(&mut self) {
+        self.task_save_failed = false;
     }
 
     pub fn is_settings_open(&self) -> bool {

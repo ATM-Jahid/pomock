@@ -156,6 +156,10 @@ pub(super) fn footer_text_for_focus(app: &App, keys: &KeysConfig, focus: UiFocus
         return format!("{prompt}  [y/Enter] confirm  [n/Esc] cancel");
     }
 
+    if app.show_task_save_failure() {
+        return "Failed to save tasks.".to_string();
+    }
+
     if let Some((session, seconds)) = app.pending_autostart() {
         return format!(
             "Next: {} in {seconds}s  [{}] start now  [{}] cycle/cancel  [Esc] cancel",

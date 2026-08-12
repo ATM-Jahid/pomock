@@ -756,6 +756,17 @@ fn quit_confirmation_describes_progress_loss() {
 }
 
 #[test]
+fn failed_task_save_footer_shows_the_error() {
+    let mut app = App::new();
+    app.task_save_failed();
+
+    assert_eq!(
+        footer_text(&app, &KeysConfig::default()),
+        "Failed to save tasks."
+    );
+}
+
+#[test]
 fn session_change_confirmation_distinguishes_select_from_start() {
     assert_eq!(
         confirmation_prompt(ConfirmationOperation::TimerChange(

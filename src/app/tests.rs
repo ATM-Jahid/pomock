@@ -149,6 +149,19 @@ fn dispatch_reports_only_boundary_relevant_outcomes() {
 }
 
 #[test]
+fn user_interactions_clear_the_task_save_failure_message() {
+    let mut app = App::new();
+    app.task_save_failed();
+
+    let _ = app.dispatch(Action::NavigateFocus(Direction::Down));
+    assert!(!app.show_task_save_failure());
+
+    app.task_save_failed();
+    let _ = app.handle_click_target(ClickTarget::Outside, Instant::now());
+    assert!(!app.show_task_save_failure());
+}
+
+#[test]
 fn focus_audio_lifecycle_follows_timer_transitions_and_confirmations() {
     let mut app = App::new();
 

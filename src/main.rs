@@ -1,7 +1,4 @@
-use std::{
-    env,
-    io::{self, BufRead, Write},
-};
+use std::{env, io};
 
 use pomock::persistence::TaskStore;
 
@@ -20,12 +17,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         return Ok(());
     };
     let workspace_store = TaskStore::user_in_workspace(workspace.as_deref())?;
-    let workspace_instance = workspace_store.register_instance()?;
-    if workspace_instance.already_open()
-        && !confirm_shared_workspace(workspace.as_deref(), &mut stdin, &mut stdout)?
-    {
-        return Ok(());
-    }
+    let _workspace_lock = workspace_store.lock_workspace()?;
     let Some(config) = load_config_for_startup(&mut stdin, &mut stdout)? else {
         return Ok(());
     };
@@ -45,32 +37,6 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let restore_result = session.restore();
 
     Ok(combine_run_and_restore_results(run_result, restore_result)?)
-}
-
-fn confirm_shared_workspace(
-    workspace: Option<&str>,
-    reader: &mut impl BufRead,
-    writer: &mut impl Write,
-) -> io::Result<bool> {
-    let label = workspace.unwrap_or("default");
-    writeln!(
-        writer,
-        "Warning: workspace {label:?} is already open. Multiple instances can overwrite each other's task changes."
-    )?;
-
-    loop {
-        write!(writer, "Open it anyway? [y/N]: ")?;
-        writer.flush()?;
-        let mut choice = String::new();
-        if reader.read_line(&mut choice)? == 0 {
-            return Ok(false);
-        }
-        match choice.trim().to_ascii_lowercase().as_str() {
-            "y" | "yes" => return Ok(true),
-            "" | "n" | "no" => return Ok(false),
-            _ => writeln!(writer, "Enter y to continue or n to quit.")?,
-        }
-    }
 }
 
 #[cfg(test)]

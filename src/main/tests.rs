@@ -223,24 +223,6 @@ fn workspace_argument_rejects_missing_unsafe_and_duplicate_names() {
 }
 
 #[test]
-fn shared_workspace_warning_requires_explicit_acceptance() {
-    let mut accepted_output = Vec::new();
-    assert!(
-        confirm_shared_workspace(
-            Some("client"),
-            &mut Cursor::new(b"maybe\nyes\n"),
-            &mut accepted_output,
-        )
-        .unwrap()
-    );
-    let accepted_output = String::from_utf8(accepted_output).unwrap();
-    assert!(accepted_output.contains("workspace \"client\" is already open"));
-    assert!(accepted_output.contains("Enter y to continue or n to quit."));
-
-    assert!(!confirm_shared_workspace(None, &mut Cursor::new(b"\n"), &mut Vec::new(),).unwrap());
-}
-
-#[test]
 fn startup_creates_missing_config_and_task_files() {
     let config_path = temp_path("missing-startup/config.toml");
     let tasks_path = temp_path("missing-startup/tasks.toml");
@@ -528,7 +510,7 @@ fn task_change_outcomes_are_saved_at_the_boundary() {
     assert!(
         !handle_outcome(
             outcome,
-            &app,
+            &mut app,
             &mut config,
             &mut task_store,
             &store,
@@ -545,6 +527,63 @@ fn task_change_outcomes_are_saved_at_the_boundary() {
     );
 
     fs::remove_file(path).unwrap();
+}
+
+#[test]
+fn failed_task_save_removes_the_change_and_shows_a_message() {
+    let parent = temp_path("failed-task-save-parent");
+    fs::write(&parent, "not a directory").unwrap();
+    let store = TaskStore::at(parent.join("tasks.toml"));
+    let mut app = App::new();
+    let _ = app.dispatch(Action::NavigateFocus(Direction::Down));
+    let _ = app.dispatch(Action::BeginAdd);
+    for character in "Keep me".chars() {
+        let _ = app.dispatch(Action::PushInput(character));
+    }
+    let outcome = app.dispatch(Action::SubmitEdit);
+    let mut config = Config::default();
+    let mut task_store = Some(store.clone());
+    let mut notifier = RecordingNotifier::default();
+    let mut sound_player = RecordingSoundPlayer::default();
+
+    assert!(
+        !handle_outcome(
+            outcome,
+            &mut app,
+            &mut config,
+            &mut task_store,
+            &store,
+            &mut notifier,
+            &mut sound_player,
+        )
+        .unwrap()
+    );
+    assert!(app.show_task_save_failure());
+    assert!(!app.is_confirmation_open());
+    assert_eq!(app.task_state(), TaskState::default());
+
+    fs::remove_file(&parent).unwrap();
+    fs::create_dir(&parent).unwrap();
+    let _ = app.dispatch(Action::BeginAdd);
+    for character in "Save me too".chars() {
+        let _ = app.dispatch(Action::PushInput(character));
+    }
+    let next_change = app.dispatch(Action::SubmitEdit);
+    assert!(
+        !handle_outcome(
+            next_change,
+            &mut app,
+            &mut config,
+            &mut task_store,
+            &store,
+            &mut notifier,
+            &mut sound_player,
+        )
+        .unwrap()
+    );
+    assert!(!app.show_task_save_failure());
+    assert_eq!(store.load().unwrap(), app.task_state());
+    fs::remove_dir_all(parent).unwrap();
 }
 
 #[test]
@@ -588,7 +627,7 @@ fn disabled_task_persistence_starts_empty_and_does_not_save_changes() {
     assert!(
         !handle_outcome(
             outcome,
-            &app,
+            &mut app,
             &mut config,
             &mut disabled_store,
             &store,
@@ -713,7 +752,7 @@ fn unrelated_settings_changes_do_not_rewrite_tasks() {
 
 #[test]
 fn completion_outcome_routes_notification_and_audio_effects() {
-    let app = App::new();
+    let mut app = App::new();
     let sound_file = temp_path("custom-completion.mp3");
     let mut config = Config::default()
         .with_sound(pomock::config::SoundConfig::default().with_completion(
@@ -728,7 +767,7 @@ fn completion_outcome_routes_notification_and_audio_effects() {
     assert!(
         !handle_outcome(
             AppOutcome::SessionCompleted(pomock::SessionKind::Focus),
-            &app,
+            &mut app,
             &mut config,
             &mut task_store,
             &workspace_store,
@@ -744,7 +783,7 @@ fn completion_outcome_routes_notification_and_audio_effects() {
 
 #[test]
 fn disabled_notifications_do_not_suppress_completion_audio() {
-    let app = App::new();
+    let mut app = App::new();
     let sound_file = temp_path("completion.wav");
     let mut config = Config::default()
         .with_notification(pomock::config::NotificationConfig::new(false))
@@ -759,7 +798,7 @@ fn disabled_notifications_do_not_suppress_completion_audio() {
 
     handle_outcome(
         AppOutcome::SessionCompleted(pomock::SessionKind::ShortBreak),
-        &app,
+        &mut app,
         &mut config,
         &mut task_store,
         &workspace_store,
@@ -781,7 +820,7 @@ fn combined_timer_effect_stops_completion_before_starting_focus_audio() {
             pomock::config::FocusSoundConfig::new(true, Some(focus_file.clone())),
         ))
         .unwrap();
-    let app = App::from_config(&config);
+    let mut app = App::from_config(&config);
     let mut task_store = None;
     let workspace_store = TaskStore::at(temp_path("timer-effects-workspace/tasks.toml"));
     let mut notifier = RecordingNotifier::default();
@@ -792,7 +831,7 @@ fn combined_timer_effect_stops_completion_before_starting_focus_audio() {
             focus_audio: Some(FocusAudioAction::StartOrResume),
             stop_completion_audio: true,
         },
-        &app,
+        &mut app,
         &mut config,
         &mut task_store,
         &workspace_store,
@@ -807,7 +846,7 @@ fn combined_timer_effect_stops_completion_before_starting_focus_audio() {
 
 #[test]
 fn focus_audio_outcomes_route_only_configured_starts_and_always_cleanup() {
-    let app = App::new();
+    let mut app = App::new();
     let focus_file = temp_path("focus.ogg");
     let mut config = Config::default()
         .with_sound(pomock::config::SoundConfig::default().with_focus(
@@ -826,7 +865,7 @@ fn focus_audio_outcomes_route_only_configured_starts_and_always_cleanup() {
     ] {
         handle_outcome(
             outcome,
-            &app,
+            &mut app,
             &mut config,
             &mut task_store,
             &workspace_store,
@@ -842,7 +881,7 @@ fn focus_audio_outcomes_route_only_configured_starts_and_always_cleanup() {
     let mut disabled_config = Config::default();
     handle_outcome(
         AppOutcome::FocusAudio(FocusAudioAction::StartOrResume),
-        &app,
+        &mut app,
         &mut disabled_config,
         &mut task_store,
         &workspace_store,
@@ -855,7 +894,7 @@ fn focus_audio_outcomes_route_only_configured_starts_and_always_cleanup() {
 
 #[test]
 fn disabled_sound_options_keep_configured_files_silent() {
-    let app = App::new();
+    let mut app = App::new();
     let mut config = Config::default()
         .with_sound(
             pomock::config::SoundConfig::default()
@@ -880,7 +919,7 @@ fn disabled_sound_options_keep_configured_files_silent() {
     ] {
         handle_outcome(
             outcome,
-            &app,
+            &mut app,
             &mut config,
             &mut task_store,
             &workspace_store,

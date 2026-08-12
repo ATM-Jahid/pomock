@@ -199,7 +199,7 @@ impl App {
         }
     }
 
-    fn clamp_selections(&mut self) {
+    pub(super) fn clamp_selections(&mut self) {
         let pending_len = self.tasks.pending().count();
         let completed_len = self.tasks.completed().count();
         self.todo_selection = self.todo_selection.min(pending_len.saturating_sub(1));
