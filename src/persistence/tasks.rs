@@ -127,6 +127,20 @@ impl TaskStore {
 
     /// Saves task state, creating the parent application data directory.
     pub fn save(&self, state: &TaskState) -> Result<(), TaskPersistenceError> {
+        let contents = Self::serialize(state)?;
+        self.write(&contents)
+    }
+
+    fn serialize(state: &TaskState) -> Result<String, TaskPersistenceError> {
+        let stored = StoredTaskFile {
+            version: TASK_FILE_VERSION,
+            todo: state.todo().map(str::to_owned).collect(),
+            done: state.done().map(str::to_owned).collect(),
+        };
+        toml::to_string_pretty(&stored).map_err(TaskPersistenceError::Serialize)
+    }
+
+    fn write(&self, contents: &str) -> Result<(), TaskPersistenceError> {
         if let Some(parent) = self.path.parent() {
             fs::create_dir_all(parent).map_err(|source| TaskPersistenceError::CreateDirectory {
                 path: parent.to_owned(),
@@ -134,12 +148,6 @@ impl TaskStore {
             })?;
         }
 
-        let stored = StoredTaskFile {
-            version: TASK_FILE_VERSION,
-            todo: state.todo().map(str::to_owned).collect(),
-            done: state.done().map(str::to_owned).collect(),
-        };
-        let contents = toml::to_string_pretty(&stored).map_err(TaskPersistenceError::Serialize)?;
         atomic_write::write(&self.path, contents.as_bytes()).map_err(|source| {
             TaskPersistenceError::Write {
                 path: self.path.clone(),
@@ -156,7 +164,9 @@ impl TaskStore {
         &self,
         state: &TaskState,
     ) -> Result<Option<PathBuf>, TaskPersistenceError> {
+        let replacement = Self::serialize(state)?;
         let backup = match fs::read(&self.path) {
+            Ok(contents) if contents == replacement.as_bytes() => return Ok(None),
             Ok(contents) => Some(atomic_write::backup(&self.path, &contents).map_err(
                 |source| TaskPersistenceError::Backup {
                     path: self.path.clone(),
@@ -172,7 +182,7 @@ impl TaskStore {
             }
         };
 
-        self.save(state)?;
+        self.write(&replacement)?;
         Ok(backup)
     }
 

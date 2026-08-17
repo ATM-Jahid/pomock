@@ -1,6 +1,9 @@
-use std::path::{Path, PathBuf};
+use std::{
+    path::{Path, PathBuf},
+    time::Duration,
+};
 
-use crate::app::{SettingsAdjustmentDirection, SettingsMoveDirection};
+use crate::app::{SettingsAdjustmentDirection, SettingsMoveDirection, WRITE_ERROR_DISPLAY_TIME};
 use crate::config::{
     CompletionSoundConfig, Config, ConfigKey, ConfigValidationError, FocusSoundConfig,
     NotificationConfig, TasksConfig, ThemeRole, TimerConfig, format_duration, parse_duration,
@@ -21,6 +24,7 @@ pub(crate) struct SettingsOverlay {
     input: Option<String>,
     capturing_key: bool,
     error: Option<String>,
+    write_error: Option<(String, Duration)>,
 }
 
 impl SettingsOverlay {
@@ -32,6 +36,7 @@ impl SettingsOverlay {
             input: None,
             capturing_key: false,
             error: None,
+            write_error: None,
         }
     }
 
@@ -65,6 +70,26 @@ impl SettingsOverlay {
 
     pub(crate) fn error(&self) -> Option<&str> {
         self.error.as_deref()
+    }
+
+    pub(crate) fn write_error(&self) -> Option<&str> {
+        self.write_error
+            .as_ref()
+            .map(|(message, _)| message.as_str())
+    }
+
+    pub(crate) fn report_write_error(&mut self, message: String) {
+        self.write_error = Some((message, WRITE_ERROR_DISPLAY_TIME));
+    }
+
+    pub(crate) fn elapse_write_error(&mut self, elapsed: Duration) {
+        let Some((_, remaining)) = &mut self.write_error else {
+            return;
+        };
+        *remaining = remaining.saturating_sub(elapsed);
+        if remaining.is_zero() {
+            self.write_error = None;
+        }
     }
 
     pub(crate) fn select(&mut self, selection: usize) {

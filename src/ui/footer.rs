@@ -156,8 +156,10 @@ pub(super) fn footer_text_for_focus(app: &App, keys: &KeysConfig, focus: UiFocus
         return format!("{prompt}  [y/Enter] confirm  [n/Esc] cancel");
     }
 
-    if app.show_task_save_failure() {
-        return "Failed to save tasks.".to_string();
+    match app.edit_mode() {
+        EditMode::Adding => return format!("Add task: {}_", app.input()),
+        EditMode::Editing { .. } => return format!("Edit task: {}_", app.input()),
+        EditMode::Normal => {}
     }
 
     if let Some((session, seconds)) = app.pending_autostart() {
@@ -169,11 +171,11 @@ pub(super) fn footer_text_for_focus(app: &App, keys: &KeysConfig, focus: UiFocus
         );
     }
 
-    match app.edit_mode() {
-        EditMode::Adding => format!("Add task: {}_", app.input()),
-        EditMode::Editing { .. } => format!("Edit task: {}_", app.input()),
-        EditMode::Normal => normal_help_text(keys, focus),
+    if let Some(error) = app.task_write_error() {
+        return error.to_string();
     }
+
+    normal_help_text(keys, focus)
 }
 
 fn normal_help_text(keys: &KeysConfig, focus: UiFocus) -> String {

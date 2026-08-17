@@ -36,7 +36,11 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     );
     let restore_result = session.restore();
 
-    Ok(combine_run_and_restore_results(run_result, restore_result)?)
+    let write_errors = combine_run_and_restore_results(run_result, restore_result)?;
+    for error in write_errors {
+        eprintln!("{error}");
+    }
+    Ok(())
 }
 
 #[cfg(test)]

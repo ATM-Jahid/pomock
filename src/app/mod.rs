@@ -117,8 +117,30 @@ pub struct App {
     completion_audio_active: bool,
     show_task_numbers: bool,
     settings: Option<SettingsOverlay>,
-    task_state_before_action: TaskState,
-    task_save_failed: bool,
+    task_write_error: Option<TransientMessage>,
+    write_error_log: Vec<String>,
+}
+
+pub(crate) const WRITE_ERROR_DISPLAY_TIME: Duration = Duration::from_secs(3);
+
+#[derive(Debug, Clone)]
+struct TransientMessage {
+    text: String,
+    remaining: Duration,
+}
+
+impl TransientMessage {
+    fn new(text: String) -> Self {
+        Self {
+            text,
+            remaining: WRITE_ERROR_DISPLAY_TIME,
+        }
+    }
+
+    fn elapse(&mut self, elapsed: Duration) -> bool {
+        self.remaining = self.remaining.saturating_sub(elapsed);
+        !self.remaining.is_zero()
+    }
 }
 
 impl App {
@@ -135,7 +157,6 @@ impl App {
     /// Creates an application using validated configuration and durable tasks.
     pub fn from_config_and_tasks(config: &Config, task_state: TaskState) -> Self {
         let timer = config.timer();
-        let task_state_before_action = task_state.clone();
         Self {
             config: config.clone(),
             timer: PomodoroTimer::new(
@@ -159,8 +180,8 @@ impl App {
             completion_audio_active: false,
             show_task_numbers: config.tasks().show_numbers(),
             settings: None,
-            task_state_before_action,
-            task_save_failed: false,
+            task_write_error: None,
+            write_error_log: Vec::new(),
         }
     }
 
@@ -188,8 +209,6 @@ impl App {
 
     /// Applies a semantic action without depending on its physical key mapping.
     pub fn dispatch(&mut self, action: Action) -> AppOutcome {
-        self.clear_task_save_message();
-        self.task_state_before_action = self.task_state();
         let prior_timer_state = self.timer.state();
         if self.pending_confirmation.is_some() {
             let outcome = match action {
@@ -361,22 +380,30 @@ impl App {
         self.pending_confirmation.is_some()
     }
 
-    /// Records that the current task state has not been persisted.
-    pub fn task_save_failed(&mut self) {
-        let state = self.task_state_before_action.clone();
-        self.tasks = TaskList::from_descriptions(state.todo, state.done);
-        self.clamp_selections();
-        self.task_save_failed = true;
+    /// Reports a non-fatal task-file write failure to the UI and terminal log.
+    pub fn report_task_write_error(&mut self, message: String, diagnostic: String) {
+        self.task_write_error = Some(TransientMessage::new(message));
+        self.write_error_log.push(diagnostic);
     }
 
-    /// Reports whether the task-save failure message should be shown.
-    pub fn show_task_save_failure(&self) -> bool {
-        self.task_save_failed
+    /// Reports the current task-file write failure while its display time remains.
+    pub fn task_write_error(&self) -> Option<&str> {
+        self.task_write_error
+            .as_ref()
+            .map(|message| message.text.as_str())
     }
 
-    /// Clears the transient task-save failure message.
-    pub fn clear_task_save_message(&mut self) {
-        self.task_save_failed = false;
+    /// Reports a non-fatal config-file write failure in the settings overlay.
+    pub fn report_config_write_error(&mut self, message: String, diagnostic: String) {
+        if let Some(settings) = &mut self.settings {
+            settings.report_write_error(message);
+        }
+        self.write_error_log.push(diagnostic);
+    }
+
+    /// Returns write failures suitable for printing after terminal restoration.
+    pub fn write_error_log(&self) -> &[String] {
+        &self.write_error_log
     }
 
     pub fn is_settings_open(&self) -> bool {

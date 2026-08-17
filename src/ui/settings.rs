@@ -169,6 +169,8 @@ pub(super) fn settings_footer(settings: &crate::settings::SettingsOverlay) -> St
         format!("{prompt}  [Enter] apply  [Esc] cancel")
     } else if settings.is_capturing_key() {
         "Press a key  [Esc] cancel".to_string()
+    } else if let Some(error) = settings.write_error() {
+        error.to_string()
     } else {
         format!("[↑/↓ or j/k] select  [←/→ or h/l] change  [Enter/Space] edit  [{close}/Esc] close")
     }

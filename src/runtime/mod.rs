@@ -20,7 +20,7 @@ mod terminal;
 
 pub(crate) use effects::task_store_for_config;
 #[cfg(test)]
-pub(crate) use effects::{RunError, commit_settings_change, handle_outcome};
+pub(crate) use effects::{FileWriteError, RunError, apply_settings_change, handle_outcome};
 pub(crate) use terminal::{TerminalSession, combine_run_and_restore_results};
 
 pub(crate) fn handle_mouse(
@@ -65,7 +65,7 @@ pub(crate) fn run_app(
     mut task_store: Option<TaskStore>,
     task_state: TaskState,
     workspace_store: TaskStore,
-) -> Result<(), effects::RunError> {
+) -> Result<Vec<String>, effects::RunError> {
     let mut app = App::from_config_and_tasks(&config, task_state);
     let mut notifier = DesktopNotifier;
     let mut sound_player = FileSoundPlayer::default();
@@ -116,7 +116,6 @@ pub(crate) fn run_app(
 
             match event {
                 Event::Key(key) if should_handle_key_event(key.kind) => {
-                    app.clear_task_save_message();
                     if let Some(action) = map_key_event(
                         key,
                         app.edit_mode(),
@@ -141,9 +140,6 @@ pub(crate) fn run_app(
                     }
                 }
                 Event::Mouse(mouse) => {
-                    if matches!(mouse.kind, MouseEventKind::Down(_)) {
-                        app.clear_task_save_message();
-                    }
                     if app.edit_mode() == EditMode::Normal {
                         let outcome = handle_mouse(&mut app, mouse, &frame_geometry, now);
                         if effects::handle_outcome(
@@ -164,5 +160,5 @@ pub(crate) fn run_app(
         }
     }
 
-    Ok(())
+    Ok(app.write_error_log().to_vec())
 }

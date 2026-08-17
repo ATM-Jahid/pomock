@@ -149,16 +149,34 @@ fn dispatch_reports_only_boundary_relevant_outcomes() {
 }
 
 #[test]
-fn user_interactions_clear_the_task_save_failure_message() {
+fn task_write_errors_expire_after_three_seconds() {
     let mut app = App::new();
-    app.task_save_failed();
+    app.report_task_write_error("save failed".to_owned(), "detail".to_owned());
 
-    let _ = app.dispatch(Action::NavigateFocus(Direction::Down));
-    assert!(!app.show_task_save_failure());
+    let _ = app.tick(Duration::from_secs(2));
+    assert_eq!(app.task_write_error(), Some("save failed"));
+    let _ = app.tick(Duration::from_secs(1));
+    assert_eq!(app.task_write_error(), None);
+    assert_eq!(app.write_error_log(), ["detail"]);
+}
 
-    app.task_save_failed();
-    let _ = app.handle_click_target(ClickTarget::Outside, Instant::now());
-    assert!(!app.show_task_save_failure());
+#[test]
+fn config_write_errors_use_the_settings_overlay_and_expire_after_three_seconds() {
+    let mut app = App::new();
+    let _ = app.dispatch(Action::OpenSettings);
+    app.report_config_write_error("config save failed".to_owned(), "detail".to_owned());
+
+    assert_eq!(
+        app.settings().unwrap().write_error(),
+        Some("config save failed")
+    );
+    let _ = app.tick(Duration::from_secs(2));
+    assert_eq!(
+        app.settings().unwrap().write_error(),
+        Some("config save failed")
+    );
+    let _ = app.tick(Duration::from_secs(1));
+    assert_eq!(app.settings().unwrap().write_error(), None);
 }
 
 #[test]

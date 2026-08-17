@@ -21,8 +21,6 @@ pub enum ClickTarget {
 impl App {
     /// Applies a semantic click after the UI boundary performs hit testing.
     pub fn handle_click_target(&mut self, target: ClickTarget, now: Instant) -> AppOutcome {
-        self.clear_task_save_message();
-        self.task_state_before_action = self.task_state();
         let prior_timer_state = self.timer.state();
         if self.edit_mode != EditMode::Normal {
             return AppOutcome::None;

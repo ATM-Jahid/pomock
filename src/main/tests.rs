@@ -1,5 +1,4 @@
 use std::{
-    cell::Cell,
     ffi::OsString,
     fs,
     io::{BufRead, Cursor, Read},
@@ -7,7 +6,9 @@ use std::{
     sync::atomic::{AtomicU64, Ordering},
 };
 
-use super::runtime::{RunError, commit_settings_change, handle_outcome, task_store_for_config};
+use super::runtime::{
+    FileWriteError, RunError, apply_settings_change, handle_outcome, task_store_for_config,
+};
 use super::runtime::{advance_timer, combine_run_and_restore_results, should_handle_key_event};
 use super::startup::{CliError, StartupError, load_config_path_for_startup};
 use super::*;
@@ -530,7 +531,7 @@ fn task_change_outcomes_are_saved_at_the_boundary() {
 }
 
 #[test]
-fn failed_task_save_removes_the_change_and_shows_a_message() {
+fn failed_task_save_reports_an_error_and_allows_a_later_save() {
     let parent = temp_path("failed-task-save-parent");
     fs::write(&parent, "not a directory").unwrap();
     let store = TaskStore::at(parent.join("tasks.toml"));
@@ -558,10 +559,8 @@ fn failed_task_save_removes_the_change_and_shows_a_message() {
         )
         .unwrap()
     );
-    assert!(app.show_task_save_failure());
+    assert!(app.task_write_error().is_some());
     assert!(!app.is_confirmation_open());
-    assert_eq!(app.task_state(), TaskState::default());
-
     fs::remove_file(&parent).unwrap();
     fs::create_dir(&parent).unwrap();
     let _ = app.dispatch(Action::BeginAdd);
@@ -581,7 +580,7 @@ fn failed_task_save_removes_the_change_and_shows_a_message() {
         )
         .unwrap()
     );
-    assert!(!app.show_task_save_failure());
+    assert!(app.task_write_error().is_some());
     assert_eq!(store.load().unwrap(), app.task_state());
     fs::remove_dir_all(parent).unwrap();
 }
@@ -650,7 +649,7 @@ fn enabling_persistence_saves_tasks_before_config() {
     let updated = Config::default();
     let mut task_store = None;
 
-    commit_settings_change(
+    apply_settings_change(
         updated.clone(),
         &state,
         &mut config,
@@ -660,8 +659,7 @@ fn enabling_persistence_saves_tasks_before_config() {
             assert_eq!(TaskStore::at(&path).load().unwrap(), state);
             Ok(())
         },
-    )
-    .unwrap();
+    );
 
     assert_eq!(config, updated);
     assert_eq!(task_store.unwrap().load().unwrap(), state);
@@ -680,15 +678,14 @@ fn enabling_persistence_backs_up_and_replaces_an_existing_task_file() {
     let updated = Config::default();
     let mut task_store = None;
 
-    commit_settings_change(
+    apply_settings_change(
         updated.clone(),
         &state,
         &mut config,
         &mut task_store,
         Some(next_store),
         |_| Ok(()),
-    )
-    .unwrap();
+    );
 
     assert_eq!(config, updated);
     assert_eq!(task_store.unwrap().load().unwrap(), state);
@@ -698,31 +695,54 @@ fn enabling_persistence_backs_up_and_replaces_an_existing_task_file() {
 }
 
 #[test]
-fn failed_task_snapshot_does_not_commit_persistence_setting() {
+fn enabling_persistence_does_not_back_up_unchanged_task_file() {
+    let path = temp_path("enable-persistence-unchanged/tasks.toml");
+    let next_store = TaskStore::at(&path);
+    let state = task_state("Current task");
+    next_store.save(&state).unwrap();
+    let mut config = Config::with_tasks(TimerConfig::default(), TasksConfig::new(false)).unwrap();
+    let updated = Config::default();
+    let mut task_store = None;
+
+    apply_settings_change(
+        updated.clone(),
+        &state,
+        &mut config,
+        &mut task_store,
+        Some(next_store),
+        |_| Ok(()),
+    );
+
+    assert_eq!(config, updated);
+    assert!(backup_paths(&path).is_empty());
+    assert_eq!(task_store.unwrap().load().unwrap(), state);
+    fs::remove_dir_all(path.parent().unwrap()).unwrap();
+}
+
+#[test]
+fn settings_write_failures_are_reported_and_settings_remain_active() {
     let parent = temp_path("enable-persistence-parent-is-file");
     fs::write(&parent, "not a directory").unwrap();
     let next_store = TaskStore::at(parent.join("tasks.toml"));
     let mut config = Config::with_tasks(TimerConfig::default(), TasksConfig::new(false)).unwrap();
-    let original = config.clone();
     let mut task_store = None;
-    let config_saved = Cell::new(false);
+    let updated = Config::default();
 
-    let result = commit_settings_change(
-        Config::default(),
+    let errors = apply_settings_change(
+        updated.clone(),
         &task_state("Unsaved"),
         &mut config,
         &mut task_store,
         Some(next_store),
-        |_| {
-            config_saved.set(true);
-            Ok(())
-        },
+        |_| Err(pomock::config::ConfigError::DirectoryUnavailable),
     );
 
-    assert!(matches!(result, Err(RunError::TaskPersistence(_))));
-    assert!(!config_saved.get());
-    assert_eq!(config, original);
-    assert!(task_store.is_none());
+    assert!(matches!(
+        errors.as_slice(),
+        [FileWriteError::Tasks(_), FileWriteError::Config(_)]
+    ));
+    assert_eq!(config, updated);
+    assert!(task_store.is_some());
     fs::remove_file(parent).unwrap();
 }
 
@@ -736,15 +756,14 @@ fn unrelated_settings_changes_do_not_rewrite_tasks() {
         .with_notification(pomock::config::NotificationConfig::new(false));
     let mut task_store = Some(next_store.clone());
 
-    commit_settings_change(
+    apply_settings_change(
         updated.clone(),
         &task_state("In memory"),
         &mut config,
         &mut task_store,
         Some(next_store),
         |_| Ok(()),
-    )
-    .unwrap();
+    );
 
     assert_eq!(config, updated);
     assert!(!path.exists());
@@ -937,8 +956,8 @@ fn disabled_sound_options_keep_configured_files_silent() {
 fn run_error_is_preserved_when_restoration_succeeds() {
     let run_error = io::Error::new(io::ErrorKind::BrokenPipe, "run failed");
 
-    let error =
-        combine_run_and_restore_results(Err(RunError::Terminal(run_error)), Ok(())).unwrap_err();
+    let error = combine_run_and_restore_results::<()>(Err(RunError::Terminal(run_error)), Ok(()))
+        .unwrap_err();
 
     assert!(matches!(
         error,
@@ -962,9 +981,11 @@ fn simultaneous_run_and_restoration_errors_are_both_reported() {
     let run_error = io::Error::new(io::ErrorKind::BrokenPipe, "run failed");
     let restore_error = io::Error::other("restore failed");
 
-    let error =
-        combine_run_and_restore_results(Err(RunError::Terminal(run_error)), Err(restore_error))
-            .unwrap_err();
+    let error = combine_run_and_restore_results::<()>(
+        Err(RunError::Terminal(run_error)),
+        Err(restore_error),
+    )
+    .unwrap_err();
 
     assert!(matches!(error, RunError::TerminalRestoration { .. }));
     assert_eq!(

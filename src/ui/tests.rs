@@ -9,7 +9,7 @@ use ratatui::{
 
 use crate::{
     app::{Action, ClickTarget, Direction, ScrollTarget, SettingsMoveDirection},
-    config::{KeyAction, ThemeColor, ThemeConfig, ThemeRole},
+    config::{Config, KeyAction, ThemeColor, ThemeConfig, ThemeRole, TimerConfig},
     settings::SettingField,
     timer::SessionKind,
 };
@@ -758,11 +758,49 @@ fn quit_confirmation_describes_progress_loss() {
 #[test]
 fn failed_task_save_footer_shows_the_error() {
     let mut app = App::new();
-    app.task_save_failed();
+    app.report_task_write_error("Could not save tasks.toml.".to_owned(), "detail".to_owned());
 
     assert_eq!(
         footer_text(&app, &KeysConfig::default()),
-        "Failed to save tasks."
+        "Could not save tasks.toml."
+    );
+}
+
+#[test]
+fn active_workflows_take_footer_priority_over_task_write_errors() {
+    let mut adding = App::new();
+    adding.report_task_write_error("save failed".to_owned(), "detail".to_owned());
+    let _ = adding.dispatch(Action::NavigateFocus(Direction::Down));
+    let _ = adding.dispatch(Action::BeginAdd);
+    assert!(footer_text(&adding, &KeysConfig::default()).starts_with("Add task:"));
+
+    let mut confirming = App::new();
+    let _ = confirming.dispatch(Action::PrimaryAction);
+    let _ = confirming.tick(Duration::from_secs(10));
+    confirming.report_task_write_error("save failed".to_owned(), "detail".to_owned());
+    let _ = confirming.dispatch(Action::Quit);
+    assert!(footer_text(&confirming, &KeysConfig::default()).starts_with("Quit and discard"));
+
+    let mut autostart =
+        App::from_config(&Config::new(TimerConfig::default().with_autostart(true, false)).unwrap());
+    let _ = autostart.dispatch(Action::PrimaryAction);
+    let _ = autostart.tick(Duration::from_secs(25 * 60));
+    autostart.report_task_write_error("save failed".to_owned(), "detail".to_owned());
+    assert!(footer_text(&autostart, &KeysConfig::default()).starts_with("Next:"));
+}
+
+#[test]
+fn config_write_errors_use_the_settings_footer() {
+    let mut app = App::new();
+    let _ = app.dispatch(Action::OpenSettings);
+    app.report_config_write_error(
+        "Could not save config.toml.".to_owned(),
+        "detail".to_owned(),
+    );
+
+    assert_eq!(
+        settings_footer(app.settings().unwrap()),
+        "Could not save config.toml."
     );
 }
 

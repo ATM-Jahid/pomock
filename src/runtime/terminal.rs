@@ -112,14 +112,14 @@ fn record_error(first_error: &mut Option<io::Error>, result: io::Result<()>) {
     }
 }
 
-pub(crate) fn combine_run_and_restore_results(
-    run_result: Result<(), RunError>,
+pub(crate) fn combine_run_and_restore_results<T>(
+    run_result: Result<T, RunError>,
     restore_result: io::Result<()>,
-) -> Result<(), RunError> {
+) -> Result<T, RunError> {
     match (run_result, restore_result) {
-        (Ok(()), Ok(())) => Ok(()),
+        (Ok(value), Ok(())) => Ok(value),
         (Err(error), Ok(())) => Err(error),
-        (Ok(()), Err(error)) => Err(RunError::Terminal(error)),
+        (Ok(_), Err(error)) => Err(RunError::Terminal(error)),
         (Err(run), Err(restore)) => Err(RunError::TerminalRestoration {
             run: Box::new(run),
             restore,
