@@ -7,7 +7,7 @@ and [Crossterm](https://github.com/crossterm-rs/crossterm).
 > [!IMPORTANT]
 > `pomock` is in early development.
 
-## Current features
+## ✨ Current features
 
 - Focus, short break, and long break sessions.
 - Editable to-do and done lists.
@@ -18,7 +18,7 @@ and [Crossterm](https://github.com/crossterm-rs/crossterm).
 - An in-app settings overlay for all configurable options.
 - TOML configuration for persistent settings.
 
-## Installation
+## 📦 Installation
 
 `pomock` currently targets Rust 2024 and requires a recent stable Rust toolchain.
 If Rust is not installed, install it with [rustup](https://rustup.rs/).
@@ -47,62 +47,69 @@ cargo run -- --wspace foo
 Named workspaces are created on first use.
 Only one `pomock` instance can connect to a workspace at a time.
 
-## Controls
+## 🎛️ Controls
 
 Controls (keybindings and mouse actions) are contextual to the focused box.
 
 ### Global and box navigation
 
-| Control | Action |
+| Key | Action |
 | --- | --- |
 | `H`, `J`, `K`, `L` | Move focus between the clock, to-do, and done boxes. |
 | `q` | Quit (asks for confirmation if a session is running). |
-| `s` | Open/close the settings overlay. |
+| `s` | Open or close the settings overlay. |
 | `Esc` | Cancel pending autostart. |
 
 ### Clock
 
-| Control | Action |
+| Key | Action |
 | --- | --- |
 | `Space` | Start a ready session, pause or resume an active session. |
 | `c` | Cycle the session through focus, short break, and long break. |
 | `r` | Reset a running or paused session to its full duration. |
-| Double-click the clock | Perform the same action as `Space`. |
-| Click a different session button | Change to that session. |
-| Double-click the active session button | Pause or resume it. |
-| Double-click a different session button | Change to that session and start it. |
+
+| Mouse target | 🖱×1 | 🖱×2 |
+| --- | --- | --- |
+| Clock | — | Perform the same action as `Space`. |
+| Active session button | — | Pause or resume it. |
+| Different session button | Change to that session. | Change to that session and start it. |
 
 ### To-do / Done
 
-| Control | Action |
+| Key | Action |
 | --- | --- |
-| `j` / `k` or Down / Up | Move selection. |
+| `j` / `k` or ↓ / ↑ | Move selection. |
 | `a` | Add a task. |
 | `e` | Edit the selected task. |
 | `x` | Delete the selected task. |
 | `u` / `d` | Move the selected task up or down. |
 | `Space` | Move the selected task to the other list. |
-| Click a visible row | Focus the box and select that row. |
-| Double-click a visible row | Move that task to the other list. |
+
+| Mouse target | 🖱×1 | 🖱×2 |
+| --- | --- | --- |
+| Visible row | Focus the box and select that row. | Move that task to the other list. |
 
 While adding or editing,
-press Enter to submit, or press Esc to cancel.
+press `Enter` to submit, or press `Esc` to cancel.
 Mouse input is ignored until text entry finishes.
 
 ### Settings
 
-| Control | Action |
+| Key | Action |
 | --- | --- |
-| Up / Down or `j` / `k` | Select a setting. |
-| Left / Right or `h` / `l` | Adjust a number, toggle, or color. |
-| Enter or Space | Edit the selected field. Enter also applies an entered value. |
-| The Settings key | Close the overlay if in navigation mode. |
-| Esc | Cancel the current edit or key capture before it is accepted. |
-| Click a visible setting | Select it; double-click to edit or activate it. |
+| `j` / `k` or ↓ / ↑ | Select a setting. |
+| `h` / `l` or ← / → | Adjust a number, toggle, or color. |
+| `Enter` or `Space` | Edit the selected field. `Enter` also applies an entered value. |
+| `s` | Close the overlay if in navigation mode. |
+| `Esc` | Cancel the current edit or key capture before it is accepted. |
+
+| Mouse target | 🖱×1 | 🖱×2 |
+| --- | --- | --- |
+| Visible setting | Select it. | Edit or activate it. |
 
 Every accepted change takes effect and is written immediately to `config.toml`.
 
-## Configuration
+## ⚙️ Configuration
 
 On first run,
 `pomock` uses these defaults without requiring a configuration file:
@@ -204,7 +211,7 @@ enabled = true
 file = "~/Music/focus-ambience.wav"
 ```
 
-## License
+## 📄 License
 
 Copyright (C) 2026 ATM Jahid Hasan<br>
 `pomock` is released under the
