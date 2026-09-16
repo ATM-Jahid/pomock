@@ -184,15 +184,33 @@ fn key_releases_are_ignored_while_presses_and_repeats_are_handled() {
 }
 
 #[test]
-fn workspace_argument_accepts_separate_and_equals_forms() {
+fn version_flags_print_the_package_version() {
+    for flag in ["-v", "--version"] {
+        assert_eq!(
+            CliCommand::parse([OsString::from(flag)]).unwrap(),
+            CliCommand::Version
+        );
+    }
+    let mut output = Vec::new();
+    write_version(&mut output).unwrap();
     assert_eq!(
-        CliCommand::parse([OsString::from("--wspace"), OsString::from("client-one")]).unwrap(),
-        CliCommand::Run {
-            workspace: Some("client-one".to_owned())
-        }
+        String::from_utf8(output).unwrap(),
+        format!("pomock {}\n", env!("CARGO_PKG_VERSION"))
     );
+}
+
+#[test]
+fn workspace_argument_accepts_separate_and_equals_forms() {
+    for flag in ["-w", "--workspace"] {
+        assert_eq!(
+            CliCommand::parse([OsString::from(flag), OsString::from("client-one")]).unwrap(),
+            CliCommand::Run {
+                workspace: Some("client-one".to_owned())
+            }
+        );
+    }
     assert_eq!(
-        CliCommand::parse([OsString::from("--wspace=personal.2026")]).unwrap(),
+        CliCommand::parse([OsString::from("--workspace=personal.2026")]).unwrap(),
         CliCommand::Run {
             workspace: Some("personal.2026".to_owned())
         }
@@ -205,18 +223,21 @@ fn workspace_argument_accepts_separate_and_equals_forms() {
 
 #[test]
 fn workspace_argument_rejects_missing_unsafe_and_duplicate_names() {
-    assert_eq!(
-        CliCommand::parse([OsString::from("--wspace")]).unwrap_err(),
-        CliError::MissingWorkspaceName
-    );
+    for flag in ["-w", "--workspace"] {
+        assert_eq!(
+            CliCommand::parse([OsString::from(flag)]).unwrap_err(),
+            CliError::MissingWorkspaceName
+        );
+    }
     assert!(matches!(
-        CliCommand::parse([OsString::from("--wspace=../shared")]).unwrap_err(),
+        CliCommand::parse([OsString::from("--workspace=../shared")]).unwrap_err(),
         CliError::InvalidWorkspaceName(_)
     ));
     assert_eq!(
         CliCommand::parse([
-            OsString::from("--wspace=one"),
-            OsString::from("--wspace=two")
+            OsString::from("--workspace=one"),
+            OsString::from("-w"),
+            OsString::from("two")
         ])
         .unwrap_err(),
         CliError::DuplicateWorkspace

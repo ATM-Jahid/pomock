@@ -30,26 +30,35 @@ cargo build --release
 sudo install -Dm755 target/release/pomock /usr/local/bin/pomock
 ```
 
+## 🚀 Usage
+
+To run the installed program, use:
+
+```sh
+pomock
+```
+
 To run the program directly from the cloned repo without installing it, use:
 
 ```sh
 cargo run
 ```
 
-To use an independent named task workspace, pass `--wspace`:
+To use an independent named task workspace, pass `--workspace` or `-w`:
 
 ```sh
-pomock --wspace foo
+pomock -w foo
 # OR
-cargo run -- --wspace foo
+cargo run -- -w foo
 ```
 
 Named workspaces are created on first use.
 Only one `pomock` instance can connect to a workspace at a time.
 
-## 🎛️ Controls
+## ⌨️ Controls
 
 Controls (keybindings and mouse actions) are contextual to the focused box.
+The keybindings can be changed using the settings overlay or `config.toml`.
 
 ### Global and box navigation
 
@@ -111,6 +120,8 @@ Every accepted change takes effect and is written immediately to `config.toml`.
 
 ## ⚙️ Configuration
 
+### Default configuration
+
 On first run,
 `pomock` uses these defaults without requiring a configuration file:
 
@@ -165,9 +176,12 @@ todo_highlight = "red"
 done_highlight = "green"
 ```
 
-On first startup, `pomock` creates `pomock/config.toml` with these defaults
-in your platform's standard user configuration directory
-(for example, `$XDG_CONFIG_HOME` or `~/.config` on Linux).
+### TOML locations
+
+`pomock` creates `pomock/config.toml` with defaults
+in the platform's standard user configuration directory
+(for example, `$XDG_CONFIG_HOME` or `~/.config` on Linux)
+if a configuration file does not exist.
 Edit that file to customize the settings (or use the in-app settings overlay).
 
 By default, `pomock` saves task descriptions, order, and completion state
@@ -176,22 +190,29 @@ When task persistence is enabled,
 `tasks.toml` is also created on startup
 and lives under the platform's standard per-user application data directory
 (for example, `$XDG_DATA_HOME/pomock` or `~/.local/share/pomock` on Linux).
-For a named workspace, it lives in the workspace's child directory,
-such as `~/.local/share/pomock/foo/tasks.toml`.
+For a named workspace (e.g. `foo`),
+it lives in a child directory named after the workspace
+(e.g. `~/.local/share/pomock/foo/tasks.toml`).
 
-Each key binding is either a single key or an ordered list of keys;
-the help text only shows the first key.
+### Keybinding values
+
+Each keybinding is either a single key or an ordered list of keys;
+the help text in the footer only shows the first key.
 A key is one printable character or one of
 `space`, `backspace`, `up`, `down`, `left`, and `right`.
 You can prefix a non-character key
 with any combination of `ctrl+`, `alt+`, and `shift+`.
 Note that shifted printable keys
-use the character produced by the terminal (`A` or `?`, for example),
+use the character produced by the terminal (for example, `A` or `?`),
 without a `shift+` prefix.
+
+### Color values
 
 Colors accept `#RRGGBB` values or portable terminal names:
 `black`, `red`, `green`, `yellow`, `blue`, `magenta`, `cyan`, `gray`, `dark_gray`,
 the `light_` variants of red through cyan, and `white`.
+
+### Notification and audio
 
 Native desktop notifications are enabled by default
 and can be toggled with `notification.enabled`.

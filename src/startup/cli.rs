@@ -9,6 +9,7 @@ use std::{
 pub(crate) enum CliCommand {
     Run { workspace: Option<String> },
     Help,
+    Version,
 }
 
 impl CliCommand {
@@ -22,7 +23,8 @@ impl CliCommand {
                 .map_err(|_| CliError::NonUnicodeArgument)?;
             match argument.as_str() {
                 "-h" | "--help" => return Ok(Self::Help),
-                "--wspace" => {
+                "-v" | "--version" => return Ok(Self::Version),
+                "-w" | "--workspace" => {
                     if workspace.is_some() {
                         return Err(CliError::DuplicateWorkspace);
                     }
@@ -33,11 +35,11 @@ impl CliCommand {
                     validate_workspace_name(&name)?;
                     workspace = Some(name);
                 }
-                _ if argument.starts_with("--wspace=") => {
+                _ if argument.starts_with("--workspace=") => {
                     if workspace.is_some() {
                         return Err(CliError::DuplicateWorkspace);
                     }
-                    let name = argument.trim_start_matches("--wspace=");
+                    let name = argument.trim_start_matches("--workspace=");
                     validate_workspace_name(name)?;
                     workspace = Some(name.to_owned());
                 }
@@ -61,8 +63,12 @@ pub(crate) enum CliError {
 impl fmt::Display for CliError {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
-            Self::MissingWorkspaceName => formatter.write_str("--wspace requires a workspace name"),
-            Self::DuplicateWorkspace => formatter.write_str("--wspace may only be specified once"),
+            Self::MissingWorkspaceName => {
+                formatter.write_str("--workspace requires a workspace name")
+            }
+            Self::DuplicateWorkspace => {
+                formatter.write_str("--workspace may only be specified once")
+            }
             Self::InvalidWorkspaceName(name) => write!(
                 formatter,
                 "invalid workspace name {name:?}; use letters, numbers, '.', '-', or '_'"
@@ -93,6 +99,10 @@ fn validate_workspace_name(name: &str) -> Result<(), CliError> {
 pub(crate) fn write_help(writer: &mut impl Write) -> io::Result<()> {
     writeln!(
         writer,
-        "pomock - a Pomodoro timer and task workspace\n\nUsage: pomock [--wspace NAME]\n\nOptions:\n  --wspace NAME  Use or create a named task workspace\n  -h, --help     Show this help"
+        "pomock - a Pomodoro timer and task workspace\n\nUsage: pomock [OPTIONS]\n\nOptions:\n  -w, --workspace NAME  Use or create a named task workspace\n  -h, --help            Show this help\n  -v, --version         Show version"
     )
+}
+
+pub(crate) fn write_version(writer: &mut impl Write) -> io::Result<()> {
+    writeln!(writer, "pomock {}", env!("CARGO_PKG_VERSION"))
 }
