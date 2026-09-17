@@ -1,4 +1,5 @@
-use super::{App, Direction, EditMode, UiFocus};
+use super::{App, Direction, EditMode, TaskState, UiFocus};
+use crate::tasks::TaskList;
 
 impl UiFocus {
     pub(super) fn navigate(self, direction: Direction) -> Self {
@@ -15,13 +16,95 @@ impl UiFocus {
 impl App {
     pub(super) fn focus(&mut self, focus: UiFocus) {
         self.ui_focus = focus;
+        self.task_interaction.remember_focus(focus);
+    }
+
+    pub(super) fn navigate_focus(&mut self, direction: Direction) {
+        self.focus(self.ui_focus.navigate(direction));
+    }
+}
+
+/// Task data and the transient state used to interact with its two lists.
+#[derive(Debug)]
+pub(super) struct TaskInteraction {
+    tasks: TaskList,
+    last_task_focus: UiFocus,
+    todo_selection: usize,
+    done_selection: usize,
+    todo_offset: usize,
+    done_offset: usize,
+    edit_mode: EditMode,
+    input: String,
+}
+
+impl TaskInteraction {
+    pub(super) fn new(state: TaskState) -> Self {
+        Self {
+            tasks: TaskList::from_descriptions(state.todo, state.done),
+            last_task_focus: UiFocus::Todo,
+            todo_selection: 0,
+            done_selection: 0,
+            todo_offset: 0,
+            done_offset: 0,
+            edit_mode: EditMode::Normal,
+            input: String::new(),
+        }
+    }
+
+    pub(super) fn remember_focus(&mut self, focus: UiFocus) {
         if matches!(focus, UiFocus::Todo | UiFocus::Done) {
             self.last_task_focus = focus;
         }
     }
 
-    pub(super) fn navigate_focus(&mut self, direction: Direction) {
-        self.focus(self.ui_focus.navigate(direction));
+    pub(super) fn tasks(&self) -> &TaskList {
+        &self.tasks
+    }
+
+    pub(super) fn snapshot(&self) -> TaskState {
+        TaskState::from_lists(
+            self.tasks
+                .pending()
+                .map(|task| task.description().to_owned())
+                .collect(),
+            self.tasks
+                .completed()
+                .map(|task| task.description().to_owned())
+                .collect(),
+        )
+    }
+
+    pub(super) fn last_task_focus(&self) -> UiFocus {
+        self.last_task_focus
+    }
+
+    pub(super) fn todo_selection(&self) -> usize {
+        self.todo_selection
+    }
+
+    pub(super) fn done_selection(&self) -> usize {
+        self.done_selection
+    }
+
+    pub(super) fn todo_offset(&self) -> usize {
+        self.todo_offset
+    }
+
+    pub(super) fn done_offset(&self) -> usize {
+        self.done_offset
+    }
+
+    pub(super) fn edit_mode(&self) -> EditMode {
+        self.edit_mode
+    }
+
+    pub(super) fn input(&self) -> &str {
+        &self.input
+    }
+
+    pub(super) fn set_offsets(&mut self, todo_offset: usize, done_offset: usize) {
+        self.todo_offset = todo_offset;
+        self.done_offset = done_offset;
     }
 
     pub(super) fn select_todo(&mut self, selection: usize) {
@@ -32,8 +115,8 @@ impl App {
         self.done_selection = selection;
     }
 
-    pub(super) fn begin_add(&mut self) {
-        if !matches!(self.ui_focus, UiFocus::Todo | UiFocus::Done) {
+    pub(super) fn begin_add(&mut self, focus: UiFocus) {
+        if !matches!(focus, UiFocus::Todo | UiFocus::Done) {
             return;
         }
 
@@ -46,19 +129,19 @@ impl App {
         self.edit_mode = EditMode::Normal;
     }
 
-    pub(super) fn submit_edit(&mut self) -> bool {
+    pub(super) fn submit_edit(&mut self, focus: UiFocus) -> bool {
         let description = std::mem::take(&mut self.input);
 
         let changed = match self.edit_mode {
             EditMode::Adding if !description.trim().is_empty() => {
-                if self.ui_focus == UiFocus::Done {
+                if focus == UiFocus::Done {
                     self.tasks.add_completed(description);
                 } else {
                     self.tasks.add(description);
                 }
                 true
             }
-            EditMode::Editing { task_index } => match self.ui_focus {
+            EditMode::Editing { task_index } => match focus {
                 UiFocus::Todo => self.tasks.edit_pending(task_index, description),
                 UiFocus::Done => self.tasks.edit_completed(task_index, description),
                 UiFocus::Clock => false,
@@ -89,8 +172,8 @@ impl App {
         Self::move_selection(&mut self.done_selection, len, direction);
     }
 
-    pub(super) fn move_selected_task(&mut self, direction: Direction) -> bool {
-        match (self.ui_focus, direction) {
+    pub(super) fn move_selected_task(&mut self, focus: UiFocus, direction: Direction) -> bool {
+        match (focus, direction) {
             (UiFocus::Todo, Direction::Up) => {
                 let changed = self.tasks.move_pending_up(self.todo_selection);
                 if changed {
@@ -199,7 +282,7 @@ impl App {
         }
     }
 
-    pub(super) fn clamp_selections(&mut self) {
+    fn clamp_selections(&mut self) {
         let pending_len = self.tasks.pending().count();
         let completed_len = self.tasks.completed().count();
         self.todo_selection = self.todo_selection.min(pending_len.saturating_sub(1));

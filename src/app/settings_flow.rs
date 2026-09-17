@@ -59,7 +59,6 @@ impl App {
                 timer.long_break_interval(),
             );
         }
-        self.show_task_numbers = config.tasks().show_numbers();
         self.config = config.clone();
         AppOutcome::SettingsChanged(Box::new(config))
     }

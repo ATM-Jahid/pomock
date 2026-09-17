@@ -14,6 +14,8 @@ mod settings_flow;
 mod task_flow;
 mod timer_flow;
 
+use task_flow::TaskInteraction;
+
 pub use action::{
     Action, AppOutcome, Direction, FocusAudioAction, ScrollTarget, SettingsAdjustmentDirection,
     SettingsMoveDirection,
@@ -102,20 +104,12 @@ struct PendingAutostart {
 pub struct App {
     config: Config,
     timer: PomodoroTimer,
-    tasks: TaskList,
+    task_interaction: TaskInteraction,
     ui_focus: UiFocus,
-    last_task_focus: UiFocus,
-    todo_selection: usize,
-    done_selection: usize,
-    todo_offset: usize,
-    done_offset: usize,
-    edit_mode: EditMode,
-    input: String,
     last_click: Option<(ClickTarget, Instant)>,
     pending_confirmation: Option<PendingConfirmation>,
     pending_autostart: Option<PendingAutostart>,
     completion_audio_active: bool,
-    show_task_numbers: bool,
     settings: Option<SettingsOverlay>,
     task_write_error: Option<TransientMessage>,
     write_error_log: Vec<String>,
@@ -165,20 +159,12 @@ impl App {
                 timer.long_break_duration(),
                 timer.long_break_interval(),
             ),
-            tasks: TaskList::from_descriptions(task_state.todo, task_state.done),
+            task_interaction: TaskInteraction::new(task_state),
             ui_focus: UiFocus::Clock,
-            last_task_focus: UiFocus::Todo,
-            todo_selection: 0,
-            done_selection: 0,
-            todo_offset: 0,
-            done_offset: 0,
-            edit_mode: EditMode::Normal,
-            input: String::new(),
             last_click: None,
             pending_confirmation: None,
             pending_autostart: None,
             completion_audio_active: false,
-            show_task_numbers: config.tasks().show_numbers(),
             settings: None,
             task_write_error: None,
             write_error_log: Vec::new(),
@@ -190,21 +176,12 @@ impl App {
     }
 
     pub(crate) fn tasks(&self) -> &TaskList {
-        &self.tasks
+        self.task_interaction.tasks()
     }
 
     /// Captures the independently ordered to-do and done lists for persistence.
     pub fn task_state(&self) -> TaskState {
-        TaskState::from_lists(
-            self.tasks
-                .pending()
-                .map(|task| task.description().to_owned())
-                .collect(),
-            self.tasks
-                .completed()
-                .map(|task| task.description().to_owned())
-                .collect(),
-        )
+        self.task_interaction.snapshot()
     }
 
     /// Applies a semantic action without depending on its physical key mapping.
@@ -278,33 +255,36 @@ impl App {
             Action::Scroll(target, direction) => match target {
                 ScrollTarget::Todo => {
                     self.focus(UiFocus::Todo);
-                    self.move_todo_selection(direction);
+                    self.task_interaction.move_todo_selection(direction);
                 }
                 ScrollTarget::Done => {
                     self.focus(UiFocus::Done);
-                    self.move_done_selection(direction);
+                    self.task_interaction.move_done_selection(direction);
                 }
                 ScrollTarget::Settings => {}
             },
             Action::MoveSelection(direction) => match self.ui_focus {
                 UiFocus::Clock => {}
-                UiFocus::Todo => self.move_todo_selection(direction),
-                UiFocus::Done => self.move_done_selection(direction),
+                UiFocus::Todo => self.task_interaction.move_todo_selection(direction),
+                UiFocus::Done => self.task_interaction.move_done_selection(direction),
             },
             Action::MoveSelectedTask(direction) => {
-                if self.move_selected_task(direction) {
+                if self
+                    .task_interaction
+                    .move_selected_task(self.ui_focus, direction)
+                {
                     return AppOutcome::TasksChanged;
                 }
             }
             Action::PrimaryAction => match self.ui_focus {
                 UiFocus::Clock => self.clock_primary_action(),
                 UiFocus::Todo => {
-                    if self.complete_selected_todo() {
+                    if self.task_interaction.complete_selected_todo() {
                         return AppOutcome::TasksChanged;
                     }
                 }
                 UiFocus::Done => {
-                    if self.return_selected_done() {
+                    if self.task_interaction.return_selected_done() {
                         return AppOutcome::TasksChanged;
                     }
                 }
@@ -312,33 +292,33 @@ impl App {
             Action::CycleSession => self.cycle_session(),
             Action::ResetSession => self.reset_session(),
             Action::ConfirmPendingAction | Action::CancelPendingAction => {}
-            Action::BeginAdd => self.begin_add(),
+            Action::BeginAdd => self.task_interaction.begin_add(self.ui_focus),
             Action::EditSelected => match self.ui_focus {
                 UiFocus::Clock => {}
-                UiFocus::Todo => self.edit_selected_todo(),
-                UiFocus::Done => self.edit_selected_done(),
+                UiFocus::Todo => self.task_interaction.edit_selected_todo(),
+                UiFocus::Done => self.task_interaction.edit_selected_done(),
             },
             Action::DeleteSelected => match self.ui_focus {
                 UiFocus::Clock => {}
                 UiFocus::Todo => {
-                    if self.delete_selected_todo() {
+                    if self.task_interaction.delete_selected_todo() {
                         return AppOutcome::TasksChanged;
                     }
                 }
                 UiFocus::Done => {
-                    if self.delete_selected_done() {
+                    if self.task_interaction.delete_selected_done() {
                         return AppOutcome::TasksChanged;
                     }
                 }
             },
             Action::SubmitEdit => {
-                if self.submit_edit() {
+                if self.task_interaction.submit_edit(self.ui_focus) {
                     return AppOutcome::TasksChanged;
                 }
             }
-            Action::CancelEdit => self.cancel_edit(),
-            Action::PushInput(character) => self.push_input(character),
-            Action::PopInput => self.pop_input(),
+            Action::CancelEdit => self.task_interaction.cancel_edit(),
+            Action::PushInput(character) => self.task_interaction.push_input(character),
+            Action::PopInput => self.task_interaction.pop_input(),
             Action::OpenSettings => self.open_settings(),
             Action::SettingsMove(_)
             | Action::SettingsAdjust(_)
@@ -367,12 +347,12 @@ impl App {
 
     /// Returns the task panel most recently focused by the user.
     pub(crate) fn last_task_focus(&self) -> UiFocus {
-        self.last_task_focus
+        self.task_interaction.last_task_focus()
     }
 
     /// Returns the current text-entry context.
     pub fn edit_mode(&self) -> EditMode {
-        self.edit_mode
+        self.task_interaction.edit_mode()
     }
 
     /// Reports whether a confirmation owns keyboard and mouse input.
@@ -457,32 +437,31 @@ impl App {
     }
 
     pub(crate) fn input(&self) -> &str {
-        &self.input
+        self.task_interaction.input()
     }
 
     pub(crate) fn todo_selection(&self) -> usize {
-        self.todo_selection
+        self.task_interaction.todo_selection()
     }
 
     pub(crate) fn done_selection(&self) -> usize {
-        self.done_selection
+        self.task_interaction.done_selection()
     }
 
     pub(crate) fn todo_offset(&self) -> usize {
-        self.todo_offset
+        self.task_interaction.todo_offset()
     }
 
     pub(crate) fn done_offset(&self) -> usize {
-        self.done_offset
+        self.task_interaction.done_offset()
     }
 
     pub(crate) fn set_offsets(&mut self, todo_offset: usize, done_offset: usize) {
-        self.todo_offset = todo_offset;
-        self.done_offset = done_offset;
+        self.task_interaction.set_offsets(todo_offset, done_offset);
     }
 
     pub(crate) fn show_task_numbers(&self) -> bool {
-        self.show_task_numbers
+        self.config.tasks().show_numbers()
     }
 }
 

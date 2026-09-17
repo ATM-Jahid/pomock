@@ -22,7 +22,7 @@ impl App {
     /// Applies a semantic click after the UI boundary performs hit testing.
     pub fn handle_click_target(&mut self, target: ClickTarget, now: Instant) -> AppOutcome {
         let prior_timer_state = self.timer.state();
-        if self.edit_mode != EditMode::Normal {
+        if self.edit_mode() != EditMode::Normal {
             return AppOutcome::None;
         }
 
@@ -118,7 +118,7 @@ impl App {
             }
             ClickTarget::TodoTask(selection) => {
                 self.focus(UiFocus::Todo);
-                self.select_todo(selection);
+                self.task_interaction.select_todo(selection);
                 self.handle_actionable_click(target, now)
             }
             ClickTarget::Done => {
@@ -128,7 +128,7 @@ impl App {
             }
             ClickTarget::DoneTask(selection) => {
                 self.focus(UiFocus::Done);
-                self.select_done(selection);
+                self.task_interaction.select_done(selection);
                 self.handle_actionable_click(target, now)
             }
             ClickTarget::Outside => {
@@ -186,8 +186,8 @@ impl App {
                     self.clock_primary_action();
                     false
                 }
-                ClickTarget::TodoTask(_) => self.complete_selected_todo(),
-                ClickTarget::DoneTask(_) => self.return_selected_done(),
+                ClickTarget::TodoTask(_) => self.task_interaction.complete_selected_todo(),
+                ClickTarget::DoneTask(_) => self.task_interaction.return_selected_done(),
                 ClickTarget::SessionControl(_)
                 | ClickTarget::Todo
                 | ClickTarget::Done

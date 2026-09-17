@@ -1376,6 +1376,23 @@ fn non_timer_settings_apply_immediately_without_changing_activity() {
 }
 
 #[test]
+fn task_numbering_updates_immediately_and_survives_closing_settings() {
+    let mut app = App::new();
+    for expected in [false, true] {
+        let _ = app.dispatch(Action::OpenSettings);
+        move_settings_to(&mut app, SettingField::ShowTaskNumbers);
+        let outcome = app.dispatch(Action::SettingsAdjust(SettingsAdjustmentDirection::Forward));
+        let AppOutcome::SettingsChanged(config) = outcome else {
+            panic!("task numbering change was not emitted")
+        };
+        assert_eq!(config.tasks().show_numbers(), expected);
+        assert_eq!(app.show_task_numbers(), expected);
+        assert_eq!(app.dispatch(Action::SettingsClose), AppOutcome::None);
+        assert_eq!(app.show_task_numbers(), expected);
+    }
+}
+
+#[test]
 fn active_timer_keeps_its_installed_duration_when_settings_change() {
     let mut app = App::new();
     let _ = app.dispatch(Action::PrimaryAction);
