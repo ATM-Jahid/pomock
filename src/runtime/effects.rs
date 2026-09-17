@@ -24,15 +24,7 @@ impl<N: Notifier, S: SoundPlayer> super::RuntimeContext<N, S> {
         match outcome {
             AppOutcome::None => Ok(false),
             AppOutcome::FocusAudio(action) => {
-                match action {
-                    FocusAudioAction::StartOrResume => {
-                        if let Some(file) = config.sound().focus().playback_file() {
-                            sound_player.start_or_resume_focus(file);
-                        }
-                    }
-                    FocusAudioAction::Pause => sound_player.pause_focus(),
-                    FocusAudioAction::Stop => sound_player.stop_focus(),
-                }
+                handle_focus_audio(action, config, sound_player);
                 Ok(false)
             }
             AppOutcome::TimerEffects {
@@ -43,15 +35,7 @@ impl<N: Notifier, S: SoundPlayer> super::RuntimeContext<N, S> {
                     sound_player.stop_completion();
                 }
                 if let Some(action) = focus_audio {
-                    match action {
-                        FocusAudioAction::StartOrResume => {
-                            if let Some(file) = config.sound().focus().playback_file() {
-                                sound_player.start_or_resume_focus(file);
-                            }
-                        }
-                        FocusAudioAction::Pause => sound_player.pause_focus(),
-                        FocusAudioAction::Stop => sound_player.stop_focus(),
-                    }
+                    handle_focus_audio(action, config, sound_player);
                 }
                 Ok(false)
             }
@@ -106,6 +90,22 @@ impl<N: Notifier, S: SoundPlayer> super::RuntimeContext<N, S> {
                 Ok(true)
             }
         }
+    }
+}
+
+fn handle_focus_audio(
+    action: FocusAudioAction,
+    config: &Config,
+    sound_player: &mut impl SoundPlayer,
+) {
+    match action {
+        FocusAudioAction::StartOrResume => {
+            if let Some(file) = config.sound().focus().playback_file() {
+                sound_player.start_or_resume_focus(file);
+            }
+        }
+        FocusAudioAction::Pause => sound_player.pause_focus(),
+        FocusAudioAction::Stop => sound_player.stop_focus(),
     }
 }
 
