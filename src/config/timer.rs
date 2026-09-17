@@ -102,6 +102,37 @@ impl TimerConfig {
         Ok(timer)
     }
 
+    /// Changes one duration, preserving the remaining timer settings.
+    pub fn with_focus_duration(mut self, seconds: u64) -> Result<Self, ConfigValidationError> {
+        self.focus_seconds = seconds;
+        self.validate()?;
+        Ok(self)
+    }
+
+    pub fn with_short_break_duration(
+        mut self,
+        seconds: u64,
+    ) -> Result<Self, ConfigValidationError> {
+        self.short_break_seconds = seconds;
+        self.validate()?;
+        Ok(self)
+    }
+
+    pub fn with_long_break_duration(mut self, seconds: u64) -> Result<Self, ConfigValidationError> {
+        self.long_break_seconds = seconds;
+        self.validate()?;
+        Ok(self)
+    }
+
+    pub fn with_long_break_interval(
+        mut self,
+        interval: u32,
+    ) -> Result<Self, ConfigValidationError> {
+        self.long_break_interval = interval;
+        self.validate()?;
+        Ok(self)
+    }
+
     pub fn with_autostart(mut self, breaks: bool, focus: bool) -> Self {
         self.autostart_breaks = breaks;
         self.autostart_focus = focus;

@@ -1,16 +1,13 @@
-use std::{
-    path::{Path, PathBuf},
-    time::Duration,
-};
+use std::{path::PathBuf, time::Duration};
 
 use crate::app::{SettingsAdjustmentDirection, SettingsMoveDirection, WRITE_ERROR_DISPLAY_TIME};
 use crate::config::{
-    CompletionSoundConfig, Config, ConfigKey, ConfigValidationError, FocusSoundConfig,
-    NotificationConfig, TasksConfig, ThemeRole, TimerConfig, format_duration, parse_duration,
+    Config, ConfigKey, ConfigValidationError, NotificationConfig, TasksConfig, ThemeRole,
+    format_duration, parse_duration,
 };
 
 #[cfg(test)]
-use crate::config::KeyAction;
+use crate::config::{CompletionSoundConfig, KeyAction, TimerConfig};
 
 mod field;
 
@@ -151,12 +148,9 @@ impl SettingsOverlay {
                     SettingsAdjustmentDirection::Forward => theme.color(role).cycle_forward(),
                     SettingsAdjustmentDirection::Backward => theme.color(role).cycle_backward(),
                 };
-                self.replace(
-                    self.config.timer().to_owned(),
-                    *self.config.tasks(),
-                    theme.with_color(role, color),
-                    self.config.keys().clone(),
-                );
+                self.accept(Ok::<_, ConfigValidationError>(
+                    self.config.clone().with_color(role, color),
+                ));
             }
             _ if field.is_number() => {
                 let current = self.number_value(field);
@@ -261,21 +255,8 @@ impl SettingsOverlay {
         let SettingField::Key(action) = self.field() else {
             return;
         };
-        let keys = self.config.keys().clone().with_binding(action, key);
-        match Config::with_all_settings(
-            self.config.timer().to_owned(),
-            *self.config.tasks(),
-            *self.config.theme(),
-            keys,
-            self.config.notification(),
-            self.config.sound().clone(),
-        ) {
-            Ok(config) => {
-                self.config = config;
-                self.capturing_key = false;
-                self.error = None;
-            }
-            Err(error) => self.error = Some(error.to_string()),
+        if self.accept(self.config.clone().with_key_binding(action, key)) {
+            self.capturing_key = false;
         }
     }
 
@@ -306,37 +287,14 @@ impl SettingsOverlay {
         };
         let result = parse_duration(&value, field_name).and_then(|value| {
             let timer = self.config.timer();
-            let (focus, short, long) = match field {
-                SettingField::FocusDuration => (
-                    value,
-                    timer.short_break_duration().as_secs(),
-                    timer.long_break_duration().as_secs(),
-                ),
-                SettingField::ShortBreakDuration => (
-                    timer.focus_duration().as_secs(),
-                    value,
-                    timer.long_break_duration().as_secs(),
-                ),
-                SettingField::LongBreakDuration => (
-                    timer.focus_duration().as_secs(),
-                    timer.short_break_duration().as_secs(),
-                    value,
-                ),
+            match field {
+                SettingField::FocusDuration => timer.with_focus_duration(value),
+                SettingField::ShortBreakDuration => timer.with_short_break_duration(value),
+                SettingField::LongBreakDuration => timer.with_long_break_duration(value),
                 _ => unreachable!(),
-            };
-            TimerConfig::from_seconds(focus, short, long, timer.long_break_interval().get()).map(
-                |updated| updated.with_autostart(timer.autostart_breaks(), timer.autostart_focus()),
-            )
+            }
         });
-        match result {
-            Ok(timer) => self.replace(
-                timer,
-                *self.config.tasks(),
-                *self.config.theme(),
-                self.config.keys().clone(),
-            ),
-            Err(error) => self.error = Some(error.to_string()),
-        }
+        self.accept(result.and_then(|timer| self.config.clone().with_timer(timer)));
     }
 
     fn set_number(&mut self, field: SettingField, value: String) {
@@ -353,147 +311,80 @@ impl SettingsOverlay {
         let result = parsed.and_then(|value| {
             let interval = u32::try_from(value)
                 .map_err(|_| ConfigValidationError::IntegerOverflow { field: field_name })?;
-            let timer = self.config.timer();
-            TimerConfig::from_seconds(
-                timer.focus_duration().as_secs(),
-                timer.short_break_duration().as_secs(),
-                timer.long_break_duration().as_secs(),
-                interval,
-            )
-            .map(|updated| {
-                updated.with_autostart(timer.autostart_breaks(), timer.autostart_focus())
-            })
+            self.config.timer().with_long_break_interval(interval)
         });
-        match result {
-            Ok(timer) => self.replace(
-                timer,
-                *self.config.tasks(),
-                *self.config.theme(),
-                self.config.keys().clone(),
-            ),
-            Err(error) => self.error = Some(error.to_string()),
-        }
+        self.accept(result.and_then(|timer| self.config.clone().with_timer(timer)));
     }
 
     fn set_tasks(&mut self, persist: bool, show_numbers: bool) {
-        self.replace(
-            self.config.timer().to_owned(),
-            TasksConfig::with_numbering(persist, show_numbers),
-            *self.config.theme(),
-            self.config.keys().clone(),
-        );
+        self.accept(Ok::<_, ConfigValidationError>(
+            self.config
+                .clone()
+                .with_task_settings(TasksConfig::with_numbering(persist, show_numbers)),
+        ));
     }
 
     fn set_autostart(&mut self, breaks: bool, focus: bool) {
-        self.replace(
-            self.config.timer().to_owned().with_autostart(breaks, focus),
-            *self.config.tasks(),
-            *self.config.theme(),
-            self.config.keys().clone(),
+        self.accept(
+            self.config
+                .clone()
+                .with_timer(self.config.timer().with_autostart(breaks, focus)),
         );
     }
 
     fn set_notification(&mut self, enabled: bool) {
-        let mut config = self.config.clone();
-        config = config.with_notification(NotificationConfig::new(enabled));
-        self.config = config;
-        self.error = None;
+        self.accept(Ok::<_, ConfigValidationError>(
+            self.config
+                .clone()
+                .with_notification(NotificationConfig::new(enabled)),
+        ));
     }
 
     fn set_sound_file(&mut self, value: String, focus: bool) {
         let file = (!value.trim().is_empty()).then(|| PathBuf::from(value));
+        let sound = self.config.sound().clone();
         let sound = if focus {
-            self.config
-                .sound()
-                .clone()
-                .with_focus(FocusSoundConfig::new(
-                    self.config.sound().focus().enabled(),
-                    file,
-                ))
+            sound.with_focus(self.config.sound().focus().clone().with_file(file))
         } else {
-            self.config
-                .sound()
-                .clone()
-                .with_completion(CompletionSoundConfig::new(
-                    self.config.sound().completion().enabled(),
-                    file,
-                ))
+            sound.with_completion(self.config.sound().completion().clone().with_file(file))
         };
-        match self.config.clone().with_sound(sound) {
-            Ok(config) => {
-                self.config = config;
-                self.error = None;
-            }
-            Err(error) => self.error = Some(error.to_string()),
-        }
+        self.accept(self.config.clone().with_sound(sound));
     }
 
     fn set_sound_enabled(&mut self, enabled: bool, focus: bool) {
+        let sound = self.config.sound().clone();
         let sound = if focus {
-            self.config
-                .sound()
-                .clone()
-                .with_focus(FocusSoundConfig::new(
-                    enabled,
-                    self.config.sound().focus().file().map(Path::to_path_buf),
-                ))
+            sound.with_focus(self.config.sound().focus().clone().with_enabled(enabled))
         } else {
-            self.config
-                .sound()
-                .clone()
-                .with_completion(CompletionSoundConfig::new(
-                    enabled,
-                    self.config
-                        .sound()
-                        .completion()
-                        .file()
-                        .map(Path::to_path_buf),
-                ))
+            sound.with_completion(
+                self.config
+                    .sound()
+                    .completion()
+                    .clone()
+                    .with_enabled(enabled),
+            )
         };
-        match self.config.clone().with_sound(sound) {
-            Ok(config) => {
-                self.config = config;
-                self.error = None;
-            }
-            Err(error) => self.error = Some(error.to_string()),
-        }
+        self.accept(self.config.clone().with_sound(sound));
     }
 
     fn set_color(&mut self, role: ThemeRole, value: String) {
-        match value.parse() {
-            Ok(color) => {
-                let theme = self.config.theme().with_color(role, color);
-                self.replace(
-                    self.config.timer().to_owned(),
-                    *self.config.tasks(),
-                    theme,
-                    self.config.keys().clone(),
-                );
-            }
-            Err(error) => self.error = Some(error),
-        }
+        let result = value
+            .parse()
+            .map(|color| self.config.clone().with_color(role, color));
+        self.accept(result);
     }
 
-    fn replace(
-        &mut self,
-        timer: TimerConfig,
-        tasks: TasksConfig,
-        theme: crate::config::ThemeConfig,
-        keys: crate::config::KeysConfig,
-    ) {
-        match Config::with_all_settings(
-            timer,
-            tasks,
-            theme,
-            keys,
-            self.config.notification(),
-            self.config.sound().clone(),
-        ) {
+    fn accept<E: std::fmt::Display>(&mut self, result: Result<Config, E>) -> bool {
+        match result {
             Ok(config) => {
                 self.config = config;
                 self.error = None;
+                true
             }
-            Err(error) => self.error = Some(error.to_string()),
+            Err(error) => {
+                self.error = Some(error.to_string());
+                false
+            }
         }
     }
 }

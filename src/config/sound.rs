@@ -59,6 +59,18 @@ impl CompletionSoundConfig {
         }
     }
 
+    pub fn with_enabled(mut self, enabled: bool) -> Self {
+        self.enabled = enabled;
+        self
+    }
+
+    /// Changes the stored path; Config::with_sound validates and resolves it.
+    pub fn with_file(mut self, file: Option<PathBuf>) -> Self {
+        self.file = file;
+        self.resolved_file = None;
+        self
+    }
+
     pub const fn enabled(&self) -> bool {
         self.enabled
     }
@@ -97,6 +109,18 @@ impl FocusSoundConfig {
             file,
             resolved_file: None,
         }
+    }
+
+    pub fn with_enabled(mut self, enabled: bool) -> Self {
+        self.enabled = enabled;
+        self
+    }
+
+    /// Changes the stored path; Config::with_sound validates and resolves it.
+    pub fn with_file(mut self, file: Option<PathBuf>) -> Self {
+        self.file = file;
+        self.resolved_file = None;
+        self
     }
 
     pub const fn enabled(&self) -> bool {

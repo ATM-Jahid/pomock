@@ -147,3 +147,78 @@ fn zero_long_break_interval_is_rejected() {
 
     assert_eq!(error, ConfigValidationError::ZeroLongBreakInterval);
 }
+
+#[test]
+fn focused_timer_updates_validate_and_preserve_other_fields() {
+    let timer = TimerConfig::from_seconds(120, 30, 60, 3)
+        .unwrap()
+        .with_autostart(true, true);
+    for (updated, expected) in [
+        (timer.with_focus_duration(90), (90, 30, 60, 3)),
+        (timer.with_short_break_duration(90), (120, 90, 60, 3)),
+        (timer.with_long_break_duration(90), (120, 30, 90, 3)),
+        (timer.with_long_break_interval(7), (120, 30, 60, 7)),
+    ] {
+        let updated = updated.unwrap();
+        assert_eq!(
+            (
+                updated.focus_duration().as_secs(),
+                updated.short_break_duration().as_secs(),
+                updated.long_break_duration().as_secs(),
+                updated.long_break_interval().get()
+            ),
+            expected
+        );
+        assert!(updated.autostart_breaks());
+        assert!(updated.autostart_focus());
+    }
+    for seconds in [0, 600_000, u64::MAX] {
+        assert!(timer.with_focus_duration(seconds).is_err());
+        assert!(timer.with_short_break_duration(seconds).is_err());
+        assert!(timer.with_long_break_duration(seconds).is_err());
+    }
+    assert_eq!(
+        timer.with_long_break_interval(0),
+        Err(ConfigValidationError::ZeroLongBreakInterval)
+    );
+}
+
+#[test]
+fn focused_config_updates_preserve_unrelated_settings() {
+    let original = Config::with_tasks(
+        TimerConfig::default().with_autostart(true, true),
+        TasksConfig::with_numbering(false, false),
+    )
+    .unwrap()
+    .with_notification(super::NotificationConfig::new(false))
+    .with_sound(
+        SoundConfig::default().with_completion(CompletionSoundConfig::new(
+            true,
+            Some(std::env::temp_dir().join("complete.wav")),
+        )),
+    )
+    .unwrap();
+    let updated = original
+        .clone()
+        .with_timer(original.timer().with_focus_duration(90).unwrap())
+        .unwrap()
+        .with_color(super::ThemeRole::Focus, super::ThemeColor::Blue)
+        .with_key_binding(super::KeyAction::Quit, ConfigKey::Character('Q'))
+        .unwrap();
+    let restored = updated
+        .with_timer(*original.timer())
+        .unwrap()
+        .with_color(
+            super::ThemeRole::Focus,
+            original.theme().color(super::ThemeRole::Focus),
+        )
+        .with_key_binding(super::KeyAction::Quit, ConfigKey::Character('q'))
+        .unwrap();
+    assert_eq!(restored, original);
+    assert!(
+        original
+            .clone()
+            .with_key_binding(super::KeyAction::Quit, ConfigKey::Character('s'))
+            .is_err()
+    );
+}

@@ -90,6 +90,35 @@ impl Config {
         })
     }
 
+    /// Replaces timer settings without rebuilding unrelated configuration.
+    pub fn with_timer(mut self, timer: TimerConfig) -> Result<Self, ConfigValidationError> {
+        timer.validate()?;
+        self.timer = timer;
+        Ok(self)
+    }
+
+    pub fn with_task_settings(mut self, tasks: TasksConfig) -> Self {
+        self.tasks = tasks;
+        self
+    }
+
+    pub fn with_color(mut self, role: ThemeRole, color: ThemeColor) -> Self {
+        self.theme = self.theme.with_color(role, color);
+        self
+    }
+
+    /// Validates a binding against all contextual key constraints before accepting it.
+    pub fn with_key_binding(
+        mut self,
+        action: KeyAction,
+        key: ConfigKey,
+    ) -> Result<Self, ConfigValidationError> {
+        let keys = self.keys.clone().with_binding(action, key);
+        keys.validate()?;
+        self.keys = keys;
+        Ok(self)
+    }
+
     /// Returns the validated timer settings.
     pub fn timer(&self) -> &TimerConfig {
         &self.timer
