@@ -128,10 +128,7 @@ impl ConfigKey {
         let mut alt = false;
         let mut shift = false;
         let mut key_name = value;
-        loop {
-            let Some((modifier, remainder)) = key_name.split_once('+') else {
-                break;
-            };
+        while let Some((modifier, remainder)) = key_name.split_once('+') {
             let present = match modifier {
                 "ctrl" => &mut control,
                 "alt" => &mut alt,

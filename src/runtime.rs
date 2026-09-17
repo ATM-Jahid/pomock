@@ -131,12 +131,10 @@ pub(crate) fn run_app(
                         }
                     }
                 }
-                Event::Mouse(mouse) => {
-                    if app.edit_mode() == EditMode::Normal {
-                        let outcome = handle_mouse(&mut app, mouse, &frame_geometry, now);
-                        if runtime.handle_outcome(outcome, &mut app)? {
-                            break;
-                        }
+                Event::Mouse(mouse) if app.edit_mode() == EditMode::Normal => {
+                    let outcome = handle_mouse(&mut app, mouse, &frame_geometry, now);
+                    if runtime.handle_outcome(outcome, &mut app)? {
+                        break;
                     }
                 }
                 _ => {}

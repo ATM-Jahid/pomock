@@ -159,7 +159,10 @@ impl PomodoroTimer {
         let next_session = match completed_session {
             SessionKind::Focus => {
                 self.completed_focus_sessions = self.completed_focus_sessions.saturating_add(1);
-                if self.completed_focus_sessions % self.long_break_interval.get() == 0 {
+                if self
+                    .completed_focus_sessions
+                    .is_multiple_of(self.long_break_interval.get())
+                {
                     SessionKind::LongBreak
                 } else {
                     SessionKind::ShortBreak

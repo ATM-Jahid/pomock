@@ -194,7 +194,13 @@ mod tests {
 
         assert_eq!(lines.len(), 10);
         assert!(lines.iter().all(|line| line.chars().count() == 60));
-        assert!(lines.chunks_exact(2).all(|rows| rows[0] == rows[1]));
+        assert!(
+            lines
+                .as_chunks::<2>()
+                .0
+                .iter()
+                .all(|rows| rows[0] == rows[1])
+        );
     }
 
     #[test]

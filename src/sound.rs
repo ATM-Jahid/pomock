@@ -2,7 +2,7 @@
 
 use std::{fs::File, path::Path};
 
-use rodio::{Decoder, OutputStream, OutputStreamBuilder, Sink, Source};
+use rodio::{Decoder, MixerDeviceSink, Player, Source};
 
 /// Plays user-selected sound files outside the application domain.
 pub trait SoundPlayer {
@@ -25,9 +25,9 @@ pub trait SoundPlayer {
 /// Cross-platform audio-device adapter backed by `rodio`.
 #[derive(Default)]
 pub struct FileSoundPlayer {
-    stream: Option<OutputStream>,
-    focus_sink: Option<Sink>,
-    completion_sink: Option<Sink>,
+    stream: Option<MixerDeviceSink>,
+    focus_sink: Option<Player>,
+    completion_sink: Option<Player>,
 }
 
 impl SoundPlayer for FileSoundPlayer {
@@ -43,7 +43,7 @@ impl SoundPlayer for FileSoundPlayer {
         let Some(stream) = &self.stream else {
             return;
         };
-        let sink = Sink::connect_new(stream.mixer());
+        let sink = Player::connect_new(stream.mixer());
         sink.append(source.take_duration(std::time::Duration::from_secs(5)));
         self.completion_sink = Some(sink);
     }
@@ -69,7 +69,7 @@ impl SoundPlayer for FileSoundPlayer {
         let Some(stream) = &self.stream else {
             return;
         };
-        let sink = Sink::connect_new(stream.mixer());
+        let sink = Player::connect_new(stream.mixer());
         sink.append(source.repeat_infinite());
         self.focus_sink = Some(sink);
     }
@@ -92,7 +92,7 @@ impl FileSoundPlayer {
         if self.stream.is_some() {
             return;
         }
-        let Ok(mut stream) = OutputStreamBuilder::open_default_stream() else {
+        let Ok(mut stream) = rodio::DeviceSinkBuilder::open_default_sink() else {
             return;
         };
         stream.log_on_drop(false);
