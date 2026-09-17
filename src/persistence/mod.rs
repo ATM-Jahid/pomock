@@ -17,6 +17,21 @@ const TASKS_FILE_NAME: &str = "tasks.toml";
 const TASK_FILE_VERSION: u32 = 1;
 const DEFAULT_WORKSPACE: &str = "main";
 
+fn merge_with_defaults(existing: &toml::Value, defaults: &toml::Value) -> toml::Value {
+    let (Some(existing), Some(defaults)) = (existing.as_table(), defaults.as_table()) else {
+        return existing.clone();
+    };
+    let mut merged = defaults.clone();
+    for (key, value) in existing {
+        let value = defaults.get(key).map_or_else(
+            || value.clone(),
+            |default| merge_with_defaults(value, default),
+        );
+        merged.insert(key.clone(), value);
+    }
+    toml::Value::Table(merged)
+}
+
 /// Filesystem boundary for durable task state.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct TaskStore {

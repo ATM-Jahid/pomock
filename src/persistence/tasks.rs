@@ -5,7 +5,7 @@ use std::{
 
 use serde::{Deserialize, Serialize};
 
-use super::{TASK_FILE_VERSION, TaskPersistenceError, TaskStore};
+use super::{TASK_FILE_VERSION, TaskPersistenceError, TaskStore, merge_with_defaults};
 use crate::{app::TaskState, atomic_write};
 
 impl TaskStore {
@@ -212,21 +212,6 @@ impl TaskStore {
         }
         Ok(())
     }
-}
-
-fn merge_with_defaults(existing: &toml::Value, defaults: &toml::Value) -> toml::Value {
-    let (Some(existing), Some(defaults)) = (existing.as_table(), defaults.as_table()) else {
-        return existing.clone();
-    };
-    let mut merged = defaults.clone();
-    for (key, value) in existing {
-        let value = defaults.get(key).map_or_else(
-            || value.clone(),
-            |default| merge_with_defaults(value, default),
-        );
-        merged.insert(key.clone(), value);
-    }
-    toml::Value::Table(merged)
 }
 
 #[derive(Debug, Serialize, Deserialize)]

@@ -7,7 +7,7 @@ use std::{
 use directories::ProjectDirs;
 use serde::{Deserialize, Serialize};
 
-use super::DEFAULT_WORKSPACE;
+use super::{DEFAULT_WORKSPACE, merge_with_defaults};
 use crate::atomic_write;
 use crate::config::{
     Config, ConfigValidationError, KeysConfig, NotificationConfig, SoundConfig, TasksConfig,
@@ -210,21 +210,6 @@ impl ConfigStore {
             source,
         })
     }
-}
-
-fn merge_with_defaults(existing: &toml::Value, defaults: &toml::Value) -> toml::Value {
-    let (Some(existing), Some(defaults)) = (existing.as_table(), defaults.as_table()) else {
-        return existing.clone();
-    };
-    let mut merged = defaults.clone();
-    for (key, value) in existing {
-        let value = defaults.get(key).map_or_else(
-            || value.clone(),
-            |default| merge_with_defaults(value, default),
-        );
-        merged.insert(key.clone(), value);
-    }
-    toml::Value::Table(merged)
 }
 
 #[derive(Debug, Serialize, Deserialize)]
