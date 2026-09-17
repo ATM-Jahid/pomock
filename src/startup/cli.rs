@@ -5,6 +5,8 @@ use std::{
     io::{self, Write},
 };
 
+use pomock::persistence::{WorkspaceNameError, validate_workspace_name};
+
 #[derive(Debug, PartialEq, Eq)]
 pub(crate) enum CliCommand {
     Run { workspace: Option<String> },
@@ -32,7 +34,7 @@ impl CliCommand {
                     let name = name
                         .into_string()
                         .map_err(|_| CliError::NonUnicodeArgument)?;
-                    validate_workspace_name(&name)?;
+                    validate_workspace_name(&name).map_err(CliError::InvalidWorkspaceName)?;
                     workspace = Some(name);
                 }
                 _ if argument.starts_with("--workspace=") => {
@@ -40,7 +42,7 @@ impl CliCommand {
                         return Err(CliError::DuplicateWorkspace);
                     }
                     let name = argument.trim_start_matches("--workspace=");
-                    validate_workspace_name(name)?;
+                    validate_workspace_name(name).map_err(CliError::InvalidWorkspaceName)?;
                     workspace = Some(name.to_owned());
                 }
                 _ => return Err(CliError::UnexpectedArgument(argument)),
@@ -55,7 +57,7 @@ impl CliCommand {
 pub(crate) enum CliError {
     MissingWorkspaceName,
     DuplicateWorkspace,
-    InvalidWorkspaceName(String),
+    InvalidWorkspaceName(WorkspaceNameError),
     UnexpectedArgument(String),
     NonUnicodeArgument,
 }
@@ -69,10 +71,7 @@ impl fmt::Display for CliError {
             Self::DuplicateWorkspace => {
                 formatter.write_str("--workspace may only be specified once")
             }
-            Self::InvalidWorkspaceName(name) => write!(
-                formatter,
-                "invalid workspace name {name:?}; use letters, numbers, '.', '-', or '_'"
-            ),
+            Self::InvalidWorkspaceName(error) => error.fmt(formatter),
             Self::UnexpectedArgument(argument) => write!(
                 formatter,
                 "unexpected argument {argument:?}; run `pomock --help` for usage"
@@ -82,18 +81,13 @@ impl fmt::Display for CliError {
     }
 }
 
-impl Error for CliError {}
-
-fn validate_workspace_name(name: &str) -> Result<(), CliError> {
-    let valid = !name.is_empty()
-        && name != "."
-        && name != ".."
-        && name
-            .bytes()
-            .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'.' | b'-' | b'_'));
-    valid
-        .then_some(())
-        .ok_or_else(|| CliError::InvalidWorkspaceName(name.to_owned()))
+impl Error for CliError {
+    fn source(&self) -> Option<&(dyn Error + 'static)> {
+        match self {
+            Self::InvalidWorkspaceName(error) => Some(error),
+            _ => None,
+        }
+    }
 }
 
 pub(crate) fn write_help(writer: &mut impl Write) -> io::Result<()> {

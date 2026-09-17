@@ -7,7 +7,7 @@ use std::{
 use directories::ProjectDirs;
 use serde::{Deserialize, Serialize};
 
-use super::{DEFAULT_WORKSPACE, merge_with_defaults};
+use super::{DEFAULT_WORKSPACE, WorkspaceNameError, merge_with_defaults, validate_workspace_name};
 use crate::atomic_write;
 use crate::config::{
     Config, ConfigValidationError, KeysConfig, NotificationConfig, SoundConfig, TasksConfig,
@@ -29,13 +29,12 @@ impl ConfigStore {
     }
 
     /// Uses the per-user configuration file for a workspace, defaulting to `main`.
+    /// Rejects names that fail [`validate_workspace_name`] before resolving the path.
     pub fn user_in_workspace(workspace: Option<&str>) -> Result<Self, ConfigError> {
+        let workspace = workspace.unwrap_or(DEFAULT_WORKSPACE);
+        validate_workspace_name(workspace).map_err(ConfigError::InvalidWorkspaceName)?;
         let path = ProjectDirs::from("", "", "pomock")
-            .map(|dirs| {
-                dirs.config_dir()
-                    .join(workspace.unwrap_or(DEFAULT_WORKSPACE))
-                    .join(CONFIG_FILE_NAME)
-            })
+            .map(|dirs| dirs.config_dir().join(workspace).join(CONFIG_FILE_NAME))
             .ok_or(ConfigError::DirectoryUnavailable)?;
         Ok(Self { path })
     }
@@ -288,6 +287,7 @@ impl From<&Config> for StoredConfig {
 
 #[derive(Debug)]
 pub enum ConfigError {
+    InvalidWorkspaceName(WorkspaceNameError),
     DirectoryUnavailable,
     Read {
         path: PathBuf,
@@ -319,6 +319,7 @@ pub enum ConfigError {
 impl fmt::Display for ConfigError {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
+            Self::InvalidWorkspaceName(error) => error.fmt(formatter),
             Self::DirectoryUnavailable => {
                 formatter.write_str("could not determine the user configuration directory")
             }
@@ -358,6 +359,7 @@ impl fmt::Display for ConfigError {
 impl Error for ConfigError {
     fn source(&self) -> Option<&(dyn Error + 'static)> {
         match self {
+            Self::InvalidWorkspaceName(error) => Some(error),
             Self::DirectoryUnavailable => None,
             Self::Read { source, .. }
             | Self::CreateDirectory { source, .. }

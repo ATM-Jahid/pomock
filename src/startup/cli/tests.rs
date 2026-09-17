@@ -47,10 +47,27 @@ fn workspace_argument_rejects_missing_unsafe_and_duplicate_names() {
             CliError::MissingWorkspaceName
         );
     }
-    assert!(matches!(
-        CliCommand::parse([OsString::from("--workspace=../shared")]).unwrap_err(),
-        CliError::InvalidWorkspaceName(_)
-    ));
+    for name in [
+        "",
+        ".",
+        "..",
+        "../shared",
+        "/tmp/workspace",
+        "nested\\workspace",
+        "two words",
+        "café",
+    ] {
+        let expected = pomock::persistence::validate_workspace_name(name).unwrap_err();
+        for arguments in [
+            vec![OsString::from("-w"), OsString::from(name)],
+            vec![OsString::from("--workspace"), OsString::from(name)],
+            vec![OsString::from(format!("--workspace={name}"))],
+        ] {
+            let error = CliCommand::parse(arguments).unwrap_err();
+            assert!(matches!(error, CliError::InvalidWorkspaceName(_)));
+            assert_eq!(error.to_string(), expected.to_string());
+        }
+    }
     assert_eq!(
         CliCommand::parse([
             OsString::from("--workspace=one"),

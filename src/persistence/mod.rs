@@ -9,9 +9,11 @@ use directories::ProjectDirs;
 mod config;
 mod tasks;
 mod workspace;
+mod workspace_name;
 
 pub use config::{ConfigError, ConfigStore};
 pub use workspace::WorkspaceLock;
+pub use workspace_name::{WorkspaceNameError, validate_workspace_name};
 
 const TASKS_FILE_NAME: &str = "tasks.toml";
 const TASK_FILE_VERSION: u32 = 1;
@@ -45,13 +47,12 @@ impl TaskStore {
     }
 
     /// Uses the per-user task file for a workspace, defaulting to `main`.
+    /// Rejects names that fail [`validate_workspace_name`] before resolving the path.
     pub fn user_in_workspace(workspace: Option<&str>) -> Result<Self, TaskPersistenceError> {
+        let workspace = workspace.unwrap_or(DEFAULT_WORKSPACE);
+        validate_workspace_name(workspace).map_err(TaskPersistenceError::InvalidWorkspaceName)?;
         let path = ProjectDirs::from("", "", "pomock")
-            .map(|dirs| {
-                dirs.data_local_dir()
-                    .join(workspace.unwrap_or(DEFAULT_WORKSPACE))
-                    .join(TASKS_FILE_NAME)
-            })
+            .map(|dirs| dirs.data_local_dir().join(workspace).join(TASKS_FILE_NAME))
             .ok_or(TaskPersistenceError::DirectoryUnavailable)?;
         Ok(Self { path })
     }
@@ -69,6 +70,7 @@ impl TaskStore {
 
 #[derive(Debug)]
 pub enum TaskPersistenceError {
+    InvalidWorkspaceName(WorkspaceNameError),
     DirectoryUnavailable,
     Read {
         path: PathBuf,
@@ -120,6 +122,7 @@ pub enum TaskPersistenceError {
 impl fmt::Display for TaskPersistenceError {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
+            Self::InvalidWorkspaceName(error) => error.fmt(formatter),
             Self::DirectoryUnavailable => {
                 formatter.write_str("could not determine the user application data directory")
             }
@@ -193,6 +196,7 @@ impl fmt::Display for TaskPersistenceError {
 impl Error for TaskPersistenceError {
     fn source(&self) -> Option<&(dyn Error + 'static)> {
         match self {
+            Self::InvalidWorkspaceName(error) => Some(error),
             Self::DirectoryUnavailable
             | Self::Validation { .. }
             | Self::UnsupportedVersion { .. }
