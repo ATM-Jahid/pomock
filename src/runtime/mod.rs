@@ -9,7 +9,7 @@ use pomock::{
     config::Config,
     input::map_key_event,
     notification::DesktopNotifier,
-    persistence::TaskStore,
+    persistence::{ConfigStore, TaskStore},
     sound::FileSoundPlayer,
     ui::{FrameGeometry, Theme, action_target_visible, click_target, draw, scroll_target},
 };
@@ -22,6 +22,11 @@ pub(crate) use effects::task_store_for_config;
 #[cfg(test)]
 pub(crate) use effects::{FileWriteError, RunError, apply_settings_change, handle_outcome};
 pub(crate) use terminal::{TerminalSession, combine_run_and_restore_results};
+
+pub(crate) struct Workspace {
+    pub task_store: TaskStore,
+    pub config_store: ConfigStore,
+}
 
 pub(crate) fn handle_mouse(
     app: &mut App,
@@ -64,7 +69,7 @@ pub(crate) fn run_app(
     mut config: Config,
     mut task_store: Option<TaskStore>,
     task_state: TaskState,
-    workspace_store: TaskStore,
+    workspace: Workspace,
 ) -> Result<Vec<String>, effects::RunError> {
     let mut app = App::from_config_and_tasks(&config, task_state);
     let mut notifier = DesktopNotifier;
@@ -80,7 +85,7 @@ pub(crate) fn run_app(
             &mut app,
             &mut config,
             &mut task_store,
-            &workspace_store,
+            &workspace,
             &mut notifier,
             &mut sound_player,
         )? {
@@ -107,7 +112,7 @@ pub(crate) fn run_app(
                 &mut app,
                 &mut config,
                 &mut task_store,
-                &workspace_store,
+                &workspace,
                 &mut notifier,
                 &mut sound_player,
             )? {
@@ -131,7 +136,7 @@ pub(crate) fn run_app(
                             &mut app,
                             &mut config,
                             &mut task_store,
-                            &workspace_store,
+                            &workspace,
                             &mut notifier,
                             &mut sound_player,
                         )? {
@@ -147,7 +152,7 @@ pub(crate) fn run_app(
                             &mut app,
                             &mut config,
                             &mut task_store,
-                            &workspace_store,
+                            &workspace,
                             &mut notifier,
                             &mut sound_player,
                         )? {

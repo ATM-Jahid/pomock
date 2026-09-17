@@ -3,7 +3,7 @@
 //! State changes flow from physical input through [`input`] into semantic
 //! [`app::Action`] values. [`app::App`] owns terminal-independent transitions
 //! and reports boundary work through [`app::AppOutcome`]. The [`ui`] module may
-//! read application state, while [`persistence`] stores opaque task snapshots.
+//! read application state, while [`persistence`] stores configuration and opaque task snapshots.
 //! Terminal IO and outcome handling stay in the binary composition root.
 //!
 //! This is a pre-1.0 internal API used by the `pomock` binary. It is organized

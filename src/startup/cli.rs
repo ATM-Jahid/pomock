@@ -99,7 +99,7 @@ fn validate_workspace_name(name: &str) -> Result<(), CliError> {
 pub(crate) fn write_help(writer: &mut impl Write) -> io::Result<()> {
     writeln!(
         writer,
-        "pomock - a Pomodoro timer and task workspace\n\nUsage: pomock [OPTIONS]\n\nOptions:\n  -w, --workspace NAME  Use or create a named task workspace\n  -h, --help            Show this help\n  -v, --version         Show version"
+        "pomock - a Pomodoro timer and task workspace\n\nUsage: pomock [OPTIONS]\n\nOptions:\n  -w, --workspace NAME  Use or create a named workspace\n  -h, --help            Show this help\n  -v, --version         Show version"
     )
 }
 

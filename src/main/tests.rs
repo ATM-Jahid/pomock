@@ -10,14 +10,14 @@ use super::runtime::{
     FileWriteError, RunError, apply_settings_change, handle_outcome, task_store_for_config,
 };
 use super::runtime::{advance_timer, combine_run_and_restore_results, should_handle_key_event};
-use super::startup::{CliError, StartupError, load_config_path_for_startup};
+use super::startup::{CliError, StartupError, load_config_for_startup};
 use super::*;
 use crossterm::event::KeyEventKind;
 use pomock::{
     app::{Action, App, AppOutcome, Direction, FocusAudioAction, TaskState},
     config::{Config, TasksConfig, TimerConfig},
     notification::Notifier,
-    persistence::TaskStore,
+    persistence::{ConfigStore, TaskStore},
     sound::SoundPlayer,
 };
 use std::{
@@ -99,7 +99,7 @@ fn only_backup(path: &std::path::Path) -> PathBuf {
 }
 
 fn write_config_with_unknown_field(path: &std::path::Path) -> String {
-    Config::default().save_to(path).unwrap();
+    ConfigStore::at(path).save(&Config::default()).unwrap();
     let mut stored: toml::Value = toml::from_str(&fs::read_to_string(path).unwrap()).unwrap();
     stored
         .as_table_mut()
@@ -250,8 +250,8 @@ fn startup_creates_missing_config_and_task_files() {
     let tasks_path = temp_path("missing-startup/tasks.toml");
     let task_store = TaskStore::at(&tasks_path);
 
-    let config = load_config_path_for_startup(
-        &config_path,
+    let config = load_config_for_startup(
+        &ConfigStore::at(&config_path),
         &mut Cursor::new(Vec::<u8>::new()),
         &mut Vec::new(),
     )
@@ -266,7 +266,10 @@ fn startup_creates_missing_config_and_task_files() {
     .unwrap();
 
     assert_eq!(config, Config::default());
-    assert_eq!(Config::load_from(&config_path).unwrap(), Config::default());
+    assert_eq!(
+        ConfigStore::at(&config_path).load().unwrap(),
+        Config::default()
+    );
     assert_eq!(tasks, TaskState::default());
     assert_eq!(task_store.load().unwrap(), TaskState::default());
     fs::remove_dir_all(config_path.parent().unwrap()).unwrap();
@@ -278,12 +281,14 @@ fn valid_config_edit_during_confirmation_is_preserved_and_used() {
     let path = temp_path("config-edited-during-prompt.toml");
     fs::write(&path, "not valid toml =").unwrap();
     let valid_path = temp_path("replacement-config.toml");
-    Config::default().save_to(&valid_path).unwrap();
+    ConfigStore::at(&valid_path)
+        .save(&Config::default())
+        .unwrap();
     let valid = fs::read(&valid_path).unwrap();
     fs::remove_file(valid_path).unwrap();
     let mut reader = MutatingReader::writing(&path, valid.clone(), b"b\n");
 
-    let config = load_config_path_for_startup(&path, &mut reader, &mut Vec::new())
+    let config = load_config_for_startup(&ConfigStore::at(&path), &mut reader, &mut Vec::new())
         .unwrap()
         .unwrap();
 
@@ -301,7 +306,7 @@ fn changed_invalid_config_is_prompted_again_before_replacement() {
     let mut reader = MutatingReader::writing(&path, replacement.clone(), b"b\nb\n");
     let mut output = Vec::new();
 
-    let config = load_config_path_for_startup(&path, &mut reader, &mut output)
+    let config = load_config_for_startup(&ConfigStore::at(&path), &mut reader, &mut output)
         .unwrap()
         .unwrap();
 
@@ -326,12 +331,12 @@ fn config_deleted_during_confirmation_is_recreated_without_backup() {
     fs::write(&path, "not valid toml =").unwrap();
     let mut reader = MutatingReader::deleting(&path, b"b\n");
 
-    let config = load_config_path_for_startup(&path, &mut reader, &mut Vec::new())
+    let config = load_config_for_startup(&ConfigStore::at(&path), &mut reader, &mut Vec::new())
         .unwrap()
         .unwrap();
 
     assert_eq!(config, Config::default());
-    assert_eq!(Config::load_from(&path).unwrap(), Config::default());
+    assert_eq!(ConfigStore::at(&path).load().unwrap(), Config::default());
     assert!(backup_paths(&path).is_empty());
     fs::remove_file(path).unwrap();
 }
@@ -360,8 +365,12 @@ fn unknown_config_key_can_be_left_in_place_when_quitting() {
     let original = write_config_with_unknown_field(&path);
     let mut output = Vec::new();
 
-    let config =
-        load_config_path_for_startup(&path, &mut Cursor::new(b"q\n"), &mut output).unwrap();
+    let config = load_config_for_startup(
+        &ConfigStore::at(&path),
+        &mut Cursor::new(b"q\n"),
+        &mut output,
+    )
+    .unwrap();
 
     assert!(config.is_none());
     assert_eq!(fs::read_to_string(&path).unwrap(), original);
@@ -380,9 +389,13 @@ fn unknown_config_key_can_be_backed_up_and_replaced_with_defaults() {
     let original = write_config_with_unknown_field(&path);
     let mut output = Vec::new();
 
-    let config = load_config_path_for_startup(&path, &mut Cursor::new(b"b\n"), &mut output)
-        .unwrap()
-        .unwrap();
+    let config = load_config_for_startup(
+        &ConfigStore::at(&path),
+        &mut Cursor::new(b"b\n"),
+        &mut output,
+    )
+    .unwrap()
+    .unwrap();
 
     assert_eq!(config, Config::default());
     assert!(!fs::read_to_string(&path).unwrap().contains("obsolete"));
@@ -405,12 +418,12 @@ fn invalid_config_can_be_backed_up_and_atomically_replaced_with_defaults() {
     let mut input = Cursor::new(b"invalid\nbackup\n");
     let mut output = Vec::new();
 
-    let config = load_config_path_for_startup(&path, &mut input, &mut output)
+    let config = load_config_for_startup(&ConfigStore::at(&path), &mut input, &mut output)
         .unwrap()
         .unwrap();
 
     assert_eq!(config, Config::default());
-    assert_eq!(Config::load_from(&path).unwrap(), Config::default());
+    assert_eq!(ConfigStore::at(&path).load().unwrap(), Config::default());
     let backup = only_backup(&path);
     assert_eq!(fs::read_to_string(&backup).unwrap(), original);
     let output = String::from_utf8(output).unwrap();
@@ -430,7 +443,7 @@ fn invalid_config_can_be_left_in_place_when_quitting() {
     let mut input = Cursor::new(b"q\n");
     let mut output = Vec::new();
 
-    let config = load_config_path_for_startup(&path, &mut input, &mut output).unwrap();
+    let config = load_config_for_startup(&ConfigStore::at(&path), &mut input, &mut output).unwrap();
 
     assert!(config.is_none());
     assert_eq!(fs::read_to_string(&path).unwrap(), contents);
@@ -535,7 +548,10 @@ fn task_change_outcomes_are_saved_at_the_boundary() {
             &mut app,
             &mut config,
             &mut task_store,
-            &store,
+            &super::runtime::Workspace {
+                task_store: store.clone(),
+                config_store: ConfigStore::at(temp_path("effects-config.toml")),
+            },
             &mut notifier,
             &mut sound_player,
         )
@@ -574,7 +590,10 @@ fn failed_task_save_reports_an_error_and_allows_a_later_save() {
             &mut app,
             &mut config,
             &mut task_store,
-            &store,
+            &super::runtime::Workspace {
+                task_store: store.clone(),
+                config_store: ConfigStore::at(temp_path("effects-config.toml")),
+            },
             &mut notifier,
             &mut sound_player,
         )
@@ -595,7 +614,10 @@ fn failed_task_save_reports_an_error_and_allows_a_later_save() {
             &mut app,
             &mut config,
             &mut task_store,
-            &store,
+            &super::runtime::Workspace {
+                task_store: store.clone(),
+                config_store: ConfigStore::at(temp_path("effects-config.toml")),
+            },
             &mut notifier,
             &mut sound_player,
         )
@@ -650,7 +672,10 @@ fn disabled_task_persistence_starts_empty_and_does_not_save_changes() {
             &mut app,
             &mut config,
             &mut disabled_store,
-            &store,
+            &super::runtime::Workspace {
+                task_store: store.clone(),
+                config_store: ConfigStore::at(temp_path("effects-config.toml")),
+            },
             &mut notifier,
             &mut sound_player,
         )
@@ -755,7 +780,7 @@ fn settings_write_failures_are_reported_and_settings_remain_active() {
         &mut config,
         &mut task_store,
         Some(next_store),
-        |_| Err(pomock::config::ConfigError::DirectoryUnavailable),
+        |_| Err(pomock::persistence::ConfigError::DirectoryUnavailable),
     );
 
     assert!(matches!(
@@ -800,7 +825,10 @@ fn completion_outcome_routes_notification_and_audio_effects() {
         ))
         .unwrap();
     let mut task_store = None;
-    let workspace_store = TaskStore::at(temp_path("completion-workspace/tasks.toml"));
+    let workspace = super::runtime::Workspace {
+        task_store: TaskStore::at(temp_path("completion-workspace/tasks.toml")),
+        config_store: ConfigStore::at(temp_path("effects-config.toml")),
+    };
     let mut notifier = RecordingNotifier::default();
     let mut sound_player = RecordingSoundPlayer::default();
 
@@ -810,7 +838,7 @@ fn completion_outcome_routes_notification_and_audio_effects() {
             &mut app,
             &mut config,
             &mut task_store,
-            &workspace_store,
+            &workspace,
             &mut notifier,
             &mut sound_player,
         )
@@ -832,7 +860,10 @@ fn disabled_notifications_do_not_suppress_completion_audio() {
         ))
         .unwrap();
     let mut task_store = None;
-    let workspace_store = TaskStore::at(temp_path("notification-workspace/tasks.toml"));
+    let workspace = super::runtime::Workspace {
+        task_store: TaskStore::at(temp_path("notification-workspace/tasks.toml")),
+        config_store: ConfigStore::at(temp_path("effects-config.toml")),
+    };
     let mut notifier = RecordingNotifier::default();
     let mut sound_player = RecordingSoundPlayer::default();
 
@@ -841,7 +872,7 @@ fn disabled_notifications_do_not_suppress_completion_audio() {
         &mut app,
         &mut config,
         &mut task_store,
-        &workspace_store,
+        &workspace,
         &mut notifier,
         &mut sound_player,
     )
@@ -862,7 +893,10 @@ fn combined_timer_effect_stops_completion_before_starting_focus_audio() {
         .unwrap();
     let mut app = App::from_config(&config);
     let mut task_store = None;
-    let workspace_store = TaskStore::at(temp_path("timer-effects-workspace/tasks.toml"));
+    let workspace = super::runtime::Workspace {
+        task_store: TaskStore::at(temp_path("timer-effects-workspace/tasks.toml")),
+        config_store: ConfigStore::at(temp_path("effects-config.toml")),
+    };
     let mut notifier = RecordingNotifier::default();
     let mut sound = RecordingSoundPlayer::default();
 
@@ -874,7 +908,7 @@ fn combined_timer_effect_stops_completion_before_starting_focus_audio() {
         &mut app,
         &mut config,
         &mut task_store,
-        &workspace_store,
+        &workspace,
         &mut notifier,
         &mut sound,
     )
@@ -894,7 +928,10 @@ fn focus_audio_outcomes_route_only_configured_starts_and_always_cleanup() {
         ))
         .unwrap();
     let mut task_store = None;
-    let workspace_store = TaskStore::at(temp_path("focus-audio-workspace/tasks.toml"));
+    let workspace = super::runtime::Workspace {
+        task_store: TaskStore::at(temp_path("focus-audio-workspace/tasks.toml")),
+        config_store: ConfigStore::at(temp_path("effects-config.toml")),
+    };
     let mut notifier = RecordingNotifier::default();
     let mut sound_player = RecordingSoundPlayer::default();
 
@@ -908,7 +945,7 @@ fn focus_audio_outcomes_route_only_configured_starts_and_always_cleanup() {
             &mut app,
             &mut config,
             &mut task_store,
-            &workspace_store,
+            &workspace,
             &mut notifier,
             &mut sound_player,
         )
@@ -924,7 +961,7 @@ fn focus_audio_outcomes_route_only_configured_starts_and_always_cleanup() {
         &mut app,
         &mut disabled_config,
         &mut task_store,
-        &workspace_store,
+        &workspace,
         &mut notifier,
         &mut sound_player,
     )
@@ -949,7 +986,10 @@ fn disabled_sound_options_keep_configured_files_silent() {
         )
         .unwrap();
     let mut task_store = None;
-    let workspace_store = TaskStore::at(temp_path("disabled-sound-workspace/tasks.toml"));
+    let workspace = super::runtime::Workspace {
+        task_store: TaskStore::at(temp_path("disabled-sound-workspace/tasks.toml")),
+        config_store: ConfigStore::at(temp_path("effects-config.toml")),
+    };
     let mut notifier = RecordingNotifier::default();
     let mut sound_player = RecordingSoundPlayer::default();
 
@@ -962,7 +1002,7 @@ fn disabled_sound_options_keep_configured_files_silent() {
             &mut app,
             &mut config,
             &mut task_store,
-            &workspace_store,
+            &workspace,
             &mut notifier,
             &mut sound_player,
         )
@@ -1013,4 +1053,36 @@ fn simultaneous_run_and_restoration_errors_are_both_reported() {
         error.to_string(),
         "run failed; terminal restoration also failed: restore failed"
     );
+}
+
+#[test]
+fn settings_outcome_saves_to_the_selected_workspace_even_without_task_persistence() {
+    let directory = tempfile::tempdir().unwrap();
+    let main_config_store = ConfigStore::at(directory.path().join("config.toml"));
+    main_config_store.save(&Config::default()).unwrap();
+    let workspace = super::runtime::Workspace {
+        task_store: TaskStore::at(directory.path().join("client/tasks.toml")),
+        config_store: ConfigStore::at(directory.path().join("client/config.toml")),
+    };
+    workspace
+        .config_store
+        .create_workspace_file(&main_config_store)
+        .unwrap();
+    let mut config = Config::default();
+    let updated = Config::with_tasks(TimerConfig::default(), TasksConfig::new(false)).unwrap();
+    let mut app = App::from_config(&config);
+    let mut task_store = Some(workspace.task_store.clone());
+    handle_outcome(
+        AppOutcome::SettingsChanged(Box::new(updated.clone())),
+        &mut app,
+        &mut config,
+        &mut task_store,
+        &workspace,
+        &mut RecordingNotifier::default(),
+        &mut RecordingSoundPlayer::default(),
+    )
+    .unwrap();
+    assert_eq!(workspace.config_store.load().unwrap(), updated);
+    assert_eq!(main_config_store.load().unwrap(), Config::default());
+    assert!(task_store.is_none());
 }

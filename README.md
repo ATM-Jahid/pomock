@@ -11,12 +11,13 @@ and [Crossterm](https://github.com/crossterm-rs/crossterm).
 
 - Focus, short break, and long break sessions.
 - Editable to-do and done lists.
-- Named task workspaces for running independent `pomock` instances.
 - Keyboard and mouse navigation.
 - Desktop notifications.
 - Completion and looping Focus audio.
 - An in-app settings overlay for all configurable options.
 - TOML configuration for persistent settings.
+- Named workspaces with independent settings and tasks.
+- Smart layout management to fit any terminal size.
 
 ## 📦 Installation
 
@@ -44,7 +45,8 @@ To run the program directly from the cloned repo without installing it, use:
 cargo run
 ```
 
-To use an independent named task workspace, pass `--workspace` or `-w`:
+Running `pomock` without any argument selects the `main` workspace.
+To use an independent named workspace, pass `--workspace` or `-w`:
 
 ```sh
 pomock -w foo
@@ -178,21 +180,19 @@ done_highlight = "green"
 
 ### TOML locations
 
-`pomock` creates `pomock/config.toml` with defaults
-in the platform's standard user configuration directory
-(for example, `$XDG_CONFIG_HOME` or `~/.config` on Linux)
-if a configuration file does not exist.
-Edit that file to customize the settings (or use the in-app settings overlay).
+Each workspace has its own `config.toml` and `tasks.toml`,
+stored in the platform's user configuration and local user data directories.
+On Linux, the default paths are:
 
-By default, `pomock` saves task descriptions, order, and completion state
-after every successful task change.
-When task persistence is enabled,
-`tasks.toml` is also created on startup
-and lives under the platform's standard per-user application data directory
-(for example, `$XDG_DATA_HOME/pomock` or `~/.local/share/pomock` on Linux).
-For a named workspace (e.g. `foo`),
-it lives in a child directory named after the workspace
-(e.g. `~/.local/share/pomock/foo/tasks.toml`).
+| File | Path |
+| --- | --- |
+| Config | `~/.config/pomock/<workspace>/config.toml` |
+| Tasks | `~/.local/share/pomock/<workspace>/tasks.toml` |
+
+Here, `<workspace>` is the name of the workspace.
+
+Edit `config.toml` directly or use the in-app settings overlay to customize settings.
+Tasks are saved automatically by default.
 
 ### Keybinding values
 

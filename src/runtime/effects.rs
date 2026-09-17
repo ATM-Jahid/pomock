@@ -2,9 +2,9 @@ use std::{error::Error, fmt, io};
 
 use pomock::{
     app::{App, AppOutcome, FocusAudioAction, TaskState},
-    config::{Config, ConfigError},
+    config::Config,
     notification::Notifier,
-    persistence::{TaskPersistenceError, TaskStore},
+    persistence::{ConfigError, TaskPersistenceError, TaskStore},
     sound::SoundPlayer,
 };
 
@@ -13,7 +13,7 @@ pub(crate) fn handle_outcome(
     app: &mut App,
     config: &mut Config,
     task_store: &mut Option<TaskStore>,
-    workspace_store: &TaskStore,
+    workspace: &super::Workspace,
     notifier: &mut impl Notifier,
     sound_player: &mut impl SoundPlayer,
 ) -> Result<bool, RunError> {
@@ -74,14 +74,14 @@ pub(crate) fn handle_outcome(
         AppOutcome::SettingsChanged(updated) => {
             let focus_file_changed =
                 config.sound().focus().playback_file() != updated.sound().focus().playback_file();
-            let next_task_store = task_store_for_config(&updated, workspace_store);
+            let next_task_store = task_store_for_config(&updated, &workspace.task_store);
             let errors = apply_settings_change(
                 *updated,
                 &app.task_state(),
                 config,
                 task_store,
                 next_task_store,
-                Config::save,
+                |config| workspace.config_store.save(config),
             );
             for error in &errors {
                 report_write_failure(app, error);
@@ -191,9 +191,12 @@ fn underlying_io_error<'a>(mut error: &'a (dyn Error + 'static)) -> Option<&'a i
 
 pub(crate) fn task_store_for_config(
     config: &Config,
-    workspace_store: &TaskStore,
+    workspace_task_store: &TaskStore,
 ) -> Option<TaskStore> {
-    config.tasks().persist().then(|| workspace_store.clone())
+    config
+        .tasks()
+        .persist()
+        .then(|| workspace_task_store.clone())
 }
 
 #[derive(Debug)]

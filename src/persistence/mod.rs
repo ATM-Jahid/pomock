@@ -6,13 +6,16 @@ use std::{
 
 use directories::ProjectDirs;
 
+mod config;
 mod tasks;
 mod workspace;
 
+pub use config::{ConfigError, ConfigStore};
 pub use workspace::WorkspaceLock;
 
 const TASKS_FILE_NAME: &str = "tasks.toml";
 const TASK_FILE_VERSION: u32 = 1;
+const DEFAULT_WORKSPACE: &str = "main";
 
 /// Filesystem boundary for durable task state.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -26,15 +29,13 @@ impl TaskStore {
         Self::user_in_workspace(None)
     }
 
-    /// Uses the per-user task file for an optional named workspace.
+    /// Uses the per-user task file for a workspace, defaulting to `main`.
     pub fn user_in_workspace(workspace: Option<&str>) -> Result<Self, TaskPersistenceError> {
         let path = ProjectDirs::from("", "", "pomock")
             .map(|dirs| {
-                let directory = workspace.map_or_else(
-                    || dirs.data_local_dir().to_owned(),
-                    |name| dirs.data_local_dir().join(name),
-                );
-                directory.join(TASKS_FILE_NAME)
+                dirs.data_local_dir()
+                    .join(workspace.unwrap_or(DEFAULT_WORKSPACE))
+                    .join(TASKS_FILE_NAME)
             })
             .ok_or(TaskPersistenceError::DirectoryUnavailable)?;
         Ok(Self { path })
@@ -225,18 +226,22 @@ mod tests {
     }
 
     #[test]
-    fn named_workspace_uses_a_child_of_the_default_data_directory() {
+    fn default_and_named_workspaces_use_sibling_data_directories() {
         let default_store = TaskStore::user().unwrap();
+        assert_eq!(
+            default_store,
+            TaskStore::user_in_workspace(Some("main")).unwrap()
+        );
+        let dirs = directories::ProjectDirs::from("", "", "pomock").unwrap();
+        assert_eq!(
+            default_store.path(),
+            dirs.data_local_dir().join("main/tasks.toml")
+        );
         let named_store = TaskStore::user_in_workspace(Some("client-one")).unwrap();
 
         assert_eq!(
             named_store.path(),
-            default_store
-                .path()
-                .parent()
-                .unwrap()
-                .join("client-one")
-                .join("tasks.toml")
+            dirs.data_local_dir().join("client-one").join("tasks.toml")
         );
     }
 

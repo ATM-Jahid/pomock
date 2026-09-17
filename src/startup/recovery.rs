@@ -7,33 +7,25 @@ use std::{
 
 use pomock::{
     app::TaskState,
-    config::{Config, ConfigError},
-    persistence::{TaskPersistenceError, TaskStore},
+    config::Config,
+    persistence::{ConfigError, ConfigStore, TaskPersistenceError, TaskStore},
 };
 
 pub(crate) fn load_config_for_startup(
-    reader: &mut impl BufRead,
-    writer: &mut impl Write,
-) -> Result<Option<Config>, StartupError> {
-    let path = Config::path()?;
-    load_config_path_for_startup(&path, reader, writer)
-}
-
-pub(crate) fn load_config_path_for_startup(
-    path: &Path,
+    config_store: &ConfigStore,
     reader: &mut impl BufRead,
     writer: &mut impl Write,
 ) -> Result<Option<Config>, StartupError> {
     loop {
-        match Config::load_from(path) {
+        match config_store.load() {
             Ok(config) => {
-                if Config::create_default_file(path)? {
+                if config_store.create_default_file()? {
                     return Ok(Some(Config::default()));
                 }
                 return Ok(Some(config));
             }
             Err(error) if is_invalid_config(&error) => {
-                let Some((error, contents)) = stable_invalid_config(path)? else {
+                let Some((error, contents)) = stable_invalid_config(config_store)? else {
                     continue;
                 };
                 if !confirm_backup_and_new_file(
@@ -41,12 +33,12 @@ pub(crate) fn load_config_path_for_startup(
                     writer,
                     "configuration",
                     "config",
-                    path,
+                    config_store.path(),
                     &error,
                 )? {
                     return Ok(None);
                 }
-                let backup = match Config::replace_with_default_if_unchanged(path, &contents) {
+                let backup = match config_store.replace_with_default_if_unchanged(&contents) {
                     Ok(Some(backup)) => backup,
                     Ok(None) => continue,
                     Err(ConfigError::Read { source, .. })
@@ -121,13 +113,16 @@ pub(crate) fn load_tasks_for_startup(
     }
 }
 
-fn stable_invalid_config(path: &Path) -> Result<Option<(ConfigError, Vec<u8>)>, StartupError> {
+fn stable_invalid_config(
+    config_store: &ConfigStore,
+) -> Result<Option<(ConfigError, Vec<u8>)>, StartupError> {
+    let path = config_store.path();
     let contents = match fs::read(path) {
         Ok(contents) => contents,
         Err(error) if error.kind() == io::ErrorKind::NotFound => return Ok(None),
         Err(error) => return Err(error.into()),
     };
-    let error = match Config::load_from(path) {
+    let error = match config_store.load() {
         Err(error) if is_invalid_config(&error) => error,
         _ => return Ok(None),
     };

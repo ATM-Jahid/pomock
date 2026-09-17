@@ -1,9 +1,8 @@
-use std::{error::Error, fmt, io, path::PathBuf};
+use std::{error::Error, fmt, path::PathBuf};
 
 mod keys;
 mod notification;
 mod sound;
-mod storage;
 mod tasks;
 mod theme;
 mod timer;
@@ -19,7 +18,7 @@ pub(crate) use timer::{format_duration, parse_duration};
 #[cfg(test)]
 use keys::KeyBindings;
 
-/// Durable user settings shared by the application and future settings UI.
+/// Validated user settings shared by the application and settings UI.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct Config {
     timer: TimerConfig,
@@ -221,90 +220,6 @@ impl fmt::Display for ConfigValidationError {
 }
 
 impl Error for ConfigValidationError {}
-
-#[derive(Debug)]
-pub enum ConfigError {
-    DirectoryUnavailable,
-    Read {
-        path: PathBuf,
-        source: io::Error,
-    },
-    Parse {
-        path: PathBuf,
-        source: toml::de::Error,
-    },
-    Validation {
-        path: PathBuf,
-        source: ConfigValidationError,
-    },
-    CreateDirectory {
-        path: PathBuf,
-        source: io::Error,
-    },
-    Backup {
-        path: PathBuf,
-        source: io::Error,
-    },
-    Serialize(toml::ser::Error),
-    Write {
-        path: PathBuf,
-        source: io::Error,
-    },
-}
-
-impl fmt::Display for ConfigError {
-    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
-        match self {
-            Self::DirectoryUnavailable => {
-                formatter.write_str("could not determine the user configuration directory")
-            }
-            Self::Read { path, source } => {
-                write!(formatter, "could not read {}: {source}", path.display())
-            }
-            Self::Parse { path, source } => {
-                write!(formatter, "could not parse {}: {source}", path.display())
-            }
-            Self::Validation { path, source } => {
-                write!(
-                    formatter,
-                    "invalid configuration in {}: {source}",
-                    path.display()
-                )
-            }
-            Self::CreateDirectory { path, source } => write!(
-                formatter,
-                "could not create configuration directory {}: {source}",
-                path.display()
-            ),
-            Self::Backup { path, source } => write!(
-                formatter,
-                "could not back up configuration file {}: {source}",
-                path.display()
-            ),
-            Self::Serialize(source) => {
-                write!(formatter, "could not serialize configuration: {source}")
-            }
-            Self::Write { path, source } => {
-                write!(formatter, "could not write {}: {source}", path.display())
-            }
-        }
-    }
-}
-
-impl Error for ConfigError {
-    fn source(&self) -> Option<&(dyn Error + 'static)> {
-        match self {
-            Self::DirectoryUnavailable => None,
-            Self::Read { source, .. }
-            | Self::CreateDirectory { source, .. }
-            | Self::Backup { source, .. }
-            | Self::Write { source, .. } => Some(source),
-            Self::Parse { source, .. } => Some(source),
-            Self::Validation { source, .. } => Some(source),
-            Self::Serialize(source) => Some(source),
-        }
-    }
-}
 
 #[cfg(test)]
 #[path = "tests.rs"]
