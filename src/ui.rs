@@ -88,5 +88,4 @@ fn inner_width(area: Rect) -> u16 {
 }
 
 #[cfg(test)]
-#[path = "tests.rs"]
 mod tests;

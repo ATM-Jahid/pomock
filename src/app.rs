@@ -472,5 +472,4 @@ impl Default for App {
 }
 
 #[cfg(test)]
-#[path = "tests.rs"]
 mod tests;

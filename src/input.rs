@@ -258,5 +258,4 @@ fn key_matches(key: PhysicalKey, configured: ConfigKey) -> bool {
 }
 
 #[cfg(test)]
-#[path = "input/tests.rs"]
 mod tests;

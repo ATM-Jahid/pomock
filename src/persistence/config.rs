@@ -373,5 +373,4 @@ impl Error for ConfigError {
 }
 
 #[cfg(test)]
-#[path = "config/tests.rs"]
 mod tests;

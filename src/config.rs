@@ -251,5 +251,4 @@ impl fmt::Display for ConfigValidationError {
 impl Error for ConfigValidationError {}
 
 #[cfg(test)]
-#[path = "tests.rs"]
 mod tests;

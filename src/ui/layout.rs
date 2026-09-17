@@ -352,5 +352,4 @@ pub(crate) fn clock_geometry(area: Rect, duration: Duration) -> ClockGeometry {
 }
 
 #[cfg(test)]
-#[path = "layout/tests.rs"]
 mod tests;
