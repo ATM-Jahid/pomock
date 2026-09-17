@@ -251,3 +251,6 @@ impl From<io::Error> for StartupError {
         Self::Io(error)
     }
 }
+
+#[cfg(test)]
+mod tests;

@@ -256,3 +256,6 @@ impl From<ConfigError> for RunError {
         Self::Config(error)
     }
 }
+
+#[cfg(test)]
+mod tests;

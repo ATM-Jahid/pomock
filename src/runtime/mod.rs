@@ -19,8 +19,6 @@ mod effects;
 mod terminal;
 
 pub(crate) use effects::task_store_for_config;
-#[cfg(test)]
-pub(crate) use effects::{FileWriteError, RunError, apply_settings_change};
 pub(crate) use terminal::{TerminalSession, combine_run_and_restore_results};
 
 pub(crate) struct Workspace {
@@ -148,3 +146,6 @@ pub(crate) fn run_app(
 
     Ok(app.write_error_log().to_vec())
 }
+
+#[cfg(test)]
+mod tests;

@@ -126,3 +126,6 @@ pub(crate) fn combine_run_and_restore_results<T>(
         }),
     }
 }
+
+#[cfg(test)]
+mod tests;

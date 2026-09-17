@@ -106,3 +106,6 @@ pub(crate) fn write_help(writer: &mut impl Write) -> io::Result<()> {
 pub(crate) fn write_version(writer: &mut impl Write) -> io::Result<()> {
     writeln!(writer, "pomock {}", env!("CARGO_PKG_VERSION"))
 }
+
+#[cfg(test)]
+mod tests;

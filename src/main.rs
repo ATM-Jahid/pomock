@@ -63,5 +63,4 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 }
 
 #[cfg(test)]
-#[path = "main/tests.rs"]
-mod tests;
+mod test_support;
