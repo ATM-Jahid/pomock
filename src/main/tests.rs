@@ -7,7 +7,7 @@ use std::{
 };
 
 use super::runtime::{
-    FileWriteError, RunError, apply_settings_change, handle_outcome, task_store_for_config,
+    FileWriteError, RunError, RuntimeContext, apply_settings_change, task_store_for_config,
 };
 use super::runtime::{advance_timer, combine_run_and_restore_results, should_handle_key_event};
 use super::startup::{CliError, StartupError, load_config_for_startup};
@@ -537,30 +537,27 @@ fn task_change_outcomes_are_saved_at_the_boundary() {
     }
     let outcome = app.dispatch(Action::SubmitEdit);
 
-    let mut config = Config::default();
-    let mut task_store = Some(store.clone());
-    let mut notifier = RecordingNotifier::default();
-    let mut sound_player = RecordingSoundPlayer::default();
+    let config = Config::default();
+    let task_store = Some(store.clone());
+    let notifier = RecordingNotifier::default();
+    let sound_player = RecordingSoundPlayer::default();
 
-    assert!(
-        !handle_outcome(
-            outcome,
-            &mut app,
-            &mut config,
-            &mut task_store,
-            &super::runtime::Workspace {
-                task_store: store.clone(),
-                config_store: ConfigStore::at(temp_path("effects-config.toml")),
-            },
-            &mut notifier,
-            &mut sound_player,
-        )
-        .unwrap()
-    );
-    assert!(notifier.completions.is_empty());
-    assert!(sound_player.files.is_empty());
+    let mut runtime = RuntimeContext {
+        config,
+        task_store,
+        workspace: super::runtime::Workspace {
+            task_store: store.clone(),
+            config_store: ConfigStore::at(temp_path("effects-config.toml")),
+        },
+        notifier,
+        sound_player,
+    };
+
+    assert!(!runtime.handle_outcome(outcome, &mut app).unwrap());
+    assert!(runtime.notifier.completions.is_empty());
+    assert!(runtime.sound_player.files.is_empty());
     assert_eq!(
-        task_store.as_ref().unwrap().load().unwrap(),
+        runtime.task_store.as_ref().unwrap().load().unwrap(),
         app.task_state()
     );
 
@@ -579,26 +576,23 @@ fn failed_task_save_reports_an_error_and_allows_a_later_save() {
         let _ = app.dispatch(Action::PushInput(character));
     }
     let outcome = app.dispatch(Action::SubmitEdit);
-    let mut config = Config::default();
-    let mut task_store = Some(store.clone());
-    let mut notifier = RecordingNotifier::default();
-    let mut sound_player = RecordingSoundPlayer::default();
+    let config = Config::default();
+    let task_store = Some(store.clone());
+    let notifier = RecordingNotifier::default();
+    let sound_player = RecordingSoundPlayer::default();
 
-    assert!(
-        !handle_outcome(
-            outcome,
-            &mut app,
-            &mut config,
-            &mut task_store,
-            &super::runtime::Workspace {
-                task_store: store.clone(),
-                config_store: ConfigStore::at(temp_path("effects-config.toml")),
-            },
-            &mut notifier,
-            &mut sound_player,
-        )
-        .unwrap()
-    );
+    let mut runtime = RuntimeContext {
+        config,
+        task_store,
+        workspace: super::runtime::Workspace {
+            task_store: store.clone(),
+            config_store: ConfigStore::at(temp_path("effects-config.toml")),
+        },
+        notifier,
+        sound_player,
+    };
+
+    assert!(!runtime.handle_outcome(outcome, &mut app).unwrap());
     assert!(app.task_write_error().is_some());
     assert!(!app.is_confirmation_open());
     fs::remove_file(&parent).unwrap();
@@ -608,21 +602,7 @@ fn failed_task_save_reports_an_error_and_allows_a_later_save() {
         let _ = app.dispatch(Action::PushInput(character));
     }
     let next_change = app.dispatch(Action::SubmitEdit);
-    assert!(
-        !handle_outcome(
-            next_change,
-            &mut app,
-            &mut config,
-            &mut task_store,
-            &super::runtime::Workspace {
-                task_store: store.clone(),
-                config_store: ConfigStore::at(temp_path("effects-config.toml")),
-            },
-            &mut notifier,
-            &mut sound_player,
-        )
-        .unwrap()
-    );
+    assert!(!runtime.handle_outcome(next_change, &mut app).unwrap());
     assert!(app.task_write_error().is_some());
     assert_eq!(store.load().unwrap(), app.task_state());
     fs::remove_dir_all(parent).unwrap();
@@ -633,7 +613,7 @@ fn disabled_task_persistence_starts_empty_and_does_not_save_changes() {
     let path = temp_path("disabled-tasks.toml");
     let store = TaskStore::at(&path);
     let config = Config::with_tasks(TimerConfig::default(), TasksConfig::new(false)).unwrap();
-    let mut disabled_store = task_store_for_config(&config, &store);
+    let disabled_store = task_store_for_config(&config, &store);
     assert!(disabled_store.is_none());
 
     let mut persisted_app = App::new();
@@ -663,24 +643,20 @@ fn disabled_task_persistence_starts_empty_and_does_not_save_changes() {
     let _ = app.dispatch(Action::PushInput('x'));
     let outcome = app.dispatch(Action::SubmitEdit);
 
-    let mut config = config;
-    let mut notifier = RecordingNotifier::default();
-    let mut sound_player = RecordingSoundPlayer::default();
-    assert!(
-        !handle_outcome(
-            outcome,
-            &mut app,
-            &mut config,
-            &mut disabled_store,
-            &super::runtime::Workspace {
-                task_store: store.clone(),
-                config_store: ConfigStore::at(temp_path("effects-config.toml")),
-            },
-            &mut notifier,
-            &mut sound_player,
-        )
-        .unwrap()
-    );
+    let notifier = RecordingNotifier::default();
+    let sound_player = RecordingSoundPlayer::default();
+
+    let mut runtime = RuntimeContext {
+        config,
+        task_store: disabled_store,
+        workspace: super::runtime::Workspace {
+            task_store: store.clone(),
+            config_store: ConfigStore::at(temp_path("effects-config.toml")),
+        },
+        notifier,
+        sound_player,
+    };
+    assert!(!runtime.handle_outcome(outcome, &mut app).unwrap());
     assert_eq!(store.load().unwrap(), persisted);
 
     fs::remove_file(path).unwrap();
@@ -819,160 +795,176 @@ fn unrelated_settings_changes_do_not_rewrite_tasks() {
 fn completion_outcome_routes_notification_and_audio_effects() {
     let mut app = App::new();
     let sound_file = temp_path("custom-completion.mp3");
-    let mut config = Config::default()
+    let config = Config::default()
         .with_sound(pomock::config::SoundConfig::default().with_completion(
             pomock::config::CompletionSoundConfig::new(true, Some(sound_file.clone())),
         ))
         .unwrap();
-    let mut task_store = None;
+    let task_store = None;
     let workspace = super::runtime::Workspace {
         task_store: TaskStore::at(temp_path("completion-workspace/tasks.toml")),
         config_store: ConfigStore::at(temp_path("effects-config.toml")),
     };
-    let mut notifier = RecordingNotifier::default();
-    let mut sound_player = RecordingSoundPlayer::default();
+    let notifier = RecordingNotifier::default();
+    let sound_player = RecordingSoundPlayer::default();
+
+    let mut runtime = RuntimeContext {
+        config,
+        task_store,
+        workspace,
+        notifier,
+        sound_player,
+    };
 
     assert!(
-        !handle_outcome(
-            AppOutcome::SessionCompleted(pomock::SessionKind::Focus),
-            &mut app,
-            &mut config,
-            &mut task_store,
-            &workspace,
-            &mut notifier,
-            &mut sound_player,
-        )
-        .unwrap()
+        !runtime
+            .handle_outcome(
+                AppOutcome::SessionCompleted(pomock::SessionKind::Focus),
+                &mut app
+            )
+            .unwrap()
     );
-    assert_eq!(notifier.completions, [pomock::SessionKind::Focus]);
-    assert_eq!(sound_player.files, [sound_file]);
-    assert_eq!(sound_player.focus_actions, ["stop"]);
+    assert_eq!(runtime.notifier.completions, [pomock::SessionKind::Focus]);
+    assert_eq!(runtime.sound_player.files, [sound_file]);
+    assert_eq!(runtime.sound_player.focus_actions, ["stop"]);
 }
 
 #[test]
 fn disabled_notifications_do_not_suppress_completion_audio() {
     let mut app = App::new();
     let sound_file = temp_path("completion.wav");
-    let mut config = Config::default()
+    let config = Config::default()
         .with_notification(pomock::config::NotificationConfig::new(false))
         .with_sound(pomock::config::SoundConfig::default().with_completion(
             pomock::config::CompletionSoundConfig::new(true, Some(sound_file.clone())),
         ))
         .unwrap();
-    let mut task_store = None;
+    let task_store = None;
     let workspace = super::runtime::Workspace {
         task_store: TaskStore::at(temp_path("notification-workspace/tasks.toml")),
         config_store: ConfigStore::at(temp_path("effects-config.toml")),
     };
-    let mut notifier = RecordingNotifier::default();
-    let mut sound_player = RecordingSoundPlayer::default();
+    let notifier = RecordingNotifier::default();
+    let sound_player = RecordingSoundPlayer::default();
 
-    handle_outcome(
-        AppOutcome::SessionCompleted(pomock::SessionKind::ShortBreak),
-        &mut app,
-        &mut config,
-        &mut task_store,
-        &workspace,
-        &mut notifier,
-        &mut sound_player,
-    )
-    .unwrap();
+    let mut runtime = RuntimeContext {
+        config,
+        task_store,
+        workspace,
+        notifier,
+        sound_player,
+    };
 
-    assert!(notifier.completions.is_empty());
-    assert_eq!(sound_player.files, [sound_file]);
-    assert!(sound_player.focus_actions.is_empty());
+    runtime
+        .handle_outcome(
+            AppOutcome::SessionCompleted(pomock::SessionKind::ShortBreak),
+            &mut app,
+        )
+        .unwrap();
+
+    assert!(runtime.notifier.completions.is_empty());
+    assert_eq!(runtime.sound_player.files, [sound_file]);
+    assert!(runtime.sound_player.focus_actions.is_empty());
 }
 
 #[test]
 fn combined_timer_effect_stops_completion_before_starting_focus_audio() {
     let focus_file = temp_path("focus-loop.wav");
-    let mut config = Config::default()
+    let config = Config::default()
         .with_sound(pomock::config::SoundConfig::default().with_focus(
             pomock::config::FocusSoundConfig::new(true, Some(focus_file.clone())),
         ))
         .unwrap();
     let mut app = App::from_config(&config);
-    let mut task_store = None;
+    let task_store = None;
     let workspace = super::runtime::Workspace {
         task_store: TaskStore::at(temp_path("timer-effects-workspace/tasks.toml")),
         config_store: ConfigStore::at(temp_path("effects-config.toml")),
     };
-    let mut notifier = RecordingNotifier::default();
-    let mut sound = RecordingSoundPlayer::default();
+    let notifier = RecordingNotifier::default();
+    let sound = RecordingSoundPlayer::default();
 
-    handle_outcome(
-        AppOutcome::TimerEffects {
-            focus_audio: Some(FocusAudioAction::StartOrResume),
-            stop_completion_audio: true,
-        },
-        &mut app,
-        &mut config,
-        &mut task_store,
-        &workspace,
-        &mut notifier,
-        &mut sound,
-    )
-    .unwrap();
+    let mut runtime = RuntimeContext {
+        config,
+        task_store,
+        workspace,
+        notifier,
+        sound_player: sound,
+    };
 
-    assert_eq!(sound.focus_actions, ["stop_completion", "start"]);
-    assert_eq!(sound.focus_files, [focus_file]);
+    runtime
+        .handle_outcome(
+            AppOutcome::TimerEffects {
+                focus_audio: Some(FocusAudioAction::StartOrResume),
+                stop_completion_audio: true,
+            },
+            &mut app,
+        )
+        .unwrap();
+
+    assert_eq!(
+        runtime.sound_player.focus_actions,
+        ["stop_completion", "start"]
+    );
+    assert_eq!(runtime.sound_player.focus_files, [focus_file]);
 }
 
 #[test]
 fn focus_audio_outcomes_route_only_configured_starts_and_always_cleanup() {
     let mut app = App::new();
     let focus_file = temp_path("focus.ogg");
-    let mut config = Config::default()
+    let config = Config::default()
         .with_sound(pomock::config::SoundConfig::default().with_focus(
             pomock::config::FocusSoundConfig::new(true, Some(focus_file.clone())),
         ))
         .unwrap();
-    let mut task_store = None;
+    let task_store = None;
     let workspace = super::runtime::Workspace {
         task_store: TaskStore::at(temp_path("focus-audio-workspace/tasks.toml")),
         config_store: ConfigStore::at(temp_path("effects-config.toml")),
     };
-    let mut notifier = RecordingNotifier::default();
-    let mut sound_player = RecordingSoundPlayer::default();
+    let notifier = RecordingNotifier::default();
+    let sound_player = RecordingSoundPlayer::default();
+
+    let mut runtime = RuntimeContext {
+        config,
+        task_store,
+        workspace,
+        notifier,
+        sound_player,
+    };
 
     for outcome in [
         AppOutcome::FocusAudio(FocusAudioAction::StartOrResume),
         AppOutcome::FocusAudio(FocusAudioAction::Pause),
         AppOutcome::FocusAudio(FocusAudioAction::Stop),
     ] {
-        handle_outcome(
-            outcome,
-            &mut app,
-            &mut config,
-            &mut task_store,
-            &workspace,
-            &mut notifier,
-            &mut sound_player,
-        )
-        .unwrap();
+        runtime.handle_outcome(outcome, &mut app).unwrap();
     }
 
-    assert_eq!(sound_player.focus_actions, ["start", "pause", "stop"]);
-    assert_eq!(sound_player.focus_files, [focus_file]);
+    assert_eq!(
+        runtime.sound_player.focus_actions,
+        ["start", "pause", "stop"]
+    );
+    assert_eq!(runtime.sound_player.focus_files, [focus_file]);
 
-    let mut disabled_config = Config::default();
-    handle_outcome(
-        AppOutcome::FocusAudio(FocusAudioAction::StartOrResume),
-        &mut app,
-        &mut disabled_config,
-        &mut task_store,
-        &workspace,
-        &mut notifier,
-        &mut sound_player,
-    )
-    .unwrap();
-    assert_eq!(sound_player.focus_actions, ["start", "pause", "stop"]);
+    runtime.config = Config::default();
+    runtime
+        .handle_outcome(
+            AppOutcome::FocusAudio(FocusAudioAction::StartOrResume),
+            &mut app,
+        )
+        .unwrap();
+    assert_eq!(
+        runtime.sound_player.focus_actions,
+        ["start", "pause", "stop"]
+    );
 }
 
 #[test]
 fn disabled_sound_options_keep_configured_files_silent() {
     let mut app = App::new();
-    let mut config = Config::default()
+    let config = Config::default()
         .with_sound(
             pomock::config::SoundConfig::default()
                 .with_completion(pomock::config::CompletionSoundConfig::new(
@@ -985,32 +977,31 @@ fn disabled_sound_options_keep_configured_files_silent() {
                 )),
         )
         .unwrap();
-    let mut task_store = None;
+    let task_store = None;
     let workspace = super::runtime::Workspace {
         task_store: TaskStore::at(temp_path("disabled-sound-workspace/tasks.toml")),
         config_store: ConfigStore::at(temp_path("effects-config.toml")),
     };
-    let mut notifier = RecordingNotifier::default();
-    let mut sound_player = RecordingSoundPlayer::default();
+    let notifier = RecordingNotifier::default();
+    let sound_player = RecordingSoundPlayer::default();
+
+    let mut runtime = RuntimeContext {
+        config,
+        task_store,
+        workspace,
+        notifier,
+        sound_player,
+    };
 
     for outcome in [
         AppOutcome::FocusAudio(FocusAudioAction::StartOrResume),
         AppOutcome::SessionCompleted(pomock::SessionKind::ShortBreak),
     ] {
-        handle_outcome(
-            outcome,
-            &mut app,
-            &mut config,
-            &mut task_store,
-            &workspace,
-            &mut notifier,
-            &mut sound_player,
-        )
-        .unwrap();
+        runtime.handle_outcome(outcome, &mut app).unwrap();
     }
 
-    assert!(sound_player.files.is_empty());
-    assert!(sound_player.focus_actions.is_empty());
+    assert!(runtime.sound_player.files.is_empty());
+    assert!(runtime.sound_player.focus_actions.is_empty());
 }
 
 #[test]
@@ -1068,21 +1059,25 @@ fn settings_outcome_saves_to_the_selected_workspace_even_without_task_persistenc
         .config_store
         .create_workspace_file(&main_config_store)
         .unwrap();
-    let mut config = Config::default();
+    let config = Config::default();
     let updated = Config::with_tasks(TimerConfig::default(), TasksConfig::new(false)).unwrap();
     let mut app = App::from_config(&config);
-    let mut task_store = Some(workspace.task_store.clone());
-    handle_outcome(
-        AppOutcome::SettingsChanged(Box::new(updated.clone())),
-        &mut app,
-        &mut config,
-        &mut task_store,
-        &workspace,
-        &mut RecordingNotifier::default(),
-        &mut RecordingSoundPlayer::default(),
-    )
-    .unwrap();
-    assert_eq!(workspace.config_store.load().unwrap(), updated);
+    let task_store = Some(workspace.task_store.clone());
+
+    let mut runtime = RuntimeContext {
+        config,
+        task_store,
+        workspace,
+        notifier: RecordingNotifier::default(),
+        sound_player: RecordingSoundPlayer::default(),
+    };
+    runtime
+        .handle_outcome(
+            AppOutcome::SettingsChanged(Box::new(updated.clone())),
+            &mut app,
+        )
+        .unwrap();
+    assert_eq!(runtime.workspace.config_store.load().unwrap(), updated);
     assert_eq!(main_config_store.load().unwrap(), Config::default());
-    assert!(task_store.is_none());
+    assert!(runtime.task_store.is_none());
 }

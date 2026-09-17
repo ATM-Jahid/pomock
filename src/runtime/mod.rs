@@ -20,12 +20,20 @@ mod terminal;
 
 pub(crate) use effects::task_store_for_config;
 #[cfg(test)]
-pub(crate) use effects::{FileWriteError, RunError, apply_settings_change, handle_outcome};
+pub(crate) use effects::{FileWriteError, RunError, apply_settings_change};
 pub(crate) use terminal::{TerminalSession, combine_run_and_restore_results};
 
 pub(crate) struct Workspace {
     pub task_store: TaskStore,
     pub config_store: ConfigStore,
+}
+
+pub(crate) struct RuntimeContext<N, S> {
+    pub(crate) config: Config,
+    pub(crate) task_store: Option<TaskStore>,
+    pub(crate) workspace: Workspace,
+    pub(crate) notifier: N,
+    pub(crate) sound_player: S,
 }
 
 pub(crate) fn handle_mouse(
@@ -66,29 +74,26 @@ pub(crate) fn advance_timer(app: &mut App, last_tick: &mut Instant, now: Instant
 
 pub(crate) fn run_app(
     terminal: &mut Terminal<CrosstermBackend<Stdout>>,
-    mut config: Config,
-    mut task_store: Option<TaskStore>,
+    config: Config,
+    task_store: Option<TaskStore>,
     task_state: TaskState,
     workspace: Workspace,
 ) -> Result<Vec<String>, effects::RunError> {
     let mut app = App::from_config_and_tasks(&config, task_state);
-    let mut notifier = DesktopNotifier;
-    let mut sound_player = FileSoundPlayer::default();
+    let mut runtime = RuntimeContext {
+        config,
+        task_store,
+        workspace,
+        notifier: DesktopNotifier,
+        sound_player: FileSoundPlayer::default(),
+    };
 
     let mut last_tick = Instant::now();
 
     loop {
         let now = Instant::now();
         let outcome = advance_timer(&mut app, &mut last_tick, now);
-        if effects::handle_outcome(
-            outcome,
-            &mut app,
-            &mut config,
-            &mut task_store,
-            &workspace,
-            &mut notifier,
-            &mut sound_player,
-        )? {
+        if runtime.handle_outcome(outcome, &mut app)? {
             break;
         }
 
@@ -97,8 +102,8 @@ pub(crate) fn run_app(
             frame_geometry = Some(draw(
                 frame,
                 &mut app,
-                Theme::from(config.theme()),
-                config.keys(),
+                Theme::from(runtime.config.theme()),
+                runtime.config.keys(),
             ));
         })?;
         let frame_geometry = frame_geometry.expect("terminal draw must resolve frame geometry");
@@ -107,15 +112,7 @@ pub(crate) fn run_app(
             let event = event::read()?;
             let now = Instant::now();
             let outcome = advance_timer(&mut app, &mut last_tick, now);
-            if effects::handle_outcome(
-                outcome,
-                &mut app,
-                &mut config,
-                &mut task_store,
-                &workspace,
-                &mut notifier,
-                &mut sound_player,
-            )? {
+            if runtime.handle_outcome(outcome, &mut app)? {
                 break;
             }
 
@@ -131,15 +128,7 @@ pub(crate) fn run_app(
                     ) && action_target_visible(&frame_geometry, app.ui_focus(), &action)
                     {
                         let outcome = app.dispatch(action);
-                        if effects::handle_outcome(
-                            outcome,
-                            &mut app,
-                            &mut config,
-                            &mut task_store,
-                            &workspace,
-                            &mut notifier,
-                            &mut sound_player,
-                        )? {
+                        if runtime.handle_outcome(outcome, &mut app)? {
                             break;
                         }
                     }
@@ -147,15 +136,7 @@ pub(crate) fn run_app(
                 Event::Mouse(mouse) => {
                     if app.edit_mode() == EditMode::Normal {
                         let outcome = handle_mouse(&mut app, mouse, &frame_geometry, now);
-                        if effects::handle_outcome(
-                            outcome,
-                            &mut app,
-                            &mut config,
-                            &mut task_store,
-                            &workspace,
-                            &mut notifier,
-                            &mut sound_player,
-                        )? {
+                        if runtime.handle_outcome(outcome, &mut app)? {
                             break;
                         }
                     }

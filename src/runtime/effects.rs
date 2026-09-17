@@ -8,37 +8,22 @@ use pomock::{
     sound::SoundPlayer,
 };
 
-pub(crate) fn handle_outcome(
-    outcome: AppOutcome,
-    app: &mut App,
-    config: &mut Config,
-    task_store: &mut Option<TaskStore>,
-    workspace: &super::Workspace,
-    notifier: &mut impl Notifier,
-    sound_player: &mut impl SoundPlayer,
-) -> Result<bool, RunError> {
-    match outcome {
-        AppOutcome::None => Ok(false),
-        AppOutcome::FocusAudio(action) => {
-            match action {
-                FocusAudioAction::StartOrResume => {
-                    if let Some(file) = config.sound().focus().playback_file() {
-                        sound_player.start_or_resume_focus(file);
-                    }
-                }
-                FocusAudioAction::Pause => sound_player.pause_focus(),
-                FocusAudioAction::Stop => sound_player.stop_focus(),
-            }
-            Ok(false)
-        }
-        AppOutcome::TimerEffects {
-            focus_audio,
-            stop_completion_audio,
-        } => {
-            if stop_completion_audio {
-                sound_player.stop_completion();
-            }
-            if let Some(action) = focus_audio {
+impl<N: Notifier, S: SoundPlayer> super::RuntimeContext<N, S> {
+    pub(crate) fn handle_outcome(
+        &mut self,
+        outcome: AppOutcome,
+        app: &mut App,
+    ) -> Result<bool, RunError> {
+        let Self {
+            config,
+            task_store,
+            workspace,
+            notifier,
+            sound_player,
+        } = self;
+        match outcome {
+            AppOutcome::None => Ok(false),
+            AppOutcome::FocusAudio(action) => {
                 match action {
                     FocusAudioAction::StartOrResume => {
                         if let Some(file) = config.sound().focus().playback_file() {
@@ -48,58 +33,78 @@ pub(crate) fn handle_outcome(
                     FocusAudioAction::Pause => sound_player.pause_focus(),
                     FocusAudioAction::Stop => sound_player.stop_focus(),
                 }
+                Ok(false)
             }
-            Ok(false)
-        }
-        AppOutcome::SessionCompleted(session) => {
-            if session == pomock::SessionKind::Focus {
-                sound_player.stop_focus();
-            }
-            if config.notification().enabled() {
-                notifier.session_completed(session);
-            }
-            if let Some(file) = config.sound().completion().playback_file() {
-                sound_player.play_completion(file);
-            }
-            Ok(false)
-        }
-        AppOutcome::TasksChanged => {
-            if let Some(task_store) = task_store.as_ref()
-                && let Err(error) = task_store.save(&app.task_state())
-            {
-                report_write_failure(app, &FileWriteError::Tasks(error));
-            }
-            Ok(false)
-        }
-        AppOutcome::SettingsChanged(updated) => {
-            let focus_file_changed =
-                config.sound().focus().playback_file() != updated.sound().focus().playback_file();
-            let next_task_store = task_store_for_config(&updated, &workspace.task_store);
-            let errors = apply_settings_change(
-                *updated,
-                &app.task_state(),
-                config,
-                task_store,
-                next_task_store,
-                |config| workspace.config_store.save(config),
-            );
-            for error in &errors {
-                report_write_failure(app, error);
-            }
-            if focus_file_changed {
-                sound_player.stop_focus();
-                if app.is_focus_running()
-                    && let Some(file) = config.sound().focus().playback_file()
-                {
-                    sound_player.start_or_resume_focus(file);
+            AppOutcome::TimerEffects {
+                focus_audio,
+                stop_completion_audio,
+            } => {
+                if stop_completion_audio {
+                    sound_player.stop_completion();
                 }
+                if let Some(action) = focus_audio {
+                    match action {
+                        FocusAudioAction::StartOrResume => {
+                            if let Some(file) = config.sound().focus().playback_file() {
+                                sound_player.start_or_resume_focus(file);
+                            }
+                        }
+                        FocusAudioAction::Pause => sound_player.pause_focus(),
+                        FocusAudioAction::Stop => sound_player.stop_focus(),
+                    }
+                }
+                Ok(false)
             }
-            Ok(false)
-        }
-        AppOutcome::Quit => {
-            sound_player.stop_focus();
-            sound_player.stop_completion();
-            Ok(true)
+            AppOutcome::SessionCompleted(session) => {
+                if session == pomock::SessionKind::Focus {
+                    sound_player.stop_focus();
+                }
+                if config.notification().enabled() {
+                    notifier.session_completed(session);
+                }
+                if let Some(file) = config.sound().completion().playback_file() {
+                    sound_player.play_completion(file);
+                }
+                Ok(false)
+            }
+            AppOutcome::TasksChanged => {
+                if let Some(task_store) = task_store.as_ref()
+                    && let Err(error) = task_store.save(&app.task_state())
+                {
+                    report_write_failure(app, &FileWriteError::Tasks(error));
+                }
+                Ok(false)
+            }
+            AppOutcome::SettingsChanged(updated) => {
+                let focus_file_changed = config.sound().focus().playback_file()
+                    != updated.sound().focus().playback_file();
+                let next_task_store = task_store_for_config(&updated, &workspace.task_store);
+                let errors = apply_settings_change(
+                    *updated,
+                    &app.task_state(),
+                    config,
+                    task_store,
+                    next_task_store,
+                    |config| workspace.config_store.save(config),
+                );
+                for error in &errors {
+                    report_write_failure(app, error);
+                }
+                if focus_file_changed {
+                    sound_player.stop_focus();
+                    if app.is_focus_running()
+                        && let Some(file) = config.sound().focus().playback_file()
+                    {
+                        sound_player.start_or_resume_focus(file);
+                    }
+                }
+                Ok(false)
+            }
+            AppOutcome::Quit => {
+                sound_player.stop_focus();
+                sound_player.stop_completion();
+                Ok(true)
+            }
         }
     }
 }
