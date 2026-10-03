@@ -49,6 +49,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let timer_snapshot = if config.timer().persist() {
         timer_store.load()?
     } else {
+        timer_store.clear()?;
         None
     };
     let app = pomock::app::App::from_saved_state(&config, task_state, timer_snapshot.as_ref())?;

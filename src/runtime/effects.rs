@@ -75,6 +75,14 @@ impl<N: Notifier, S: SoundPlayer> super::RuntimeContext<N, S> {
                 for error in &errors {
                     report_write_failure(app, error);
                 }
+                if !config.timer().persist()
+                    && let Err(error) = timer_store.clear()
+                {
+                    app.report_data_write_error(
+                        "Could not discard saved timer state.".into(),
+                        format!("pomock: could not discard timer.toml: {error}"),
+                    );
+                }
                 if focus_file_changed {
                     sound_player.stop_focus();
                     if app.is_focus_running()
@@ -85,14 +93,26 @@ impl<N: Notifier, S: SoundPlayer> super::RuntimeContext<N, S> {
                 }
                 Ok(false)
             }
+            AppOutcome::QuitWithoutSaving => {
+                sound_player.stop_focus();
+                sound_player.stop_completion();
+                Ok(true)
+            }
             AppOutcome::Quit => {
-                if config.timer().persist()
-                    && let Err(error) = timer_store.save(&app.timer_snapshot())
-                {
+                let result = if config.timer().persist() {
+                    timer_store.save(&app.timer_snapshot())
+                } else {
+                    timer_store.clear()
+                };
+                if let Err(error) = result {
                     app.report_data_write_error(
                         "Could not save timer.toml.".into(),
                         format!("pomock: could not save timer.toml: {error}"),
                     );
+                    app.report_quit_save_failure();
+                    sound_player.pause_focus();
+                    sound_player.stop_completion();
+                    return Ok(false);
                 }
                 sound_player.stop_focus();
                 sound_player.stop_completion();

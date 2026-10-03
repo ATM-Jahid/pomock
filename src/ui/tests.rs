@@ -744,7 +744,8 @@ fn cycle_confirmation_describes_progress_loss() {
 
 #[test]
 fn quit_confirmation_describes_progress_loss() {
-    let mut app = App::new();
+    let mut app =
+        App::from_config(&Config::new(TimerConfig::default().with_persistence(false)).unwrap());
     let _ = app.dispatch(Action::PrimaryAction);
     let _ = app.tick(Duration::from_secs(10));
     let _ = app.dispatch(Action::Quit);
@@ -774,7 +775,8 @@ fn active_workflows_take_footer_priority_over_data_write_errors() {
     let _ = adding.dispatch(Action::BeginAdd);
     assert!(footer_text(&adding, &KeysConfig::default()).starts_with("Add task:"));
 
-    let mut confirming = App::new();
+    let mut confirming =
+        App::from_config(&Config::new(TimerConfig::default().with_persistence(false)).unwrap());
     let _ = confirming.dispatch(Action::PrimaryAction);
     let _ = confirming.tick(Duration::from_secs(10));
     confirming.report_data_write_error("save failed".to_owned(), "detail".to_owned());
@@ -1215,4 +1217,14 @@ fn configured_keybindings_change_stable_footer_metrics() {
     assert!(with_default_keys.footer().height > 0);
     assert_eq!(with_configured_keys.mode(), WorkspaceMode::Full);
     assert_eq!(with_configured_keys.footer().height, 0);
+}
+
+#[test]
+fn quit_save_failure_footer_explains_all_choices() {
+    let mut app = App::new();
+    app.report_quit_save_failure();
+    assert_eq!(
+        footer_text(&app, &KeysConfig::default()),
+        "Could not save timer.toml.  [y/Enter] retry  [q] quit without saving  [n/Esc] cancel"
+    );
 }

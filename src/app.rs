@@ -78,6 +78,7 @@ pub(crate) enum TimerChange {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) enum ConfirmationOperation {
     Quit,
+    QuitSaveFailed,
     TimerChange(TimerChange),
 }
 
@@ -210,6 +211,13 @@ impl App {
         let prior_timer_state = self.timer.state();
         if self.pending_confirmation.is_some() {
             let outcome = match action {
+                Action::QuitWithoutSaving
+                    if self.pending_confirmation()
+                        == Some(ConfirmationOperation::QuitSaveFailed) =>
+                {
+                    self.pending_confirmation = None;
+                    return AppOutcome::QuitWithoutSaving;
+                }
                 Action::ConfirmPendingAction => self.confirm_pending_action(),
                 Action::CancelPendingAction => {
                     self.cancel_pending_action();
@@ -312,7 +320,9 @@ impl App {
             },
             Action::CycleSession => self.cycle_session(),
             Action::ResetSession => self.reset_session(),
-            Action::ConfirmPendingAction | Action::CancelPendingAction => {}
+            Action::ConfirmPendingAction
+            | Action::CancelPendingAction
+            | Action::QuitWithoutSaving => {}
             Action::BeginAdd => self.task_interaction.begin_add(self.ui_focus),
             Action::EditSelected => match self.ui_focus {
                 UiFocus::Clock => {}

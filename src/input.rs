@@ -101,6 +101,7 @@ fn map_physical_key(
             return None;
         }
         return match key.code {
+            KeyCode::Char('q') => Some(Action::QuitWithoutSaving),
             KeyCode::Char('y') | KeyCode::Enter => Some(Action::ConfirmPendingAction),
             KeyCode::Char('n') | KeyCode::Esc => Some(Action::CancelPendingAction),
             _ => None,

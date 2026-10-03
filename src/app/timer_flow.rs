@@ -131,7 +131,27 @@ impl App {
         self.request_timer_change(TimerChange::Reset);
     }
 
+    /// Keeps the session paused while the user chooses how to recover a failed quit save.
+    pub fn report_quit_save_failure(&mut self) {
+        let prior_activity = if matches!(self.timer.state(), TimerState::Running(_)) {
+            PriorActivity::Running
+        } else {
+            PriorActivity::Paused
+        };
+        self.timer.pause();
+        self.pending_autostart = None;
+        self.completion_audio_active = false;
+        self.pending_confirmation = Some(PendingConfirmation {
+            operation: ConfirmationOperation::QuitSaveFailed,
+            prior_activity,
+        });
+        self.clear_pending_click();
+    }
+
     pub(super) fn request_quit(&mut self) -> AppOutcome {
+        if self.config.timer().persist() {
+            return AppOutcome::Quit;
+        }
         let prior_activity = match self.timer.state() {
             TimerState::Running(_) => PriorActivity::Running,
             TimerState::Paused(_) => PriorActivity::Paused,
@@ -192,7 +212,7 @@ impl App {
     pub(super) fn confirm_pending_action(&mut self) -> AppOutcome {
         let outcome = match self.pending_confirmation.take() {
             Some(PendingConfirmation {
-                operation: ConfirmationOperation::Quit,
+                operation: ConfirmationOperation::Quit | ConfirmationOperation::QuitSaveFailed,
                 ..
             }) => AppOutcome::Quit,
             Some(PendingConfirmation {

@@ -30,6 +30,7 @@ pub enum SettingsAdjustmentDirection {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Action {
     Quit,
+    QuitWithoutSaving,
     NavigateFocus(Direction),
     MoveSelection(Direction),
     MoveSelectedTask(Direction),
@@ -72,6 +73,7 @@ pub enum ScrollTarget {
 pub enum AppOutcome {
     None,
     Quit,
+    QuitWithoutSaving,
     FocusAudio(FocusAudioAction),
     TimerEffects {
         focus_audio: Option<FocusAudioAction>,

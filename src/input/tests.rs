@@ -335,7 +335,7 @@ fn confirmation_keys_take_precedence_over_every_other_context() {
         (KeyCode::Enter, Some(Action::ConfirmPendingAction)),
         (KeyCode::Char('n'), Some(Action::CancelPendingAction)),
         (KeyCode::Esc, Some(Action::CancelPendingAction)),
-        (KeyCode::Char('q'), None),
+        (KeyCode::Char('q'), Some(Action::QuitWithoutSaving)),
         (KeyCode::Char('H'), None),
     ] {
         assert_eq!(

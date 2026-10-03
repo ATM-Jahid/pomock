@@ -80,6 +80,15 @@ impl TimerStore {
         atomic_write::write(&self.path, contents.as_bytes()).map_err(|error| self.io_error(error))
     }
 
+    /// Discards stale state without parsing it; a missing file is already cleared.
+    pub fn clear(&self) -> Result<(), TimerPersistenceError> {
+        match fs::remove_file(&self.path) {
+            Ok(()) => Ok(()),
+            Err(error) if error.kind() == io::ErrorKind::NotFound => Ok(()),
+            Err(error) => Err(self.io_error(error)),
+        }
+    }
+
     fn io_error(&self, source: io::Error) -> TimerPersistenceError {
         TimerPersistenceError::Io {
             path: self.path.clone(),
@@ -174,6 +183,18 @@ mod tests {
                 .join("other/timer.toml")
         );
         assert!(TimerStore::user_in_workspace(Some("../escape")).is_err());
+    }
+
+    #[test]
+    fn clear_removes_even_invalid_state_and_accepts_missing_files() {
+        let directory = tempfile::tempdir().unwrap();
+        let store = TimerStore::at(directory.path().join("timer.toml"));
+        store.clear().unwrap();
+        fs::write(store.path(), "invalid = [").unwrap();
+        store.clear().unwrap();
+        assert_eq!(store.load().unwrap(), None);
+        fs::create_dir(store.path()).unwrap();
+        assert!(store.clear().is_err());
     }
 
     #[test]

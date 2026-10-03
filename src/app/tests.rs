@@ -35,7 +35,8 @@ fn double_click_session(app: &mut App, session: SessionKind, first_click: Instan
 }
 
 fn active_focus(progress: Duration, pause: bool) -> App {
-    let mut app = App::new();
+    let mut app =
+        App::from_config(&Config::new(TimerConfig::default().with_persistence(false)).unwrap());
     let _ = app.dispatch(Action::PrimaryAction);
     let _ = app.tick(progress);
     if pause {
@@ -1529,4 +1530,37 @@ fn absent_or_disabled_saved_timer_starts_fresh() {
     assert_eq!(restored.timer_snapshot(), App::new().timer_snapshot());
     let restored = App::from_saved_state(&Config::default(), TaskState::default(), None).unwrap();
     assert_eq!(restored.timer_snapshot(), App::new().timer_snapshot());
+}
+
+#[test]
+fn persisted_quit_skips_confirmation_for_running_and_paused_sessions() {
+    for paused in [false, true] {
+        let mut app = App::new();
+        let _ = app.dispatch(Action::PrimaryAction);
+        let _ = app.tick(Duration::from_secs(15));
+        if paused {
+            let _ = app.dispatch(Action::PrimaryAction);
+        }
+        assert_eq!(app.dispatch(Action::Quit), AppOutcome::Quit);
+        assert!(!app.is_confirmation_open());
+    }
+}
+
+#[test]
+fn failed_quit_can_be_cancelled_and_discard_is_only_allowed_in_failure_prompt() {
+    let mut app = App::new();
+    assert_eq!(app.dispatch(Action::QuitWithoutSaving), AppOutcome::None);
+    let _ = app.dispatch(Action::PrimaryAction);
+    app.report_quit_save_failure();
+    assert_eq!(app.timer().state(), TimerState::Paused(SessionKind::Focus));
+    assert_eq!(
+        app.dispatch(Action::CancelPendingAction),
+        AppOutcome::FocusAudio(FocusAudioAction::StartOrResume)
+    );
+    assert!(!app.is_confirmation_open());
+    assert_eq!(app.timer().state(), TimerState::Running(SessionKind::Focus));
+    let mut app = active_focus(Duration::from_secs(15), false);
+    let _ = app.dispatch(Action::Quit);
+    assert_eq!(app.dispatch(Action::QuitWithoutSaving), AppOutcome::None);
+    assert!(app.is_confirmation_open());
 }

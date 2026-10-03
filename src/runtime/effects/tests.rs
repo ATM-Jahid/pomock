@@ -596,7 +596,7 @@ fn timer_runtime(
 }
 
 #[test]
-fn timer_changes_and_ticks_do_not_save_but_confirmed_quit_does() {
+fn timer_changes_and_ticks_do_not_save_but_quit_does() {
     let dir = tempfile::tempdir().unwrap();
     let store = TimerStore::at(dir.path().join("timer.toml"));
     let config = Config::default();
@@ -616,9 +616,6 @@ fn timer_changes_and_ticks_do_not_save_but_confirmed_quit_does() {
     assert!(!runtime.handle_outcome(outcome, &mut app).unwrap());
     assert_eq!(store.load().unwrap(), None);
     let outcome = app.dispatch(Action::Quit);
-    assert!(!runtime.handle_outcome(outcome, &mut app).unwrap());
-    assert_eq!(store.load().unwrap(), None);
-    let outcome = app.dispatch(Action::ConfirmPendingAction);
     assert!(runtime.handle_outcome(outcome, &mut app).unwrap());
     assert_eq!(store.load().unwrap(), Some(app.timer_snapshot()));
 }
@@ -632,6 +629,7 @@ fn quit_with_timer_persistence_disabled_does_not_save() {
         .unwrap();
     let mut app = App::from_config(&config);
     let mut runtime = timer_runtime(store.clone(), config);
+    store.save(&app.timer_snapshot()).unwrap();
     assert!(runtime.handle_outcome(AppOutcome::Quit, &mut app).unwrap());
     assert_eq!(store.load().unwrap(), None);
 }
@@ -646,7 +644,62 @@ fn quit_save_failure_is_in_exit_log() {
         Config::default(),
     );
     let mut app = App::new();
-    assert!(runtime.handle_outcome(AppOutcome::Quit, &mut app).unwrap());
+    assert!(!runtime.handle_outcome(AppOutcome::Quit, &mut app).unwrap());
+    assert!(app.is_confirmation_open());
     assert_eq!(app.write_error_log().len(), 1);
     assert!(app.write_error_log()[0].contains("could not save timer.toml"));
+}
+
+#[test]
+fn failed_quit_can_retry_or_explicitly_discard_without_advancing_timer() {
+    for retry in [false, true] {
+        let dir = tempfile::tempdir().unwrap();
+        let blocked = dir.path().join("blocked");
+        fs::write(&blocked, "not a directory").unwrap();
+        let store = TimerStore::at(blocked.join("timer.toml"));
+        let config = Config::default();
+        let mut app = App::from_config(&config);
+        let mut runtime = timer_runtime(store.clone(), config);
+        let _ = app.dispatch(Action::PrimaryAction);
+        let _ = app.tick(std::time::Duration::from_secs(15));
+        let outcome = app.dispatch(Action::Quit);
+        assert!(!runtime.handle_outcome(outcome, &mut app).unwrap());
+        let snapshot = app.timer_snapshot();
+        let _ = app.tick(std::time::Duration::from_secs(60));
+        assert_eq!(app.timer_snapshot(), snapshot);
+        if retry {
+            fs::remove_file(&blocked).unwrap();
+        }
+        let outcome = app.dispatch(if retry {
+            Action::ConfirmPendingAction
+        } else {
+            Action::QuitWithoutSaving
+        });
+        assert!(runtime.handle_outcome(outcome, &mut app).unwrap());
+        if retry {
+            assert_eq!(store.load().unwrap(), Some(snapshot));
+        } else {
+            assert_eq!(fs::read_to_string(&blocked).unwrap(), "not a directory");
+        }
+    }
+}
+
+#[test]
+fn disabling_timer_persistence_removes_stale_state_immediately() {
+    let dir = tempfile::tempdir().unwrap();
+    let store = TimerStore::at(dir.path().join("timer.toml"));
+    let config = Config::default();
+    let mut app = App::from_config(&config);
+    store.save(&app.timer_snapshot()).unwrap();
+    let mut runtime = timer_runtime(store.clone(), config.clone());
+    runtime.workspace.config_store = ConfigStore::at(dir.path().join("config.toml"));
+    let updated = config
+        .with_timer(TimerConfig::default().with_persistence(false))
+        .unwrap();
+    assert!(
+        !runtime
+            .handle_outcome(AppOutcome::SettingsChanged(Box::new(updated)), &mut app)
+            .unwrap()
+    );
+    assert_eq!(store.load().unwrap(), None);
 }

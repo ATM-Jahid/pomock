@@ -152,6 +152,9 @@ pub(super) fn footer_text(app: &App, keys: &KeysConfig) -> String {
 
 pub(super) fn footer_text_for_focus(app: &App, keys: &KeysConfig, focus: UiFocus) -> String {
     if let Some(operation) = app.pending_confirmation() {
+        if operation == ConfirmationOperation::QuitSaveFailed {
+            return "Could not save timer.toml.  [y/Enter] retry  [q] quit without saving  [n/Esc] cancel".into();
+        }
         let prompt = confirmation_prompt(operation);
         return format!("{prompt}  [y/Enter] confirm  [n/Esc] cancel");
     }
@@ -229,6 +232,7 @@ fn key_labels(keys: &[ConfigKey]) -> String {
 
 pub(super) fn confirmation_prompt(operation: ConfirmationOperation) -> String {
     match operation {
+        ConfirmationOperation::QuitSaveFailed => "Could not save timer.toml.".into(),
         ConfirmationOperation::Quit => "Quit and discard progress?".to_string(),
         ConfirmationOperation::TimerChange(change) => match change {
             TimerChange::Reset => "Reset session?".to_string(),
