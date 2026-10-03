@@ -1438,3 +1438,95 @@ fn ready_timer_adopts_duration_settings_immediately() {
     assert_eq!(app.timer().state(), TimerState::Ready(SessionKind::Focus));
     assert_eq!(app.timer().remaining(), Duration::from_secs(30 * 60));
 }
+
+#[test]
+fn saved_active_sessions_restore_paused_with_original_progress_and_current_presets() {
+    for session in [
+        SessionKind::Focus,
+        SessionKind::ShortBreak,
+        SessionKind::LongBreak,
+    ] {
+        for paused in [false, true] {
+            let mut source = App::new();
+            source.timer.start_session(SessionKind::Focus);
+            source.timer.tick(source.timer.remaining());
+            source.timer.start_session(session);
+            source.timer.tick(Duration::from_millis(1234));
+            if paused {
+                source.timer.pause();
+            }
+            let saved = source.timer_snapshot();
+            let updated = Config::default()
+                .with_timer(TimerConfig::default().with_autostart(true, true))
+                .unwrap();
+            let store_dir = tempfile::tempdir().unwrap();
+            let store = crate::persistence::TimerStore::at(store_dir.path().join("timer.toml"));
+            store.save(&saved).unwrap();
+            let loaded = store.load().unwrap();
+            let mut restored =
+                App::from_saved_state(&updated, TaskState::default(), loaded.as_ref()).unwrap();
+            assert_eq!(restored.timer.state(), TimerState::Paused(session));
+            assert_eq!(restored.timer.remaining(), source.timer.remaining());
+            assert_eq!(restored.timer.progress(), Duration::from_millis(1234));
+            assert_eq!(restored.timer.completed_focus_sessions(), 1);
+            assert_eq!(restored.pending_autostart(), None);
+            let _ = restored.tick(Duration::from_secs(3600));
+            assert_eq!(restored.timer.remaining(), source.timer.remaining());
+            restored.timer.reconfigure(
+                Duration::from_secs(30),
+                Duration::from_secs(10),
+                Duration::from_secs(20),
+                std::num::NonZeroU32::new(2).unwrap(),
+            );
+            assert_eq!(restored.timer.remaining(), source.timer.remaining());
+            let _ = restored.dispatch(Action::PrimaryAction);
+            let _ = restored.tick(restored.timer.remaining());
+            let expected = if session == SessionKind::Focus {
+                20
+            } else {
+                30
+            };
+            assert_eq!(restored.timer.remaining(), Duration::from_secs(expected));
+        }
+    }
+}
+
+#[test]
+fn saved_autostart_restores_upcoming_session_ready_without_countdown() {
+    let config = Config::default()
+        .with_timer(TimerConfig::default().with_autostart(true, true))
+        .unwrap();
+    let mut source = App::from_config(&config);
+    let _ = source.dispatch(Action::PrimaryAction);
+    let _ = source.tick(source.timer.remaining());
+    assert!(source.pending_autostart().is_some());
+    let saved = source.timer_snapshot();
+    let mut restored = App::from_saved_state(&config, TaskState::default(), Some(&saved)).unwrap();
+    assert_eq!(restored.timer_snapshot(), saved);
+    assert_eq!(restored.pending_autostart(), None);
+    let _ = restored.tick(Duration::from_secs(3600));
+    assert_eq!(
+        restored.timer.state(),
+        TimerState::Ready(SessionKind::ShortBreak)
+    );
+    assert_eq!(restored.timer_snapshot(), saved);
+}
+
+#[test]
+fn absent_or_disabled_saved_timer_starts_fresh() {
+    let mut source = App::new();
+    let _ = source.dispatch(Action::PrimaryAction);
+    let _ = source.tick(Duration::from_secs(10));
+    let config = Config::default()
+        .with_timer(TimerConfig::default().with_persistence(false))
+        .unwrap();
+    let restored = App::from_saved_state(
+        &config,
+        TaskState::default(),
+        Some(&source.timer_snapshot()),
+    )
+    .unwrap();
+    assert_eq!(restored.timer_snapshot(), App::new().timer_snapshot());
+    let restored = App::from_saved_state(&Config::default(), TaskState::default(), None).unwrap();
+    assert_eq!(restored.timer_snapshot(), App::new().timer_snapshot());
+}

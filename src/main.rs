@@ -1,6 +1,6 @@
 use std::{env, io};
 
-use pomock::persistence::{ConfigStore, TaskStore};
+use pomock::persistence::{ConfigStore, TaskStore, TimerStore};
 
 use runtime::{TerminalSession, combine_run_and_restore_results, run_app, task_store_for_config};
 use startup::{
@@ -45,14 +45,14 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     else {
         return Ok(());
     };
+    let timer_snapshot = if config.timer().persist() {
+        TimerStore::user_in_workspace(workspace_name.as_deref())?.load()?
+    } else {
+        None
+    };
+    let app = pomock::app::App::from_saved_state(&config, task_state, timer_snapshot.as_ref())?;
     let mut session = TerminalSession::start()?;
-    let run_result = run_app(
-        session.terminal_mut(),
-        config,
-        task_store,
-        task_state,
-        workspace,
-    );
+    let run_result = run_app(session.terminal_mut(), config, task_store, app, workspace);
     let restore_result = session.restore();
 
     let write_errors = combine_run_and_restore_results(run_result, restore_result)?;

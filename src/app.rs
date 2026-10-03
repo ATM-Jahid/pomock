@@ -171,6 +171,22 @@ impl App {
         }
     }
 
+    /// Creates an app with saved progress, requiring manual start even with autostart enabled.
+    /// Disabled timer persistence ignores the supplied snapshot.
+    pub fn from_saved_state(
+        config: &Config,
+        task_state: TaskState,
+        snapshot: Option<&crate::TimerSnapshot>,
+    ) -> Result<Self, crate::persistence::TimerPersistenceError> {
+        let mut app = Self::from_config_and_tasks(config, task_state);
+        if config.timer().persist()
+            && let Some(snapshot) = snapshot
+        {
+            app.timer.restore(snapshot)?;
+        }
+        Ok(app)
+    }
+
     pub(crate) fn timer(&self) -> &PomodoroTimer {
         &self.timer
     }

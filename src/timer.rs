@@ -87,6 +87,24 @@ impl PomodoroTimer {
         }
     }
 
+    /// Restores durable progress without starting the clock or replacing current presets.
+    pub fn restore(
+        &mut self,
+        snapshot: &TimerSnapshot,
+    ) -> Result<(), crate::persistence::TimerPersistenceError> {
+        if !snapshot.is_valid() {
+            return Err(crate::persistence::TimerPersistenceError::InvalidState);
+        }
+        self.state = match snapshot.state {
+            TimerState::Running(session) => TimerState::Paused(session),
+            state => state,
+        };
+        self.remaining = snapshot.remaining;
+        self.installed_duration = snapshot.original_duration;
+        self.completed_focus_sessions = snapshot.completed_focus_sessions;
+        Ok(())
+    }
+
     pub fn state(&self) -> TimerState {
         self.state
     }
@@ -238,6 +256,25 @@ mod tests {
         timer.start_session(session);
         let duration = timer.remaining();
         assert_eq!(timer.tick(duration), Some(session));
+    }
+
+    #[test]
+    fn invalid_snapshot_does_not_mutate_timer() {
+        let mut timer = timer();
+        let before = timer.snapshot();
+        for (remaining, original_duration) in [
+            (Duration::ZERO, Duration::ZERO),
+            (FOCUS + Duration::from_secs(1), FOCUS),
+            (FOCUS - Duration::from_secs(1), FOCUS),
+        ] {
+            let invalid = TimerSnapshot {
+                remaining,
+                original_duration,
+                ..before.clone()
+            };
+            assert!(timer.restore(&invalid).is_err());
+            assert_eq!(timer.snapshot(), before);
+        }
     }
 
     #[test]

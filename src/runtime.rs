@@ -5,7 +5,7 @@ use std::{
 
 use crossterm::event::{self, Event, KeyEventKind, MouseButton, MouseEvent, MouseEventKind};
 use pomock::{
-    app::{Action, App, AppOutcome, Direction, EditMode, TaskState},
+    app::{Action, App, AppOutcome, Direction, EditMode},
     config::Config,
     input::map_key_event,
     notification::DesktopNotifier,
@@ -74,10 +74,9 @@ pub(crate) fn run_app(
     terminal: &mut Terminal<CrosstermBackend<Stdout>>,
     config: Config,
     task_store: Option<TaskStore>,
-    task_state: TaskState,
+    mut app: App,
     workspace: Workspace,
 ) -> Result<Vec<String>, effects::RunError> {
-    let mut app = App::from_config_and_tasks(&config, task_state);
     let mut runtime = RuntimeContext {
         config,
         task_store,
