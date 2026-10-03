@@ -20,6 +20,7 @@ impl<N: Notifier, S: SoundPlayer> super::RuntimeContext<N, S> {
             workspace,
             notifier,
             sound_player,
+            timer_store,
         } = self;
         match outcome {
             AppOutcome::None => Ok(false),
@@ -85,6 +86,14 @@ impl<N: Notifier, S: SoundPlayer> super::RuntimeContext<N, S> {
                 Ok(false)
             }
             AppOutcome::Quit => {
+                if config.timer().persist()
+                    && let Err(error) = timer_store.save(&app.timer_snapshot())
+                {
+                    app.report_data_write_error(
+                        "Could not save timer.toml.".into(),
+                        format!("pomock: could not save timer.toml: {error}"),
+                    );
+                }
                 sound_player.stop_focus();
                 sound_player.stop_completion();
                 Ok(true)
@@ -180,7 +189,7 @@ fn report_write_failure(app: &mut App, failure: &FileWriteError) {
     let message = format!("Could not save {name}: {reason}. Changes remain active.");
     let diagnostic = format!("pomock: could not save {name}: {error}");
     match failure {
-        FileWriteError::Tasks(_) => app.report_task_write_error(message, diagnostic),
+        FileWriteError::Tasks(_) => app.report_data_write_error(message, diagnostic),
         FileWriteError::Config(_) => app.report_config_write_error(message, diagnostic),
     }
 }

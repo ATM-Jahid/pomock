@@ -149,14 +149,14 @@ fn dispatch_reports_only_boundary_relevant_outcomes() {
 }
 
 #[test]
-fn task_write_errors_expire_after_three_seconds() {
+fn data_write_errors_expire_after_three_seconds() {
     let mut app = App::new();
-    app.report_task_write_error("save failed".to_owned(), "detail".to_owned());
+    app.report_data_write_error("save failed".to_owned(), "detail".to_owned());
 
     let _ = app.tick(Duration::from_secs(2));
-    assert_eq!(app.task_write_error(), Some("save failed"));
+    assert_eq!(app.data_write_error(), Some("save failed"));
     let _ = app.tick(Duration::from_secs(1));
-    assert_eq!(app.task_write_error(), None);
+    assert_eq!(app.data_write_error(), None);
     assert_eq!(app.write_error_log(), ["detail"]);
 }
 

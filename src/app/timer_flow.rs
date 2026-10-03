@@ -12,11 +12,11 @@ const AUTOSTART_DELAY: Duration = Duration::from_secs(5);
 impl App {
     pub fn tick(&mut self, elapsed: Duration) -> AppOutcome {
         if self
-            .task_write_error
+            .data_write_error
             .as_mut()
             .is_some_and(|message| !message.elapse(elapsed))
         {
-            self.task_write_error = None;
+            self.data_write_error = None;
         }
         if let Some(settings) = &mut self.settings {
             settings.elapse_write_error(elapsed);

@@ -9,7 +9,7 @@ use pomock::{
     config::Config,
     input::map_key_event,
     notification::DesktopNotifier,
-    persistence::{ConfigStore, TaskStore},
+    persistence::{ConfigStore, TaskStore, TimerStore},
     sound::FileSoundPlayer,
     ui::{FrameGeometry, Theme, action_target_visible, click_target, draw, scroll_target},
 };
@@ -32,6 +32,7 @@ pub(crate) struct RuntimeContext<N, S> {
     pub(crate) workspace: Workspace,
     pub(crate) notifier: N,
     pub(crate) sound_player: S,
+    pub(crate) timer_store: TimerStore,
 }
 
 pub(crate) fn handle_mouse(
@@ -76,16 +77,17 @@ pub(crate) fn run_app(
     task_store: Option<TaskStore>,
     mut app: App,
     workspace: Workspace,
+    timer_store: TimerStore,
 ) -> Result<Vec<String>, effects::RunError> {
+    let mut last_tick = Instant::now();
     let mut runtime = RuntimeContext {
         config,
         task_store,
         workspace,
         notifier: DesktopNotifier,
         sound_player: FileSoundPlayer::default(),
+        timer_store,
     };
-
-    let mut last_tick = Instant::now();
 
     loop {
         let now = Instant::now();

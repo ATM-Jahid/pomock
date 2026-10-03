@@ -758,7 +758,7 @@ fn quit_confirmation_describes_progress_loss() {
 #[test]
 fn failed_task_save_footer_shows_the_error() {
     let mut app = App::new();
-    app.report_task_write_error("Could not save tasks.toml.".to_owned(), "detail".to_owned());
+    app.report_data_write_error("Could not save tasks.toml.".to_owned(), "detail".to_owned());
 
     assert_eq!(
         footer_text(&app, &KeysConfig::default()),
@@ -767,9 +767,9 @@ fn failed_task_save_footer_shows_the_error() {
 }
 
 #[test]
-fn active_workflows_take_footer_priority_over_task_write_errors() {
+fn active_workflows_take_footer_priority_over_data_write_errors() {
     let mut adding = App::new();
-    adding.report_task_write_error("save failed".to_owned(), "detail".to_owned());
+    adding.report_data_write_error("save failed".to_owned(), "detail".to_owned());
     let _ = adding.dispatch(Action::NavigateFocus(Direction::Down));
     let _ = adding.dispatch(Action::BeginAdd);
     assert!(footer_text(&adding, &KeysConfig::default()).starts_with("Add task:"));
@@ -777,7 +777,7 @@ fn active_workflows_take_footer_priority_over_task_write_errors() {
     let mut confirming = App::new();
     let _ = confirming.dispatch(Action::PrimaryAction);
     let _ = confirming.tick(Duration::from_secs(10));
-    confirming.report_task_write_error("save failed".to_owned(), "detail".to_owned());
+    confirming.report_data_write_error("save failed".to_owned(), "detail".to_owned());
     let _ = confirming.dispatch(Action::Quit);
     assert!(footer_text(&confirming, &KeysConfig::default()).starts_with("Quit and discard"));
 
@@ -785,7 +785,7 @@ fn active_workflows_take_footer_priority_over_task_write_errors() {
         App::from_config(&Config::new(TimerConfig::default().with_autostart(true, false)).unwrap());
     let _ = autostart.dispatch(Action::PrimaryAction);
     let _ = autostart.tick(Duration::from_secs(25 * 60));
-    autostart.report_task_write_error("save failed".to_owned(), "detail".to_owned());
+    autostart.report_data_write_error("save failed".to_owned(), "detail".to_owned());
     assert!(footer_text(&autostart, &KeysConfig::default()).starts_with("Next:"));
 }
 

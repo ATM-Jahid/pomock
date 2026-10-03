@@ -111,7 +111,7 @@ pub struct App {
     pending_autostart: Option<PendingAutostart>,
     completion_audio_active: bool,
     settings: Option<SettingsOverlay>,
-    task_write_error: Option<TransientMessage>,
+    data_write_error: Option<TransientMessage>,
     write_error_log: Vec<String>,
 }
 
@@ -166,7 +166,7 @@ impl App {
             pending_autostart: None,
             completion_audio_active: false,
             settings: None,
-            task_write_error: None,
+            data_write_error: None,
             write_error_log: Vec::new(),
         }
     }
@@ -381,15 +381,15 @@ impl App {
         self.pending_confirmation.is_some()
     }
 
-    /// Reports a non-fatal task-file write failure to the UI and terminal log.
-    pub fn report_task_write_error(&mut self, message: String, diagnostic: String) {
-        self.task_write_error = Some(TransientMessage::new(message));
+    /// Reports a task or timer save failure in the transient footer and exit log.
+    pub fn report_data_write_error(&mut self, message: String, diagnostic: String) {
+        self.data_write_error = Some(TransientMessage::new(message));
         self.write_error_log.push(diagnostic);
     }
 
-    /// Reports the current task-file write failure while its display time remains.
-    pub fn task_write_error(&self) -> Option<&str> {
-        self.task_write_error
+    /// Reports the current task or timer write failure while its display time remains.
+    pub fn data_write_error(&self) -> Option<&str> {
+        self.data_write_error
             .as_ref()
             .map(|message| message.text.as_str())
     }

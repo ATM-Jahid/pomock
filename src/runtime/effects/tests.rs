@@ -8,7 +8,7 @@ use pomock::{
     app::{Action, App, AppOutcome, Direction, FocusAudioAction, TaskState},
     config::{Config, TasksConfig, TimerConfig},
     notification::Notifier,
-    persistence::{ConfigStore, TaskStore},
+    persistence::{ConfigStore, TaskStore, TimerStore},
     sound::SoundPlayer,
 };
 use std::{fs, io::Cursor, path::PathBuf};
@@ -72,6 +72,7 @@ fn task_change_outcomes_are_saved_at_the_boundary() {
     let sound_player = RecordingSoundPlayer::default();
 
     let mut runtime = RuntimeContext {
+        timer_store: TimerStore::at(temp_path("effects-timer.toml")),
         config,
         task_store,
         workspace: Workspace {
@@ -111,6 +112,7 @@ fn failed_task_save_reports_an_error_and_allows_a_later_save() {
     let sound_player = RecordingSoundPlayer::default();
 
     let mut runtime = RuntimeContext {
+        timer_store: TimerStore::at(temp_path("effects-timer.toml")),
         config,
         task_store,
         workspace: Workspace {
@@ -122,7 +124,7 @@ fn failed_task_save_reports_an_error_and_allows_a_later_save() {
     };
 
     assert!(!runtime.handle_outcome(outcome, &mut app).unwrap());
-    assert!(app.task_write_error().is_some());
+    assert!(app.data_write_error().is_some());
     assert!(!app.is_confirmation_open());
     fs::remove_file(&parent).unwrap();
     fs::create_dir(&parent).unwrap();
@@ -132,7 +134,7 @@ fn failed_task_save_reports_an_error_and_allows_a_later_save() {
     }
     let next_change = app.dispatch(Action::SubmitEdit);
     assert!(!runtime.handle_outcome(next_change, &mut app).unwrap());
-    assert!(app.task_write_error().is_some());
+    assert!(app.data_write_error().is_some());
     assert_eq!(store.load().unwrap(), app.task_state());
     fs::remove_dir_all(parent).unwrap();
 }
@@ -176,6 +178,7 @@ fn disabled_task_persistence_starts_empty_and_does_not_save_changes() {
     let sound_player = RecordingSoundPlayer::default();
 
     let mut runtime = RuntimeContext {
+        timer_store: TimerStore::at(temp_path("effects-timer.toml")),
         config,
         task_store: disabled_store,
         workspace: Workspace {
@@ -338,6 +341,7 @@ fn completion_outcome_routes_notification_and_audio_effects() {
     let sound_player = RecordingSoundPlayer::default();
 
     let mut runtime = RuntimeContext {
+        timer_store: TimerStore::at(temp_path("effects-timer.toml")),
         config,
         task_store,
         workspace,
@@ -377,6 +381,7 @@ fn disabled_notifications_do_not_suppress_completion_audio() {
     let sound_player = RecordingSoundPlayer::default();
 
     let mut runtime = RuntimeContext {
+        timer_store: TimerStore::at(temp_path("effects-timer.toml")),
         config,
         task_store,
         workspace,
@@ -414,6 +419,7 @@ fn combined_timer_effect_stops_completion_before_starting_focus_audio() {
     let sound = RecordingSoundPlayer::default();
 
     let mut runtime = RuntimeContext {
+        timer_store: TimerStore::at(temp_path("effects-timer.toml")),
         config,
         task_store,
         workspace,
@@ -456,6 +462,7 @@ fn focus_audio_outcomes_route_only_configured_starts_and_always_cleanup() {
     let sound_player = RecordingSoundPlayer::default();
 
     let mut runtime = RuntimeContext {
+        timer_store: TimerStore::at(temp_path("effects-timer.toml")),
         config,
         task_store,
         workspace,
@@ -515,6 +522,7 @@ fn disabled_sound_options_keep_configured_files_silent() {
     let sound_player = RecordingSoundPlayer::default();
 
     let mut runtime = RuntimeContext {
+        timer_store: TimerStore::at(temp_path("effects-timer.toml")),
         config,
         task_store,
         workspace,
@@ -552,6 +560,7 @@ fn settings_outcome_saves_to_the_selected_workspace_even_without_task_persistenc
     let task_store = Some(workspace.task_store.clone());
 
     let mut runtime = RuntimeContext {
+        timer_store: TimerStore::at(temp_path("effects-timer.toml")),
         config,
         task_store,
         workspace,
@@ -567,4 +576,77 @@ fn settings_outcome_saves_to_the_selected_workspace_even_without_task_persistenc
     assert_eq!(runtime.workspace.config_store.load().unwrap(), updated);
     assert_eq!(main_config_store.load().unwrap(), Config::default());
     assert!(runtime.task_store.is_none());
+}
+
+fn timer_runtime(
+    store: TimerStore,
+    config: Config,
+) -> RuntimeContext<RecordingNotifier, RecordingSoundPlayer> {
+    RuntimeContext {
+        config,
+        task_store: None,
+        timer_store: store,
+        workspace: Workspace {
+            task_store: TaskStore::at(temp_path("quit-tasks.toml")),
+            config_store: ConfigStore::at(temp_path("quit-config.toml")),
+        },
+        notifier: RecordingNotifier::default(),
+        sound_player: RecordingSoundPlayer::default(),
+    }
+}
+
+#[test]
+fn timer_changes_and_ticks_do_not_save_but_confirmed_quit_does() {
+    let dir = tempfile::tempdir().unwrap();
+    let store = TimerStore::at(dir.path().join("timer.toml"));
+    let config = Config::default();
+    let mut app = App::from_config(&config);
+    let mut runtime = timer_runtime(store.clone(), config);
+    for action in [
+        Action::CycleSession,
+        Action::PrimaryAction,
+        Action::PrimaryAction,
+        Action::PrimaryAction,
+    ] {
+        let outcome = app.dispatch(action);
+        assert!(!runtime.handle_outcome(outcome, &mut app).unwrap());
+        assert_eq!(store.load().unwrap(), None);
+    }
+    let outcome = app.tick(std::time::Duration::from_secs(61));
+    assert!(!runtime.handle_outcome(outcome, &mut app).unwrap());
+    assert_eq!(store.load().unwrap(), None);
+    let outcome = app.dispatch(Action::Quit);
+    assert!(!runtime.handle_outcome(outcome, &mut app).unwrap());
+    assert_eq!(store.load().unwrap(), None);
+    let outcome = app.dispatch(Action::ConfirmPendingAction);
+    assert!(runtime.handle_outcome(outcome, &mut app).unwrap());
+    assert_eq!(store.load().unwrap(), Some(app.timer_snapshot()));
+}
+
+#[test]
+fn quit_with_timer_persistence_disabled_does_not_save() {
+    let dir = tempfile::tempdir().unwrap();
+    let store = TimerStore::at(dir.path().join("timer.toml"));
+    let config = Config::default()
+        .with_timer(TimerConfig::default().with_persistence(false))
+        .unwrap();
+    let mut app = App::from_config(&config);
+    let mut runtime = timer_runtime(store.clone(), config);
+    assert!(runtime.handle_outcome(AppOutcome::Quit, &mut app).unwrap());
+    assert_eq!(store.load().unwrap(), None);
+}
+
+#[test]
+fn quit_save_failure_is_in_exit_log() {
+    let dir = tempfile::tempdir().unwrap();
+    let blocked = dir.path().join("blocked");
+    fs::write(&blocked, "not a directory").unwrap();
+    let mut runtime = timer_runtime(
+        TimerStore::at(blocked.join("timer.toml")),
+        Config::default(),
+    );
+    let mut app = App::new();
+    assert!(runtime.handle_outcome(AppOutcome::Quit, &mut app).unwrap());
+    assert_eq!(app.write_error_log().len(), 1);
+    assert!(app.write_error_log()[0].contains("could not save timer.toml"));
 }

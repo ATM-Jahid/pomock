@@ -171,7 +171,7 @@ pub(super) fn footer_text_for_focus(app: &App, keys: &KeysConfig, focus: UiFocus
         );
     }
 
-    if let Some(error) = app.task_write_error() {
+    if let Some(error) = app.data_write_error() {
         return error.to_string();
     }
 

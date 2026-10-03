@@ -45,14 +45,22 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     else {
         return Ok(());
     };
+    let timer_store = TimerStore::user_in_workspace(workspace_name.as_deref())?;
     let timer_snapshot = if config.timer().persist() {
-        TimerStore::user_in_workspace(workspace_name.as_deref())?.load()?
+        timer_store.load()?
     } else {
         None
     };
     let app = pomock::app::App::from_saved_state(&config, task_state, timer_snapshot.as_ref())?;
     let mut session = TerminalSession::start()?;
-    let run_result = run_app(session.terminal_mut(), config, task_store, app, workspace);
+    let run_result = run_app(
+        session.terminal_mut(),
+        config,
+        task_store,
+        app,
+        workspace,
+        timer_store,
+    );
     let restore_result = session.restore();
 
     let write_errors = combine_run_and_restore_results(run_result, restore_result)?;
