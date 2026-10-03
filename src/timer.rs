@@ -1,6 +1,9 @@
 use std::{num::NonZeroU32, time::Duration};
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+use serde::{Deserialize, Serialize};
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
 pub enum SessionKind {
     Focus,
     ShortBreak,
@@ -17,11 +20,31 @@ impl SessionKind {
     }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
 pub enum TimerState {
     Ready(SessionKind),
     Running(SessionKind),
     Paused(SessionKind),
+}
+
+/// An opaque durable snapshot, independent of timer presets and task state.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct TimerSnapshot {
+    state: TimerState,
+    remaining: Duration,
+    original_duration: Duration,
+    completed_focus_sessions: u32,
+}
+
+impl TimerSnapshot {
+    pub(crate) fn is_valid(&self) -> bool {
+        !self.original_duration.is_zero()
+            && self.remaining <= self.original_duration
+            && (!matches!(self.state, TimerState::Ready(_))
+                || self.remaining == self.original_duration)
+    }
 }
 
 #[derive(Debug, Clone)]
@@ -52,6 +75,15 @@ impl PomodoroTimer {
             installed_duration: focus_duration,
             remaining: focus_duration,
             completed_focus_sessions: 0,
+        }
+    }
+
+    pub fn snapshot(&self) -> TimerSnapshot {
+        TimerSnapshot {
+            state: self.state,
+            remaining: self.remaining,
+            original_duration: self.installed_duration,
+            completed_focus_sessions: self.completed_focus_sessions,
         }
     }
 

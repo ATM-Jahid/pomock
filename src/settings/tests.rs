@@ -450,3 +450,13 @@ fn selection_is_clamped_and_locked_during_nested_editing() {
     assert_eq!(settings.selection(), 0);
     assert!(settings.cancel_nested());
 }
+
+#[test]
+fn timer_persistence_toggles_on_activation_and_adjustment() {
+    let mut settings = SettingsOverlay::new(&Config::default());
+    select(&mut settings, SettingField::PersistTimer);
+    settings.activate();
+    assert!(!settings.config().timer().persist());
+    settings.adjust(SettingsAdjustmentDirection::Backward);
+    assert!(settings.config().timer().persist());
+}

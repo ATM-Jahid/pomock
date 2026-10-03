@@ -179,6 +179,11 @@ impl App {
         self.task_interaction.tasks()
     }
 
+    /// Captures timer progress.
+    pub fn timer_snapshot(&self) -> crate::timer::TimerSnapshot {
+        self.timer.snapshot()
+    }
+
     /// Captures the independently ordered to-do and done lists for persistence.
     pub fn task_state(&self) -> TaskState {
         self.task_interaction.snapshot()

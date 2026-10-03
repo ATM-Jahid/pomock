@@ -206,6 +206,7 @@ pub(super) fn setting_row(
             "  Autostart Focus",
             on_off(config.timer().autostart_focus()).to_string(),
         ),
+        SettingField::PersistTimer => ("  Persist", on_off(config.timer().persist()).to_string()),
         SettingField::NotificationEnabled => (
             "  Desktop notifications",
             on_off(config.notification().enabled()).to_string(),

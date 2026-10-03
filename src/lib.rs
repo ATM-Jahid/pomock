@@ -23,4 +23,4 @@ mod tasks;
 mod timer;
 pub mod ui;
 
-pub use timer::SessionKind;
+pub use timer::{SessionKind, TimerSnapshot};

@@ -46,12 +46,13 @@ pub(crate) fn parse_duration(
 /// Validated timer presets used by the application.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct TimerConfig {
-    pub(super) focus_seconds: u64,
-    pub(super) short_break_seconds: u64,
-    pub(super) long_break_seconds: u64,
-    pub(super) long_break_interval: u32,
-    pub(super) autostart_breaks: bool,
-    pub(super) autostart_focus: bool,
+    focus_seconds: u64,
+    short_break_seconds: u64,
+    long_break_seconds: u64,
+    long_break_interval: u32,
+    autostart_breaks: bool,
+    autostart_focus: bool,
+    persist: bool,
 }
 
 impl TimerConfig {
@@ -97,6 +98,7 @@ impl TimerConfig {
             long_break_interval,
             autostart_breaks: false,
             autostart_focus: false,
+            persist: true,
         };
         timer.validate()?;
         Ok(timer)
@@ -137,6 +139,15 @@ impl TimerConfig {
         self.autostart_breaks = breaks;
         self.autostart_focus = focus;
         self
+    }
+
+    pub fn with_persistence(mut self, persist: bool) -> Self {
+        self.persist = persist;
+        self
+    }
+
+    pub fn persist(&self) -> bool {
+        self.persist
     }
 
     pub fn autostart_breaks(&self) -> bool {
@@ -195,6 +206,7 @@ impl Default for TimerConfig {
             long_break_interval: 4,
             autostart_breaks: false,
             autostart_focus: false,
+            persist: true,
         }
     }
 }

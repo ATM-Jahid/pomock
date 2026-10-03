@@ -8,10 +8,12 @@ use directories::ProjectDirs;
 
 mod config;
 mod tasks;
+mod timer;
 mod workspace;
 mod workspace_name;
 
 pub use config::{ConfigError, ConfigStore};
+pub use timer::{TimerPersistenceError, TimerStore};
 pub use workspace::WorkspaceLock;
 pub use workspace_name::{WorkspaceNameError, validate_workspace_name};
 

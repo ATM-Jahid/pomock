@@ -117,6 +117,13 @@ impl SettingsOverlay {
         }
         let field = self.field();
         match field {
+            SettingField::PersistTimer => {
+                let timer = self
+                    .config
+                    .timer()
+                    .with_persistence(!self.config.timer().persist());
+                self.accept(self.config.clone().with_timer(timer));
+            }
             SettingField::NotificationEnabled => {
                 self.set_notification(!self.config.notification().enabled());
             }
@@ -197,6 +204,7 @@ impl SettingsOverlay {
             match field {
                 SettingField::AutostartBreaks
                 | SettingField::AutostartFocus
+                | SettingField::PersistTimer
                 | SettingField::NotificationEnabled
                 | SettingField::CompletionSoundEnabled
                 | SettingField::FocusSoundEnabled

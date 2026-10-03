@@ -190,6 +190,7 @@ fn saved_default_config_follows_the_documented_settings_order() {
             "long_break_interval = 4\n",
             "autostart_breaks = false\n",
             "autostart_focus = false\n",
+            "persist = true\n",
             "\n",
             "[notification]\n",
             "enabled = true\n",
@@ -694,4 +695,26 @@ fn workspace_named_config_toml_can_coexist_with_main() {
     assert_eq!(named.load().unwrap(), main.load().unwrap());
     assert!(main.path().is_file());
     assert!(named.path().is_file());
+}
+
+#[test]
+fn missing_timer_persistence_defaults_to_true() {
+    let directory = tempfile::tempdir().unwrap();
+    let store = ConfigStore::at(directory.path().join("config.toml"));
+    fs::write(store.path(), "[timer]\n").unwrap();
+    let loaded = store.load().unwrap();
+    assert!(loaded.timer().persist());
+}
+
+#[test]
+fn disabled_timer_persistence_round_trips() {
+    let directory = tempfile::tempdir().unwrap();
+    let store = ConfigStore::at(directory.path().join("config.toml"));
+    let config = Config::with_tasks(
+        TimerConfig::default().with_persistence(false),
+        TasksConfig::default(),
+    )
+    .unwrap();
+    store.save(&config).unwrap();
+    assert_eq!(store.load().unwrap(), config);
 }

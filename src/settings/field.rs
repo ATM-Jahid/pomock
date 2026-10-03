@@ -8,6 +8,7 @@ pub(crate) enum SettingField {
     LongBreakInterval,
     AutostartBreaks,
     AutostartFocus,
+    PersistTimer,
     NotificationEnabled,
     CompletionSoundEnabled,
     CompletionSoundFile,
@@ -20,13 +21,14 @@ pub(crate) enum SettingField {
 }
 
 impl SettingField {
-    const TIMER: [Self; 6] = [
+    const TIMER: [Self; 7] = [
         Self::FocusDuration,
         Self::ShortBreakDuration,
         Self::LongBreakDuration,
         Self::LongBreakInterval,
         Self::AutostartBreaks,
         Self::AutostartFocus,
+        Self::PersistTimer,
     ];
     const NOTIFICATION: [Self; 1] = [Self::NotificationEnabled];
     const SOUND: [Self; 4] = [

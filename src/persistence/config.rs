@@ -231,6 +231,7 @@ struct StoredTimerConfig {
     long_break_interval: u32,
     autostart_breaks: bool,
     autostart_focus: bool,
+    persist: bool,
 }
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -251,7 +252,8 @@ impl TryFrom<StoredConfig> for Config {
                 parse_duration(&stored.timer.long_break_duration, "long_break_duration")?,
                 stored.timer.long_break_interval,
             )?
-            .with_autostart(stored.timer.autostart_breaks, stored.timer.autostart_focus),
+            .with_autostart(stored.timer.autostart_breaks, stored.timer.autostart_focus)
+            .with_persistence(stored.timer.persist),
             TasksConfig::with_numbering(stored.tasks.persist, stored.tasks.show_numbers),
             stored.theme,
             stored.keys,
@@ -272,6 +274,7 @@ impl From<&Config> for StoredConfig {
                 long_break_interval: timer.long_break_interval().get(),
                 autostart_breaks: timer.autostart_breaks(),
                 autostart_focus: timer.autostart_focus(),
+                persist: timer.persist(),
             },
             notification: config.notification(),
             sound: config.sound().clone(),

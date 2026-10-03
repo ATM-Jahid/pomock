@@ -135,6 +135,7 @@ long_break_duration = "15:00"
 long_break_interval = 4
 autostart_breaks = false
 autostart_focus = false
+persist = true
 
 [notification]
 enabled = true
@@ -180,19 +181,20 @@ done_highlight = "green"
 
 ### TOML locations
 
-Each workspace has its own `config.toml` and `tasks.toml`,
+Each workspace has its own `config.toml`, `tasks.toml`, and `timer.toml`,
 stored in the platform's user configuration and local user data directories.
 On Linux, the default paths are:
 
-| File | Path |
+| File purpose | Path |
 | --- | --- |
-| Config | `~/.config/pomock/<workspace>/config.toml` |
-| Tasks | `~/.local/share/pomock/<workspace>/tasks.toml` |
+| Configuration | `~/.config/pomock/<workspace>/config.toml` |
+| Task list | `~/.local/share/pomock/<workspace>/tasks.toml` |
+| Timer state | `~/.local/share/pomock/<workspace>/timer.toml` |
 
 Here, `<workspace>` is the name of the workspace.
 
 Edit `config.toml` directly or use the in-app settings overlay to customize settings.
-Tasks are saved automatically by default.
+Task list and timer state are saved automatically by default.
 
 ### Keybinding values
 
