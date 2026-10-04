@@ -187,7 +187,7 @@ fn focused_timer_updates_validate_and_preserve_other_fields() {
 fn focused_config_updates_preserve_unrelated_settings() {
     let original = Config::with_tasks(
         TimerConfig::default().with_autostart(true, true),
-        TasksConfig::with_numbering(false, false),
+        TasksConfig::with_options(false, false),
     )
     .unwrap()
     .with_notification(super::NotificationConfig::new(false))

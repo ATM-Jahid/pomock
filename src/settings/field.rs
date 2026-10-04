@@ -14,8 +14,8 @@ pub(crate) enum SettingField {
     CompletionSoundFile,
     FocusSoundEnabled,
     FocusSoundFile,
-    PersistTasks,
     ShowTaskNumbers,
+    PersistTasks,
     Theme(ThemeRole),
     Key(KeyAction),
 }
@@ -37,7 +37,7 @@ impl SettingField {
         Self::FocusSoundEnabled,
         Self::FocusSoundFile,
     ];
-    const TASKS: &[Self] = &[Self::PersistTasks, Self::ShowTaskNumbers];
+    const TASKS: &[Self] = &[Self::ShowTaskNumbers, Self::PersistTasks];
     pub(super) const KEYS: &[Self] = &[
         Self::Key(KeyAction::Quit),
         Self::Key(KeyAction::Settings),

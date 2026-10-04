@@ -237,8 +237,8 @@ struct StoredTimerConfig {
 #[derive(Debug, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 struct StoredTasksConfig {
-    persist: bool,
     show_numbers: bool,
+    persist: bool,
 }
 
 impl TryFrom<StoredConfig> for Config {
@@ -254,7 +254,7 @@ impl TryFrom<StoredConfig> for Config {
             )?
             .with_autostart(stored.timer.autostart_breaks, stored.timer.autostart_focus)
             .with_persistence(stored.timer.persist),
-            TasksConfig::with_numbering(stored.tasks.persist, stored.tasks.show_numbers),
+            TasksConfig::with_options(stored.tasks.show_numbers, stored.tasks.persist),
             stored.theme,
             stored.keys,
             stored.notification,
@@ -279,8 +279,8 @@ impl From<&Config> for StoredConfig {
             notification: config.notification(),
             sound: config.sound().clone(),
             tasks: StoredTasksConfig {
-                persist: config.tasks().persist(),
                 show_numbers: config.tasks().show_numbers(),
+                persist: config.tasks().persist(),
             },
             keys: config.keys().clone(),
             theme: *config.theme(),

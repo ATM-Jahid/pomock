@@ -72,7 +72,7 @@ fn configured_task_numbering_is_available_to_the_ui() {
 
     let config = Config::with_tasks(
         TimerConfig::default(),
-        TasksConfig::with_numbering(true, false),
+        TasksConfig::with_options(false, true),
     )
     .unwrap();
 

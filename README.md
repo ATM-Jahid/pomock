@@ -148,8 +148,8 @@ enabled = false
 enabled = false
 
 [tasks]
-persist = true
 show_numbers = true
+persist = true
 
 [keys]
 quit = "q"

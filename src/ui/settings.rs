@@ -203,7 +203,7 @@ pub(super) fn setting_row(
             on_off(config.timer().autostart_breaks()).to_string(),
         ),
         SettingField::AutostartFocus => (
-            "  Autostart Focus",
+            "  Autostart focus",
             on_off(config.timer().autostart_focus()).to_string(),
         ),
         SettingField::PersistTimer => ("  Persist", on_off(config.timer().persist()).to_string()),
@@ -235,11 +235,11 @@ pub(super) fn setting_row(
                 .file()
                 .map_or_else(|| "not set".to_string(), |path| path.display().to_string()),
         ),
-        SettingField::PersistTasks => ("  Persist", on_off(config.tasks().persist()).to_string()),
         SettingField::ShowTaskNumbers => (
             "  Show numbers",
             on_off(config.tasks().show_numbers()).to_string(),
         ),
+        SettingField::PersistTasks => ("  Persist", on_off(config.tasks().persist()).to_string()),
         SettingField::Theme(role) => (
             theme_role_label(role),
             config.theme().color(role).to_string(),

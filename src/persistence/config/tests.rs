@@ -203,8 +203,8 @@ fn saved_default_config_follows_the_documented_settings_order() {
             "enabled = false\n",
             "\n",
             "[tasks]\n",
-            "persist = true\n",
             "show_numbers = true\n",
+            "persist = true\n",
             "\n",
             "[keys]\n",
             "quit = \"q\"\n",
@@ -336,7 +336,7 @@ fn saves_and_loads_a_valid_toml_round_trip() {
         TimerConfig::from_seconds(50 * 60 + 30, 10 * 60 + 15, 30 * 60 + 45, 3)
             .unwrap()
             .with_autostart(true, false),
-        TasksConfig::with_numbering(false, false),
+        TasksConfig::with_options(false, false),
         ThemeConfig::new(
             ThemeColor::LightBlue,
             ThemeColor::Black,

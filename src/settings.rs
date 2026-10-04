@@ -328,7 +328,7 @@ impl SettingsOverlay {
         self.accept(Ok::<_, ConfigValidationError>(
             self.config
                 .clone()
-                .with_task_settings(TasksConfig::with_numbering(persist, show_numbers)),
+                .with_task_settings(TasksConfig::with_options(show_numbers, persist)),
         ));
     }
 
