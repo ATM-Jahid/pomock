@@ -37,6 +37,7 @@ pub enum Action {
     PrimaryAction,
     CycleSession,
     ResetSession,
+    ClearTimerState,
     ConfirmPendingAction,
     CancelPendingAction,
     BeginAdd,

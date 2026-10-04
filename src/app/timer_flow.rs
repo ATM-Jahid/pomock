@@ -131,6 +131,25 @@ impl App {
         self.request_timer_change(TimerChange::Reset);
     }
 
+    pub(super) fn clear_timer_state(&mut self) {
+        self.pending_autostart = None;
+        if self.timer.progress().is_zero() && self.timer.completed_focus_sessions() == 0 {
+            self.apply_timer_change(TimerChange::ClearState);
+            return;
+        }
+        let prior_activity = if matches!(self.timer.state(), TimerState::Running(_)) {
+            PriorActivity::Running
+        } else {
+            PriorActivity::Paused
+        };
+        self.timer.pause();
+        self.pending_confirmation = Some(PendingConfirmation {
+            operation: ConfirmationOperation::TimerChange(TimerChange::ClearState),
+            prior_activity,
+        });
+        self.clear_pending_click();
+    }
+
     /// Keeps the session paused while the user chooses how to recover a failed quit save.
     pub fn report_quit_save_failure(&mut self) {
         let prior_activity = if matches!(self.timer.state(), TimerState::Running(_)) {
@@ -177,6 +196,7 @@ impl App {
             TimerState::Paused(_) => PriorActivity::Paused,
             TimerState::Ready(_) => {
                 match change {
+                    TimerChange::ClearState => self.timer.clear_state(),
                     TimerChange::Reset => {}
                     TimerChange::Cycle => self.timer.cycle_ready_session(),
                     TimerChange::SelectSession(session) => self.timer.select_session(session),
@@ -202,6 +222,7 @@ impl App {
     fn apply_timer_change(&mut self, change: TimerChange) {
         self.timer.reset_session();
         match change {
+            TimerChange::ClearState => self.timer.clear_state(),
             TimerChange::Reset => {}
             TimerChange::Cycle => self.timer.cycle_ready_session(),
             TimerChange::SelectSession(session) => self.timer.select_session(session),

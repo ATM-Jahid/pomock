@@ -1564,3 +1564,71 @@ fn failed_quit_can_be_cancelled_and_discard_is_only_allowed_in_failure_prompt() 
     assert_eq!(app.dispatch(Action::QuitWithoutSaving), AppOutcome::None);
     assert!(app.is_confirmation_open());
 }
+
+#[test]
+fn clear_state_confirms_any_progress_and_cancel_restores_activity() {
+    for persist in [false, true] {
+        for paused in [false, true] {
+            let config = Config::new(TimerConfig::default().with_persistence(persist)).unwrap();
+            let mut app = App::from_config(&config);
+            let _ = app.dispatch(Action::PrimaryAction);
+            let _ = app.tick(Duration::from_millis(1));
+            if paused {
+                let _ = app.dispatch(Action::PrimaryAction);
+            }
+            let before = app.timer_snapshot();
+            let _ = app.dispatch(Action::ClearTimerState);
+            assert_eq!(
+                app.pending_confirmation(),
+                Some(ConfirmationOperation::TimerChange(TimerChange::ClearState))
+            );
+            let _ = app.tick(Duration::from_secs(20));
+            let _ = app.dispatch(Action::CancelPendingAction);
+            assert_eq!(app.timer_snapshot(), before);
+            let _ = app.dispatch(Action::ClearTimerState);
+            let _ = app.dispatch(Action::ConfirmPendingAction);
+            assert_eq!(
+                app.timer_snapshot(),
+                App::from_config(&config).timer_snapshot()
+            );
+        }
+    }
+}
+
+#[test]
+fn clear_state_cancels_autostart_and_saves_fresh_timer_state() {
+    let mut app = autostart_app(true, false);
+    let _ = app.dispatch(Action::PrimaryAction);
+    let _ = app.tick(app.timer.remaining());
+    assert!(app.pending_autostart().is_some());
+    let outcome = app.dispatch(Action::ClearTimerState);
+    assert_eq!(
+        outcome,
+        AppOutcome::TimerEffects {
+            focus_audio: None,
+            stop_completion_audio: true
+        }
+    );
+    assert!(app.is_confirmation_open());
+    assert_eq!(app.pending_autostart(), None);
+    let _ = app.tick(Duration::from_secs(10));
+    assert_eq!(app.timer.completed_focus_sessions(), 1);
+    let _ = app.dispatch(Action::ConfirmPendingAction);
+    assert_eq!(app.timer.state(), TimerState::Ready(SessionKind::Focus));
+    assert_eq!(app.timer.completed_focus_sessions(), 0);
+    assert_eq!(app.dispatch(Action::Quit), AppOutcome::Quit);
+    let dir = tempfile::tempdir().unwrap();
+    let store = crate::persistence::TimerStore::at(dir.path().join("timer.toml"));
+    store.save(&app.timer_snapshot()).unwrap();
+    let loaded = store.load().unwrap();
+    assert_eq!(loaded, Some(app.timer_snapshot()));
+}
+
+#[test]
+fn clear_state_without_progress_returns_to_focus_immediately() {
+    let mut app = App::new();
+    let _ = app.dispatch(Action::CycleSession);
+    let _ = app.dispatch(Action::ClearTimerState);
+    assert!(!app.is_confirmation_open());
+    assert_eq!(app.timer_snapshot(), App::new().timer_snapshot());
+}

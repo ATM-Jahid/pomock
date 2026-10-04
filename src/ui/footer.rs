@@ -197,10 +197,11 @@ fn normal_help_text(keys: &KeysConfig, focus: UiFocus) -> String {
     let settings = format_key(first_key(keys.settings()));
     match focus {
         UiFocus::Clock => format!(
-            "[{focus_navigation}] box nav  [{}] start/pause  [{}] cycle session  [{}] reset  [{settings}] settings  [{quit}] quit",
+            "[{focus_navigation}] box nav  [{}] start/pause  [{}] cycle session  [{}/{}] reset session/state  [{settings}] settings  [{quit}] quit",
             format_key(first_key(keys.clock_primary())),
             format_key(first_key(keys.cycle_session())),
             format_key(first_key(keys.reset_session())),
+            format_key(first_key(keys.clear_timer_state())),
         ),
         UiFocus::Todo => format!(
             "[{focus_navigation}] box nav  [{list_navigation}] list nav  [{item_movement}] move list item  [{}] add  [{}] edit  [{}] delete  [{}] complete  [{settings}] settings  [{quit}] quit",
@@ -235,6 +236,9 @@ pub(super) fn confirmation_prompt(operation: ConfirmationOperation) -> String {
         ConfirmationOperation::QuitSaveFailed => "Could not save timer.toml.".into(),
         ConfirmationOperation::Quit => "Quit and discard progress?".to_string(),
         ConfirmationOperation::TimerChange(change) => match change {
+            TimerChange::ClearState => {
+                "Clear timer progress and completed focus sessions count?".into()
+            }
             TimerChange::Reset => "Reset session?".to_string(),
             TimerChange::Cycle => "Discard progress and cycle session?".to_string(),
             TimerChange::SelectSession(session) => {

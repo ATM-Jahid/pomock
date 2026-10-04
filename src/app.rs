@@ -70,6 +70,7 @@ pub enum SettingsMode {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum TimerChange {
     Reset,
+    ClearState,
     Cycle,
     SelectSession(SessionKind),
     StartSession(SessionKind),
@@ -265,7 +266,7 @@ impl App {
         }
 
         let stop_completion_audio = self.completion_audio_active
-            && (action == Action::CycleSession
+            && (matches!(action, Action::CycleSession | Action::ClearTimerState)
                 || action == Action::PrimaryAction && self.ui_focus == UiFocus::Clock);
         if stop_completion_audio {
             self.completion_audio_active = false;
@@ -320,6 +321,7 @@ impl App {
             },
             Action::CycleSession => self.cycle_session(),
             Action::ResetSession => self.reset_session(),
+            Action::ClearTimerState => self.clear_timer_state(),
             Action::ConfirmPendingAction
             | Action::CancelPendingAction
             | Action::QuitWithoutSaving => {}

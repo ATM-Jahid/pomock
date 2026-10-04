@@ -296,6 +296,7 @@ fn key_action_label(action: KeyAction) -> &'static str {
         KeyAction::ClockPrimary => "  Clock primary",
         KeyAction::CycleSession => "  Cycle session",
         KeyAction::ResetSession => "  Reset session",
+        KeyAction::ClearTimerState => "  Clear timer state",
         KeyAction::AddTask => "  Add task",
         KeyAction::EditTask => "  Edit task",
         KeyAction::DeleteTask => "  Delete task",

@@ -280,6 +280,7 @@ pub struct KeysConfig {
     pub(super) clock_primary: KeyBindings,
     pub(super) cycle_session: KeyBindings,
     pub(super) reset_session: KeyBindings,
+    pub(super) clear_timer_state: KeyBindings,
     pub(super) add_task: KeyBindings,
     pub(super) edit_task: KeyBindings,
     pub(super) delete_task: KeyBindings,
@@ -303,6 +304,7 @@ pub enum KeyAction {
     ClockPrimary,
     CycleSession,
     ResetSession,
+    ClearTimerState,
     AddTask,
     EditTask,
     DeleteTask,
@@ -353,6 +355,9 @@ impl KeysConfig {
     pub fn reset_session(&self) -> &[ConfigKey] {
         self.reset_session.as_slice()
     }
+    pub fn clear_timer_state(&self) -> &[ConfigKey] {
+        self.clear_timer_state.as_slice()
+    }
     pub fn add_task(&self) -> &[ConfigKey] {
         self.add_task.as_slice()
     }
@@ -385,6 +390,7 @@ impl KeysConfig {
             KeyAction::ClockPrimary => self.clock_primary(),
             KeyAction::CycleSession => self.cycle_session(),
             KeyAction::ResetSession => self.reset_session(),
+            KeyAction::ClearTimerState => self.clear_timer_state(),
             KeyAction::AddTask => self.add_task(),
             KeyAction::EditTask => self.edit_task(),
             KeyAction::DeleteTask => self.delete_task(),
@@ -408,6 +414,7 @@ impl KeysConfig {
             KeyAction::ClockPrimary => self.clock_primary = binding,
             KeyAction::CycleSession => self.cycle_session = binding,
             KeyAction::ResetSession => self.reset_session = binding,
+            KeyAction::ClearTimerState => self.clear_timer_state = binding,
             KeyAction::AddTask => self.add_task = binding,
             KeyAction::EditTask => self.edit_task = binding,
             KeyAction::DeleteTask => self.delete_task = binding,
@@ -419,16 +426,21 @@ impl KeysConfig {
     }
 
     pub(super) fn validate(&self) -> Result<(), ConfigValidationError> {
-        let bindings = [
+        let global_bindings = [
             ("focus_left", self.focus_left()),
             ("focus_down", self.focus_down()),
             ("focus_up", self.focus_up()),
             ("focus_right", self.focus_right()),
             ("quit", self.quit()),
             ("settings", self.settings()),
+        ];
+        let clock_bindings = [
             ("clock_primary", self.clock_primary()),
             ("cycle_session", self.cycle_session()),
             ("reset_session", self.reset_session()),
+            ("clear_timer_state", self.clear_timer_state()),
+        ];
+        let task_bindings = [
             ("list_down", self.list_down()),
             ("list_up", self.list_up()),
             ("add_task", self.add_task()),
@@ -438,7 +450,11 @@ impl KeysConfig {
             ("move_task_up", self.move_task_up()),
             ("move_task_down", self.move_task_down()),
         ];
-        for (field, keys) in bindings {
+        for (field, keys) in global_bindings
+            .into_iter()
+            .chain(clock_bindings)
+            .chain(task_bindings)
+        {
             if keys.is_empty() {
                 return Err(ConfigValidationError::EmptyKeyBindings { field });
             }
@@ -463,13 +479,13 @@ impl KeysConfig {
             }
         }
 
-        let global = binding_entries(&bindings[..6]);
+        let global = binding_entries(&global_bindings);
         validate_unique_bindings(&global)?;
 
-        let clock = binding_entries(&bindings[6..9]);
+        let clock = binding_entries(&clock_bindings);
         validate_context_bindings(&global, &clock)?;
 
-        let tasks = binding_entries(&bindings[9..]);
+        let tasks = binding_entries(&task_bindings);
         validate_context_bindings(&global, &tasks)
     }
 }
@@ -488,6 +504,7 @@ impl Default for KeysConfig {
             clock_primary: KeyBindings::one(ConfigKey::Space),
             cycle_session: KeyBindings::one(ConfigKey::Character('c')),
             reset_session: KeyBindings::one(ConfigKey::Character('r')),
+            clear_timer_state: KeyBindings::one(ConfigKey::Character('R')),
             add_task: KeyBindings::one(ConfigKey::Character('a')),
             edit_task: KeyBindings::one(ConfigKey::Character('e')),
             delete_task: KeyBindings::one(ConfigKey::Character('x')),

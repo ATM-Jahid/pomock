@@ -185,6 +185,9 @@ fn map_physical_key(
         UiFocus::Clock if key_matches_any(key, keys.clock_primary()) => Some(Action::PrimaryAction),
         UiFocus::Clock if key_matches_any(key, keys.cycle_session()) => Some(Action::CycleSession),
         UiFocus::Clock if key_matches_any(key, keys.reset_session()) => Some(Action::ResetSession),
+        UiFocus::Clock if key_matches_any(key, keys.clear_timer_state()) => {
+            Some(Action::ClearTimerState)
+        }
         UiFocus::Todo | UiFocus::Done if key_matches_any(key, keys.add_task()) => {
             Some(Action::BeginAdd)
         }

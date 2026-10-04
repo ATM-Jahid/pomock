@@ -1228,3 +1228,31 @@ fn quit_save_failure_footer_explains_all_choices() {
         "Could not save timer.toml.  [y/Enter] retry  [q] quit without saving  [n/Esc] cancel"
     );
 }
+
+#[test]
+fn reset_footer_shows_both_configured_keys_and_clear_confirmation() {
+    let mut app = App::new();
+    let keys = crate::config::KeysConfig::default();
+    assert!(
+        footer_text_for_focus(&app, &keys, UiFocus::Clock).contains("[r/R] reset session/state")
+    );
+    let keys = keys
+        .with_binding(
+            KeyAction::ResetSession,
+            crate::config::ConfigKey::Character('z'),
+        )
+        .with_binding(
+            KeyAction::ClearTimerState,
+            crate::config::ConfigKey::Character('Z'),
+        );
+    assert!(
+        footer_text_for_focus(&app, &keys, UiFocus::Clock).contains("[z/Z] reset session/state")
+    );
+    let _ = app.dispatch(Action::PrimaryAction);
+    let _ = app.tick(Duration::from_secs(1));
+    let _ = app.dispatch(Action::ClearTimerState);
+    assert!(
+        footer_text_for_focus(&app, &keys, UiFocus::Clock)
+            .starts_with("Clear timer progress and completed focus sessions count?")
+    );
+}

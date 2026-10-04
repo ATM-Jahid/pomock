@@ -21,7 +21,7 @@ pub(crate) enum SettingField {
 }
 
 impl SettingField {
-    const TIMER: [Self; 7] = [
+    const TIMER: &[Self] = &[
         Self::FocusDuration,
         Self::ShortBreakDuration,
         Self::LongBreakDuration,
@@ -30,15 +30,15 @@ impl SettingField {
         Self::AutostartFocus,
         Self::PersistTimer,
     ];
-    const NOTIFICATION: [Self; 1] = [Self::NotificationEnabled];
-    const SOUND: [Self; 4] = [
+    const NOTIFICATION: &[Self] = &[Self::NotificationEnabled];
+    const SOUND: &[Self] = &[
         Self::CompletionSoundEnabled,
         Self::CompletionSoundFile,
         Self::FocusSoundEnabled,
         Self::FocusSoundFile,
     ];
-    const TASKS: [Self; 2] = [Self::PersistTasks, Self::ShowTaskNumbers];
-    pub(super) const KEYS: [Self; 17] = [
+    const TASKS: &[Self] = &[Self::PersistTasks, Self::ShowTaskNumbers];
+    pub(super) const KEYS: &[Self] = &[
         Self::Key(KeyAction::Quit),
         Self::Key(KeyAction::Settings),
         Self::Key(KeyAction::FocusLeft),
@@ -48,6 +48,7 @@ impl SettingField {
         Self::Key(KeyAction::ClockPrimary),
         Self::Key(KeyAction::CycleSession),
         Self::Key(KeyAction::ResetSession),
+        Self::Key(KeyAction::ClearTimerState),
         Self::Key(KeyAction::AddTask),
         Self::Key(KeyAction::EditTask),
         Self::Key(KeyAction::DeleteTask),
@@ -57,7 +58,7 @@ impl SettingField {
         Self::Key(KeyAction::MoveTaskUp),
         Self::Key(KeyAction::MoveTaskDown),
     ];
-    pub(super) const THEME: [Self; 7] = [
+    pub(super) const THEME: &[Self] = &[
         Self::Theme(ThemeRole::FocusedBorder),
         Self::Theme(ThemeRole::UnfocusedBorder),
         Self::Theme(ThemeRole::Focus),
@@ -66,20 +67,23 @@ impl SettingField {
         Self::Theme(ThemeRole::TodoHighlight),
         Self::Theme(ThemeRole::DoneHighlight),
     ];
-    pub(crate) const GROUPS: [(&'static str, &'static [Self]); 6] = [
-        ("Timer", &Self::TIMER),
-        ("Notification", &Self::NOTIFICATION),
-        ("Sound", &Self::SOUND),
-        ("Tasks", &Self::TASKS),
-        ("Keys", &Self::KEYS),
-        ("Theme", &Self::THEME),
+    pub(crate) const GROUPS: &[(&'static str, &'static [Self])] = &[
+        ("Timer", Self::TIMER),
+        ("Notification", Self::NOTIFICATION),
+        ("Sound", Self::SOUND),
+        ("Tasks", Self::TASKS),
+        ("Keys", Self::KEYS),
+        ("Theme", Self::THEME),
     ];
-    const FIELD_COUNT: usize = Self::TIMER.len()
-        + Self::NOTIFICATION.len()
-        + Self::SOUND.len()
-        + Self::TASKS.len()
-        + Self::KEYS.len()
-        + Self::THEME.len();
+    const FIELD_COUNT: usize = {
+        let mut count = 0;
+        let mut index = 0;
+        while index < Self::GROUPS.len() {
+            count += Self::GROUPS[index].1.len();
+            index += 1;
+        }
+        count
+    };
     pub(crate) const ALL: [Self; Self::FIELD_COUNT] = Self::flatten_groups();
 
     const fn flatten_groups() -> [Self; Self::FIELD_COUNT] {

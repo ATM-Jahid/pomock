@@ -185,6 +185,12 @@ impl PomodoroTimer {
         }
     }
 
+    pub fn clear_state(&mut self) {
+        self.state = TimerState::Ready(SessionKind::Focus);
+        self.completed_focus_sessions = 0;
+        self.install(SessionKind::Focus);
+    }
+
     pub fn reset_session(&mut self) {
         let session = match self.state {
             TimerState::Running(session) | TimerState::Paused(session) => session,

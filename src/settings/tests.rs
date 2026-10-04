@@ -32,6 +32,7 @@ fn field_groups_define_the_flat_settings_order() {
             SettingField::Key(KeyAction::ClockPrimary),
             SettingField::Key(KeyAction::CycleSession),
             SettingField::Key(KeyAction::ResetSession),
+            SettingField::Key(KeyAction::ClearTimerState),
             SettingField::Key(KeyAction::AddTask),
             SettingField::Key(KeyAction::EditTask),
             SettingField::Key(KeyAction::DeleteTask),

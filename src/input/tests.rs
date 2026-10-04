@@ -705,3 +705,34 @@ fn settings_context_has_fixed_navigation_and_nested_editing_precedence() {
         Some(Action::SettingsPushInput('t'))
     );
 }
+
+#[test]
+fn clear_timer_state_uses_configured_clock_binding() {
+    for (keys, character) in [
+        (KeysConfig::default(), 'R'),
+        (KeysConfig::from_test_toml("clear_timer_state = 'z'"), 'z'),
+    ] {
+        assert_eq!(
+            map_key(
+                KeyCode::Char(character),
+                EditMode::Normal,
+                UiFocus::Clock,
+                false,
+                SettingsMode::Closed,
+                &keys
+            ),
+            Some(Action::ClearTimerState)
+        );
+        assert_eq!(
+            map_key(
+                KeyCode::Char(character),
+                EditMode::Normal,
+                UiFocus::Todo,
+                false,
+                SettingsMode::Closed,
+                &keys
+            ),
+            None
+        );
+    }
+}

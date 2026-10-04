@@ -78,6 +78,7 @@ The keybindings can be changed using the settings overlay or `config.toml`.
 | `Space` | Start a ready session, pause or resume an active session. |
 | `c` | Cycle the session through focus, short break, and long break. |
 | `r` | Reset a running or paused session to its full duration. |
+| `R` | Clear timer progress and completed focus sessions count. |
 
 | Mouse target | 🖱×1 | 🖱×2 |
 | --- | --- | --- |
@@ -160,6 +161,7 @@ focus_right = "L"
 clock_primary = "space"
 cycle_session = "c"
 reset_session = "r"
+clear_timer_state = "R"
 add_task = "a"
 edit_task = "e"
 delete_task = "x"
