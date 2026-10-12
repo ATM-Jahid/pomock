@@ -96,6 +96,12 @@ pub(crate) fn run_app(
             break;
         }
 
+        let active_focus_file = app
+            .is_focus_running()
+            .then(|| runtime.config.sound().focus().playback_file())
+            .flatten();
+        runtime.sound_player.maintain(active_focus_file);
+
         let mut frame_geometry = None;
         terminal.draw(|frame| {
             frame_geometry = Some(draw(
