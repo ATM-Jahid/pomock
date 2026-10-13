@@ -10,6 +10,7 @@ use pomock::persistence::{WorkspaceNameError, validate_workspace_name};
 #[derive(Debug, PartialEq, Eq)]
 pub(crate) enum CliCommand {
     Run { workspace: Option<String> },
+    ListWorkspaces,
     Help,
     Version,
 }
@@ -24,6 +25,7 @@ impl CliCommand {
                 .into_string()
                 .map_err(|_| CliError::NonUnicodeArgument)?;
             match argument.as_str() {
+                "-l" | "--list-workspaces" => return Ok(Self::ListWorkspaces),
                 "-h" | "--help" => return Ok(Self::Help),
                 "-v" | "--version" => return Ok(Self::Version),
                 "-w" | "--workspace" => {
@@ -93,7 +95,7 @@ impl Error for CliError {
 pub(crate) fn write_help(writer: &mut impl Write) -> io::Result<()> {
     writeln!(
         writer,
-        "pomock - a Pomodoro timer and task workspace\n\nUsage: pomock [OPTIONS]\n\nOptions:\n  -w, --workspace NAME  Use or create a named workspace\n  -h, --help            Show this help\n  -v, --version         Show version"
+        "pomock - a Pomodoro timer and task workspace\n\nUsage: pomock [OPTIONS]\n\nOptions:\n  -w, --workspace NAME  Use or create a named workspace\n  -l, --list-workspaces List available workspaces\n  -h, --help            Show this help\n  -v, --version         Show version"
     )
 }
 

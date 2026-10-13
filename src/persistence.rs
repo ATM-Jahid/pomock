@@ -14,7 +14,7 @@ mod workspace_name;
 
 pub use config::{ConfigError, ConfigStore};
 pub use timer::{TimerPersistenceError, TimerStore};
-pub use workspace::WorkspaceLock;
+pub use workspace::{WorkspaceLock, list_workspaces};
 pub use workspace_name::{WorkspaceNameError, validate_workspace_name};
 
 const TASKS_FILE_NAME: &str = "tasks.toml";

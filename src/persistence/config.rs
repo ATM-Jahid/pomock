@@ -65,7 +65,7 @@ impl ConfigStore {
         Self::parse_contents(path, &contents)
     }
 
-    fn parse_contents(path: &Path, contents: &str) -> Result<Config, ConfigError> {
+    pub(super) fn parse_contents(path: &Path, contents: &str) -> Result<Config, ConfigError> {
         let original: toml::Value =
             toml::from_str(contents).map_err(|source| ConfigError::Parse {
                 path: path.to_owned(),

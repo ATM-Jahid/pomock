@@ -55,7 +55,8 @@ cargo run -- -w foo
 ```
 
 Named workspaces are created on first use.
-Only one `pomock` instance can connect to a workspace at a time.
+Only one `pomock` instance can connect to a specific workspace at a time.
+You can list workspaces with the `--list-workspaces` or `-l` flag.
 
 ## ⌨️ Controls
 

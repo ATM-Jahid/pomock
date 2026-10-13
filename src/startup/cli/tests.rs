@@ -78,3 +78,13 @@ fn workspace_argument_rejects_missing_unsafe_and_duplicate_names() {
         CliError::DuplicateWorkspace
     );
 }
+
+#[test]
+fn list_workspaces_flag_selects_listing() {
+    for flag in ["-l", "--list-workspaces"] {
+        assert_eq!(
+            CliCommand::parse([OsString::from(flag)]).unwrap(),
+            CliCommand::ListWorkspaces
+        );
+    }
+}

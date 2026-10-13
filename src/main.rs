@@ -1,6 +1,9 @@
-use std::{env, io};
+use std::{
+    env,
+    io::{self, Write},
+};
 
-use pomock::persistence::{ConfigStore, TaskStore, TimerStore};
+use pomock::persistence::{ConfigStore, TaskStore, TimerStore, list_workspaces};
 
 use runtime::{TerminalSession, combine_run_and_restore_results, run_app, task_store_for_config};
 use startup::{
@@ -16,6 +19,12 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let command = CliCommand::parse(env::args_os().skip(1))?;
     let workspace_name = match command {
         CliCommand::Run { workspace } => workspace,
+        CliCommand::ListWorkspaces => {
+            for name in list_workspaces()? {
+                writeln!(stdout, "{name}")?;
+            }
+            return Ok(());
+        }
         CliCommand::Help => {
             write_help(&mut stdout)?;
             return Ok(());
